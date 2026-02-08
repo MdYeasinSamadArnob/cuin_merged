@@ -1,0 +1,233 @@
+# ============================================
+# CUIN v2 - Policy Version 1
+# ============================================
+# Default ER policy configuration
+# Changes require maker-checker approval
+# ============================================
+
+version: 1
+name: "CUIN v2 Default Policy"
+description: "Production policy for banking entity resolution"
+
+# ----------------------------------------
+# Scoring Thresholds
+# ----------------------------------------
+thresholds:
+  # Scores >= this are automatically linked (no conflicts)
+  auto_link_min_score: 0.92
+  
+  # Scores >= this but < auto_link go to review
+  review_min_score: 0.55
+  
+  # Scores < this are rejected
+  reject_below_score: 0.55
+
+# ----------------------------------------
+# Multi-Pass Blocking Configuration
+# ----------------------------------------
+blocking:
+  # Maximum records in a single block (larger = dropped/split)
+  max_block_size: 200
+  
+  # Maximum blocking keys generated per record
+  max_keys_per_record: 50
+  
+  # Keys appearing in > this % of records are suppressed
+  suppress_keys_over_frequency_pct: 5.0
+  
+  # Blocking methods to use (order matters for priority)
+  methods:
+    - name: phone_last10
+      enabled: true
+      description: "Last 10 digits of normalized phone"
+      
+    - name: email_exact
+      enabled: true
+      description: "Exact normalized email"
+      
+    - name: email_domain
+      enabled: true
+      description: "Email domain only"
+      
+    - name: soundex_full
+      enabled: true
+      description: "Soundex of full normalized name"
+      
+    - name: soundex_first
+      enabled: true
+      description: "Soundex of first name only"
+      
+    - name: dob_exact
+      enabled: true
+      description: "Exact date of birth"
+      
+    - name: name_token
+      enabled: true
+      description: "Individual name tokens (2+ chars)"
+      min_token_length: 2
+      
+    - name: lsh_minhash
+      enabled: true
+      description: "MinHash LSH for name similarity"
+      num_perm: 128
+      threshold: 0.5
+      
+    - name: natid_exact
+      enabled: false  # Disabled by default due to sensitivity
+      description: "Exact national ID"
+
+# ----------------------------------------
+# Deterministic Decision Rules
+# ----------------------------------------
+decisioning:
+  # Hard conflicts - if detected, reject regardless of score
+  hard_conflicts:
+    - field: natid
+      rule: both_present_mismatch
+      action: reject
+      description: "Both records have NatID but they differ"
+      
+    - field: dob
+      rule: both_present_mismatch_by_years
+      threshold_years: 2
+      action: reject
+      description: "DOB differs by more than 2 years"
+  
+  # Signals that boost confidence for auto-link
+  signals_for_auto_link:
+    # Minimum distinct signals required for auto-link
+    min_signals: 2
+    
+    # Signal definitions
+    signals:
+      - name: exact_phone
+        weight: 0.3
+        description: "Normalized phones match exactly"
+        
+      - name: exact_email
+        weight: 0.3
+        description: "Normalized emails match exactly"
+        
+      - name: exact_natid
+        weight: 0.4
+        description: "National IDs match exactly"
+        
+      - name: fuzzy_name_high
+        weight: 0.2
+        threshold: 0.85
+        description: "Name similarity >= 85%"
+        
+      - name: exact_dob
+        weight: 0.2
+        description: "Dates of birth match exactly"
+        
+      - name: address_high
+        weight: 0.15
+        threshold: 0.80
+        description: "Address similarity >= 80%"
+
+# ----------------------------------------
+# Referee Agent Configuration
+# ----------------------------------------
+referee:
+  enabled: true
+  
+  # Only invoke for scores in this range
+  score_range:
+    min: 0.45
+    max: 0.70
+  
+  # Must have no hard conflicts to qualify
+  require_no_hard_conflicts: true
+  
+  # Model settings
+  model: "local_llm"
+  model_path: ""  # Set via environment variable
+  
+  # IMPORTANT: Never set to "auto_merge"
+  mode: "explain_only"
+  
+  # Response limits
+  max_tokens: 512
+  temperature: 0.3
+  
+  # Prompt template
+  prompt_template: |
+    You are an identity resolution assistant for a bank. Analyze these two customer records and explain whether they likely represent the same person.
+    
+    Record A: {record_a}
+    Record B: {record_b}
+    
+    Match Score: {score}
+    Evidence: {evidence}
+    
+    Provide a clear explanation of:
+    1. Why these records might be the same person
+    2. Why these records might be different people
+    3. Key factors a human reviewer should consider
+    
+    Be concise and objective. Do NOT make a final decision - that is for the human reviewer.
+
+# ----------------------------------------
+# Review Workflow Configuration
+# ----------------------------------------
+review:
+  # Reviewers must provide a reason
+  mandatory_reason: true
+  
+  # Allowed reason codes
+  reason_codes:
+    - code: SAME_PERSON_CONFIRMED
+      description: "Confirmed as same person based on evidence"
+      
+    - code: DIFFERENT_PERSONS
+      description: "Confirmed as different people"
+      
+    - code: INSUFFICIENT_INFO
+      description: "Not enough information to decide"
+      
+    - code: DATA_QUALITY_ISSUE
+      description: "Data quality prevents decision"
+      
+    - code: OTHER
+      requires_note: true
+      description: "Other (note required)"
+
+# ----------------------------------------
+# Audit Configuration
+# ----------------------------------------
+audit:
+  # Hash algorithm for tamper-evidence
+  hash_algorithm: "sha256"
+  
+  # Enable hash chain verification
+  tamper_evident: true
+  
+  # Retention period in days (7 years for compliance)
+  retention_days: 2555
+  
+  # Events to log
+  events:
+    - RUN_STARTED
+    - RUN_COMPLETED
+    - RUN_FAILED
+    - DECISION_AUTO_LINK
+    - DECISION_REVIEW
+    - DECISION_REJECT
+    - REVIEW_APPROVED
+    - REVIEW_REJECTED
+    - CLUSTER_CREATED
+    - CLUSTER_MERGED
+    - POLICY_CREATED
+    - POLICY_APPROVED
+    - REFEREE_EXPLANATION
+    - PLANNER_DECISION
+
+# ----------------------------------------
+# Metadata
+# ----------------------------------------
+metadata:
+  created_by: "system"
+  created_at: "2024-01-01T00:00:00Z"
+  approved_by: null  # Requires maker-checker approval
+  approved_at: null

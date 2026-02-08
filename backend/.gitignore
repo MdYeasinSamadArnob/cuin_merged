@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+.venv/
+# env/
+
+# Environment Variables
+# .env
+# .env.*
+# !.env.example
+
+# Runtime Data
+server.log
+data/*.csv
+*.csv
+!challenging_er_200.csv
+
+# IDE
+.idea/
+.vscode/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Mypy
+.mypy_cache/

@@ -1,0 +1,147 @@
+@startuml
+!theme spacelab
+skinparam backgroundColor #FFFFFF
+skinparam linetype ortho
+skinparam nodesep 60
+skinparam ranksep 60
+
+' Visual Styling
+skinparam component {
+  BackgroundColor<<Eng>> #E3F2FD
+  BorderColor<<Eng>> #1565C0
+  FontColor<<Eng>> #0D47A1
+  
+  BackgroundColor<<AI>> #F3E5F5
+  BorderColor<<AI>> #7B1FA2
+  FontColor<<AI>> #4A148C
+  
+  BackgroundColor<<Start>> #E8F5E9
+  BorderColor<<Start>> #2E7D32
+  
+  BackgroundColor<<End>> #FFF3E0
+  BorderColor<<End>> #EF6C00
+}
+
+skinparam package {
+  BackgroundColor<<EngLayer>> #F5F5F5
+  BorderColor<<EngLayer>> #9E9E9E
+  
+  BackgroundColor<<AILayer>> #FAFAFA
+  BorderColor<<AILayer>> #9C27B0
+}
+
+title **ERA Intelligence Platform: Code Execution Flow**
+
+' --- Entry Points ---
+package "Inputs (Start)" {
+    [Staging CSV / API Upload] as Data <<Start>>
+    [UI 'Start Run' Button] as Trigger <<Start>>
+}
+
+' ==================================================
+' ENGINEERING (Non-Traditional Teams)
+' ==================================================
+package "Foundation Engineering Layer\n(Pipeline & Core Processing)" <<EngLayer>> {
+    
+    component "PipelineOrchestrator" as Orch <<Eng>> {
+        [Stage: Ingest]
+        [Stage: Normalize]
+    }
+
+    component "Blocking Engine" as Block <<Eng>> {
+        [MultipassBlocker]
+        [MinHash LSH (Datasketch)]
+        [Phonetic (Jellyfish)]
+    }
+
+    component "Scoring Engine" as Score <<Eng>> {
+        [SplinkScorer]
+        [Custom Python Impl]
+    }
+
+    component "Decision Engine" as Decide <<Eng>> {
+        [Threshold Logic]
+        (Auto-Link / Review / Reject)
+    }
+
+    component "Cluster Manager" as Cluster <<Eng>> {
+        [Union-Find Algo]
+        [GoldenBuilder]
+    }
+    
+    component "AuditService" as Audit <<Eng>> {
+        [Immutable Hash Chain]
+    }
+}
+
+' ==================================================
+' ERA INTELLIGENCE (AI Teams)
+' ==================================================
+package "ERA Intelligence Layer\n(Agentic AI Capabilities)" <<AILayer>> {
+    
+    component "Planner Agent" as Planner <<AI>> {
+        [Heuristic Strategy]
+        [Rule-Based Logic]
+    }
+
+    component "Referee Agent" as Referee <<AI>> {
+        [Ollama (Llama 3.2)]
+        [Prompt Engineering]
+        [Judgement Parser]
+    }
+}
+
+' --- Outputs ---
+package "Outputs (End)" {
+    database "Neo4j Graph\n(Identity Clusters)" as Neo4j <<End>>
+    [Frontend Match Explorer\n(Human Review)] as UI <<End>>
+}
+
+' ==================================================
+' FLOW LOGIC
+' ==================================================
+
+' Start
+Data --> Orch : " 1. Records Loaded"
+Trigger --> Planner : " 2. Triggers Run"
+
+' AI Planning
+Planner --> Orch : " 3. Sets Run Configuration\n(Mode: AUTO/FULL)"
+
+' Core Pipeline
+Orch -down-> Block : " 4. Normalized Records"
+Block -down-> Score : " 5. Candidate Pairs"
+Score -down-> Decide : " 6. Match Scores"
+
+' Decision Fork
+Decide -left-> Cluster : " High Confidence\n(Auto-Link)"
+Decide -right-> UI : " Medium Confidence\n(Review Queue)"
+
+' AI Intervention (The "Smart" Part)
+UI ..> Referee : " User Requests\nExplanation"
+Referee ..> UI : " Returns Judgement\n& Reasoning"
+
+' Clustering & Persistence
+Cluster -down-> Neo4j : " 7. Project Golden Records"
+Decide ..> Audit : " 8. Log Compliance Decisions"
+
+' Notes for Clarity
+note right of Referee
+  **AI Team Focus:**
+  Resolves ambiguity on-demand
+  when rules are insufficient.
+end note
+
+note left of Planner
+  **AI Team Focus:**
+  Optimizes the pipeline
+  before execution starts.
+end note
+
+note right of Block
+  **Eng Team Focus:**
+  Fast, deterministic
+  filtering of millions of rows.
+end note
+
+@enduml

@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  # Identity Graph Database
+  neo4j:
+    image: neo4j:5.15.0
+    container_name: cuin-neo4j
+    ports:
+      - "7474:7474" # HTTP
+      - "7687:7687" # Bolt
+    environment:
+      - NEO4J_AUTH=neo4j/password123
+      # - NEO4J_PLUGINS=["apoc", "graph-data-science"] # Commented out to speed up startup
+    volumes:
+      - ./data/neo4j/data:/data
+      - ./data/neo4j/logs:/logs
+    healthcheck:
+      test: [ "CMD-SHELL", "wget --no-verbose --tries=1 --spider localhost:7474 || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Relational Database (Records & Audit)
+  postgres:
+    image: postgres:16-alpine
+    container_name: cuin-postgres
+    ports:
+      - "5433:5432" # Changed host port to 5433
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=password123
+      - POSTGRES_DB=cuin_db
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U admin -d cuin_db" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Cache & Task Queue
+  redis:
+    image: redis:7-alpine
+    container_name: cuin-redis
+    ports:
+      - "6380:6379" # Changed host port to 6380
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --------------------------------------------
+  # Web Interfaces (Management UIs)
+  # --------------------------------------------
+
+  # Postgres UI (PgAdmin)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: cuin-pgadmin
+    ports:
+      - "18080:80" # Access at http://localhost:18080
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@cuin.com
+      - PGADMIN_DEFAULT_PASSWORD=password123
+    volumes:
+      - ./data/pgadmin:/var/lib/pgadmin
+    depends_on:
+      - postgres
+
+  # Redis UI (RedisInsight)
+  redis-insight:
+    image: redis/redisinsight:latest
+    container_name: cuin-redis-insight
+    ports:
+      - "15540:5540" # Access at http://localhost:15540 (Uncommon port)
+    privileged: true
+    volumes:
+      - ./data/redisinsight:/data
+    depends_on:
+      - redis
+  # Control Plane Backend (Optional: run locally for dev)
+  # backend:
+  #   build: ./backend
+  #   ports:
+  #     - "8000:8000"
+  #   environment:
+  #     - NEO4J_URI=bolt://neo4j:7687
+  #     - NEO4J_USER=neo4j
+  #     - NEO4J_PASSWORD=password123
+  #   depends_on:
+  #     - neo4j
+  #     - postgres
