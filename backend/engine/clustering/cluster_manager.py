@@ -30,6 +30,14 @@ class ClusterManager:
         self._golden_records: Dict[str, List[GoldenRecord]] = {}
         self._current_version = 0
         self._golden_builder = GoldenBuilder()
+
+    def reset(self):
+        """Reset the cluster manager to an empty state."""
+        self._uf = UnionFind()
+        self._cluster_ids = {}
+        self._members = []
+        self._golden_records = {}
+        self._current_version = 0
     
     def _get_or_create_cluster_id(self, root: str) -> str:
         """Get or create a cluster ID for a root element."""

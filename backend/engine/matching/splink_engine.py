@@ -7,6 +7,7 @@ Probabilistic record matching using Splink logic (custom implementation for cont
 import json
 from typing import List, Dict, Optional, Tuple, Any
 import logging
+import difflib  # Enhanced fallback
 
 from engine.structures import MatchScore, FieldEvidence, ScoringConfig
 
@@ -29,17 +30,28 @@ class SplinkScorer:
     """
     
     def __init__(self, config: Optional[ScoringConfig] = None):
-        self.config = config or ScoringConfig()
+        if config:
+            self.config = config
+        else:
+            # Use dynamic config if available (avoid circular import at module level)
+            try:
+                from api.routes_config import get_current_scoring_config
+                self.config = get_current_scoring_config()
+            except ImportError:
+                # Fallback implementation if API module not available (e.g. tests)
+                self.config = ScoringConfig()
     
     def _jaro_winkler(self, s1: str, s2: str) -> float:
-        """Calculate Jaro-Winkler similarity."""
-        if not HAS_JELLYFISH:
-            return 1.0 if s1 == s2 else 0.0
-        
+        """Calculate Jaro-Winkler similarity (or robust fallback)."""
         if not s1 or not s2:
             return 0.0
+            
+        if HAS_JELLYFISH:
+            return jellyfish.jaro_winkler_similarity(s1, s2)
         
-        return jellyfish.jaro_winkler_similarity(s1, s2)
+        # Fallback: Use difflib (Ratcliff-Obershelp) which is standard in Python
+        # It's not exactly Jaro-Winkler but provides a good 0-1 similarity score
+        return difflib.SequenceMatcher(None, s1, s2).ratio()
     
     def _compare_exact(
         self,
@@ -270,6 +282,22 @@ class SplinkScorer:
             threshold=0.85
         ))
         
+        if len(evidence) > 0 and evidence[0].field_name == "name_norm":
+            name_ev = evidence[0]
+            # STRICT RULE: If Name similarity is very low (< 0.65), force low score
+            if name_ev.similarity_score < 0.65:
+                # Add explict explanation
+                name_ev.explanation += " [STRICT REJECT: Low Name Similarity]"
+                return MatchScore(
+                    pair_id=pair_id,
+                    a_key=record_a.get('customer_key') or record_a.get('source_customer_id', ''),
+                    b_key=record_b.get('customer_key') or record_b.get('source_customer_id', ''),
+                    score=0.1, # Force low score
+                    evidence=evidence,
+                    hard_conflicts=["strict_name_mismatch"],
+                    signals_hit=[]
+                )
+        
         # Compare phone (exact)
         evidence.append(self._compare_exact(
             "phone_norm",
@@ -376,6 +404,34 @@ class SplinkScorer:
         
         # Check signals
         signals = self._check_signals(evidence)
+
+        # "Strong Signal" Rule (User Request): 
+        # If Name is decent (>= 0.8) AND at least one strong ID (Email, Phone, NID) matches exactly,
+        # Force a high score to ensure clustering.
+        # This handles "MD MOHI UDDIN" vs "MOHAMMAD MOHI UDDIN" where Email matches but Phone differs.
+        
+        name_sim = 0.0
+        addr_sim = 0.0
+        for ev in evidence:
+            if ev.field_name == "name_norm":
+                name_sim = ev.similarity_score
+            elif ev.field_name == "address_norm":
+                addr_sim = ev.similarity_score
+        
+        has_strong_id = any(s in ["exact_email", "exact_phone", "exact_natid", "exact_dob"] for s in signals)
+        has_decent_addr = addr_sim >= 0.85
+
+        # Expanded Strong Signal Rule:
+        # 1. Name matches well (>= 0.81) - treating name as a strong signal itself (User Request)
+        # 2. OR Name is decent (>= 0.75) AND (Strong ID / Address match)
+        is_name_power = name_sim >= 0.81
+        is_supported_match = name_sim >= 0.75 and (has_strong_id or has_decent_addr)
+        
+        if (is_name_power or is_supported_match) and not hard_conflicts:
+            if score < 0.95:
+                score = 0.95
+                signals.append("boost_strong_signal")
+                if is_name_power: signals.append("boost_name_only")
         
         return MatchScore(
             pair_id=pair_id,

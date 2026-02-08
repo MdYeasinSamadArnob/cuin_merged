@@ -91,3 +91,4 @@ types-python-dateutil==2.8.19.20240106
 # transformers==4.37.2
 # torch==2.2.0
 # accelerate==0.27.0
+jellyfish

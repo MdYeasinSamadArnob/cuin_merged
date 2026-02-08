@@ -243,7 +243,7 @@ def normalize_record(record: dict) -> dict:
     phone = record.get('phone') or record.get('mobile') or record.get('telephone')
     
     normalized = {
-        'source_customer_id': record.get('customer_id') or record.get('id') or record.get('source_customer_id') or record.get('USCOD'),
+        'source_customer_id': record.get('customer_id') or record.get('id') or record.get('source_customer_id') or record.get('CUSCOD'),
         'name_norm': normalize_name(full_name) or normalize_name(f"{record.get('CUSNMF', '')} {record.get('CUSNML', '')}".strip()),
         'phone_norm': normalize_phone(phone) or normalize_phone(record.get('MOBLNO') or record.get('TELENO')),
         'email_norm': normalize_email(record.get('email')) or normalize_email(record.get('MAILID')),

@@ -225,14 +225,14 @@ export default function PipelinePage() {
     const progressPct = (completedStages / stages.length) * 100;
 
     return (
-        <div className="p-8 space-y-8 min-h-screen bg-gray-950/50">
+        <div className="p-8 space-y-8 min-h-screen bg-gray-50 dark:bg-gray-950/50 transition-colors duration-200">
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div>
-                    <h1 className="text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">
+                    <h1 className="text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-400 dark:to-indigo-400">
                         Pipeline Visualizer
                     </h1>
-                    <p className="text-gray-400 mt-2 text-lg">
+                    <p className="text-gray-600 dark:text-gray-400 mt-2 text-lg">
                         Real-time entity resolution & matching engine
                     </p>
                 </div>
@@ -259,7 +259,7 @@ export default function PipelinePage() {
             </div>
 
             {/* Global Progress Bar */}
-            <div className="relative h-2 bg-gray-800 rounded-full overflow-hidden">
+            <div className="relative h-2 bg-gray-200 dark:bg-gray-800 rounded-full overflow-hidden">
                 <div
                     className="absolute top-0 left-0 h-full bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 transition-all duration-500 ease-out"
                     style={{ width: `${progressPct}%` }}
@@ -267,7 +267,7 @@ export default function PipelinePage() {
             </div>
 
             {error && (
-                <div className="bg-red-900/20 border border-red-500/50 rounded-xl p-4 text-red-400 flex items-center gap-3 animate-in fade-in slide-in-from-top-4">
+                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-500/50 rounded-xl p-4 text-red-600 dark:text-red-400 flex items-center gap-3 animate-in fade-in slide-in-from-top-4">
                     <span className="text-2xl">⚠️</span>
                     {error}
                 </div>
@@ -275,28 +275,28 @@ export default function PipelinePage() {
 
             {/* Run Info Card */}
             {activeRun && (
-                <div className="bg-gray-900/50 border border-gray-800 rounded-2xl p-6 shadow-xl backdrop-blur-sm">
+                <div className="bg-white dark:bg-gray-900/50 border border-gray-200 dark:border-gray-800 rounded-2xl p-6 shadow-xl dark:shadow-none backdrop-blur-sm">
                     <div className="flex items-center justify-between">
                         <div>
                             <div className="flex items-center gap-3 mb-2">
-                                <h2 className="text-lg font-semibold text-white">
-                                    Run ID: <span className="font-mono text-blue-400">{activeRun.run_id.slice(0, 8)}</span>
+                                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                                    Run ID: <span className="font-mono text-blue-600 dark:text-blue-400">{activeRun.run_id.slice(0, 8)}</span>
                                 </h2>
-                                <span className={`px-3 py-1 rounded-full text-xs font-bold tracking-wider ${activeRun.status === 'COMPLETED' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
-                                    activeRun.status === 'RUNNING' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20 animate-pulse' :
-                                        'bg-gray-700 text-gray-400'
+                                <span className={`px-3 py-1 rounded-full text-xs font-bold tracking-wider ${activeRun.status === 'COMPLETED' ? 'bg-emerald-100 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20' :
+                                    activeRun.status === 'RUNNING' ? 'bg-blue-100 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-500/20 animate-pulse' :
+                                        'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
                                     }`}>
                                     {activeRun.status}
                                 </span>
                             </div>
-                            <p className="text-gray-400 text-sm">
+                            <p className="text-gray-600 dark:text-gray-400 text-sm">
                                 {activeRun.description || 'No description provided'}
                             </p>
                         </div>
                         {activeRun.duration_seconds && (
                             <div className="text-right">
                                 <p className="text-xs text-gray-500 mb-1">Duration</p>
-                                <span className="text-2xl font-mono text-white">
+                                <span className="text-2xl font-mono text-gray-900 dark:text-white">
                                     {(activeRun.duration_seconds).toFixed(2)}<span className="text-sm text-gray-500">s</span>
                                 </span>
                             </div>
@@ -307,34 +307,34 @@ export default function PipelinePage() {
 
             {/* Pipeline Stages */}
             <div className="space-y-4">
-                <h2 className="text-xl font-semibold text-white flex items-center gap-2">
+                <h2 className="text-xl font-semibold text-gray-900 dark:text-white flex items-center gap-2">
                     <span className="text-blue-500">⚡</span> Live Pipeline
                 </h2>
-                <div className="flex flex-wrap gap-4 items-center justify-center p-8 bg-gray-900/30 rounded-3xl border border-gray-800 border-dashed">
+                <div className="flex flex-wrap gap-4 items-center justify-center p-8 bg-white dark:bg-gray-900/30 rounded-3xl border border-gray-200 dark:border-gray-800 border-dashed">
                     {stages.map((stage, index) => (
                         <div key={stage.id} className="flex items-center gap-4 group">
                             <div
                                 className={`relative p-6 rounded-2xl border-2 transition-all duration-300 min-w-[200px] hover:scale-105 cursor-default ${getStageStatusColor(stage.status)}`}
                             >
-                                <div className="absolute -top-3 -right-3 w-8 h-8 rounded-full bg-gray-900 border-2 border-current flex items-center justify-center text-sm z-10 shadow-lg">
+                                <div className="absolute -top-3 -right-3 w-8 h-8 rounded-full bg-white dark:bg-gray-900 border-2 border-current flex items-center justify-center text-sm z-10 shadow-lg">
                                     {getStageStatusIcon(stage.status)}
                                 </div>
 
                                 <div className="flex flex-col items-center text-center gap-3">
                                     <span className="text-4xl filter drop-shadow-lg">{stage.icon}</span>
                                     <div>
-                                        <div className="font-bold text-white text-lg tracking-wide">{stage.name}</div>
+                                        <div className="font-bold text-gray-900 dark:text-white text-lg tracking-wide">{stage.name}</div>
                                         {stage.message && (
-                                            <p className="text-xs text-blue-200 mt-2 font-medium bg-black/20 px-2 py-1 rounded-full">{stage.message}</p>
+                                            <p className="text-xs text-blue-800 dark:text-blue-200 mt-2 font-medium bg-blue-50 dark:bg-black/20 px-2 py-1 rounded-full">{stage.message}</p>
                                         )}
                                         {stage.durationMs > 0 && (
-                                            <p className="text-xs text-gray-400 mt-1 font-mono">{stage.durationMs}ms</p>
+                                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 font-mono">{stage.durationMs}ms</p>
                                         )}
                                     </div>
                                 </div>
                             </div>
                             {index < stages.length - 1 && (
-                                <div className="text-gray-700 text-2xl group-hover:text-blue-500 transition-colors">➜</div>
+                                <div className="text-gray-400 dark:text-gray-700 text-2xl group-hover:text-blue-500 transition-colors">➜</div>
                             )}
                         </div>
                     ))}
@@ -343,20 +343,20 @@ export default function PipelinePage() {
 
             {/* Results Summary */}
             {activeRun && (activeRun.status === 'COMPLETED' || activeRun.status === 'RUNNING') && (
-                <div className="bg-gray-900/50 border border-gray-800 rounded-2xl p-8 shadow-xl">
-                    <h2 className="text-xl font-semibold text-white mb-6 flex items-center gap-2">
+                <div className="bg-white dark:bg-gray-900/50 border border-gray-200 dark:border-gray-800 rounded-2xl p-8 shadow-xl dark:shadow-none">
+                    <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
                         <span className="text-purple-500">📊</span> Metrics & Funnel
                     </h2>
 
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-12">
                         {[
-                            { label: 'Processed Records', value: recordsIn, color: 'text-white' },
-                            { label: 'Candidate Pairs', value: candidates, color: 'text-cyan-400' },
-                            { label: 'Auto Linked', value: autoLinks, color: 'text-emerald-400' },
-                            { label: 'Review Queue', value: activeRun.counters.review_items, color: 'text-yellow-400' }
+                            { label: 'Processed Records', value: recordsIn, color: 'text-gray-900 dark:text-white' },
+                            { label: 'Candidate Pairs', value: candidates, color: 'text-cyan-600 dark:text-cyan-400' },
+                            { label: 'Auto Linked', value: autoLinks, color: 'text-emerald-600 dark:text-emerald-400' },
+                            { label: 'Review Queue', value: activeRun.counters.review_items, color: 'text-yellow-600 dark:text-yellow-400' }
                         ].map((metric, i) => (
-                            <div key={i} className="bg-black/30 rounded-xl p-5 border border-white/5 backdrop-blur-sm">
-                                <p className="text-gray-400 text-sm font-medium mb-1">{metric.label}</p>
+                            <div key={i} className="bg-gray-50 dark:bg-black/30 rounded-xl p-5 border border-gray-200 dark:border-white/5 backdrop-blur-sm">
+                                <p className="text-gray-500 dark:text-gray-400 text-sm font-medium mb-1">{metric.label}</p>
                                 <p className={`text-4xl font-bold font-mono ${metric.color}`}>
                                     {metric.value.toLocaleString()}
                                 </p>
@@ -365,7 +365,7 @@ export default function PipelinePage() {
                     </div>
 
                     {/* Funnel visualization */}
-                    <div className="relative pt-8 pb-4 border-t border-gray-800">
+                    <div className="relative pt-8 pb-4 border-t border-gray-200 dark:border-gray-800">
                         <div className="flex items-center justify-between text-center relative z-10">
                             {[
                                 { val: recordsIn, label: 'Input' },
@@ -374,13 +374,13 @@ export default function PipelinePage() {
                                 { val: autoLinks, label: 'Match' }
                             ].map((step, i, arr) => (
                                 <div key={i} className="flex-1 flex flex-col items-center">
-                                    <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-3 bg-gray-800 border-4 border-gray-700 shadow-lg ${step.val > 0 ? 'border-blue-500/50 shadow-blue-500/20' : ''
+                                    <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-3 bg-white dark:bg-gray-800 border-4 border-gray-200 dark:border-gray-700 shadow-lg ${step.val > 0 ? 'border-blue-500/50 shadow-blue-500/20' : ''
                                         }`}>
                                         <span className="text-xl">
                                             {i === 0 ? '📥' : i === 1 ? '🔗' : i === 2 ? '⚖️' : '🤝'}
                                         </span>
                                     </div>
-                                    <div className="text-2xl font-bold text-white mb-1">
+                                    <div className="text-2xl font-bold text-gray-900 dark:text-white mb-1">
                                         {step.val.toLocaleString()}
                                     </div>
                                     <div className="text-xs font-bold text-gray-500 uppercase tracking-widest">{step.label}</div>
@@ -389,7 +389,7 @@ export default function PipelinePage() {
                         </div>
 
                         {/* Connection Line */}
-                        <div className="absolute top-[3.5rem] left-0 right-0 h-1 bg-gray-800 -z-0">
+                        <div className="absolute top-[3.5rem] left-0 right-0 h-1 bg-gray-200 dark:bg-gray-800 -z-0">
                             <div
                                 className="h-full bg-blue-500/30 transition-all duration-1000"
                                 style={{ width: `${(Math.min(activeRun.counters.pairs_scored / (recordsIn || 1), 1)) * 100}%` }}

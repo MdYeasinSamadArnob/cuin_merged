@@ -42,15 +42,16 @@ class MatchScore:
 @dataclass
 class ScoringConfig:
     """Configuration for scoring operations."""
-    auto_link_threshold: float = 0.92
+    auto_link_threshold: float = 0.75
     review_threshold: float = 0.55
     
     # Field weights (should sum to ~1.0)
-    name_weight: float = 0.25
-    phone_weight: float = 0.20
-    email_weight: float = 0.20
-    dob_weight: float = 0.15
-    natid_weight: float = 0.15
+    # UPDATED: Boosted NID and Name weights as requested
+    name_weight: float = 0.30
+    natid_weight: float = 0.25
+    phone_weight: float = 0.15
+    email_weight: float = 0.15
+    dob_weight: float = 0.10
     address_weight: float = 0.05
 
 

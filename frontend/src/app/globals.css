@@ -1,6 +1,18 @@
 @import "tailwindcss";
+@variant dark (&:where(.dark, .dark *));
 
 :root {
+  /* Light Mode Defaults */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f3f4f6;
+  /* gray-100 */
+  --text-primary: #111827;
+  /* gray-900 */
+  --text-secondary: #4b5563;
+  /* gray-600 */
+  --border-color: #e5e7eb;
+  /* gray-200 */
+
   /* Custom color palette for CUIN v2 */
   --color-primary: #3b82f6;
   --color-primary-dark: #2563eb;
@@ -11,7 +23,25 @@
   --color-danger: #ef4444;
   --color-info: #06b6d4;
 
-  /* Glassmorphism */
+  /* Glassmorphism - Light Mode */
+  --glass-bg: rgba(255, 255, 255, 0.8);
+  --glass-border: rgba(0, 0, 0, 0.1);
+}
+
+.dark {
+  /* Dark Mode Overrides */
+  --bg-primary: #030712;
+  /* gray-950 */
+  --bg-secondary: #111827;
+  /* gray-900 */
+  --text-primary: #f3f4f6;
+  /* gray-100 */
+  --text-secondary: #9ca3af;
+  /* gray-400 */
+  --border-color: #1f2937;
+  /* gray-800 */
+
+  /* Glassmorphism - Dark Mode */
   --glass-bg: rgba(15, 23, 42, 0.8);
   --glass-border: rgba(255, 255, 255, 0.1);
 }
@@ -144,17 +174,18 @@
 input,
 select,
 textarea {
-  background-color: rgba(31, 41, 55, 0.5);
-  border: 1px solid #374151;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
   border-radius: 0.5rem;
   padding: 0.5rem 1rem;
-  color: #f3f4f6;
+  color: var(--text-primary);
   transition: all 0.2s ease;
 }
 
 input::placeholder,
 textarea::placeholder {
-  color: #6b7280;
+  color: var(--text-secondary);
+  opacity: 0.7;
 }
 
 input:focus,
@@ -162,7 +193,7 @@ select:focus,
 textarea:focus {
   outline: none;
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5);
-  border-color: #3b82f6;
+  border-color: var(--color-primary);
 }
 
 /* Buttons */
@@ -215,12 +246,12 @@ textarea:focus {
 .btn-ghost {
   --focus-color: #6b7280;
   background-color: transparent;
-  color: #d1d5db;
+  color: var(--text-secondary);
 }
 
 .btn-ghost:hover {
-  background-color: rgba(255, 255, 255, 0.1);
-  color: white;
+  background-color: rgba(107, 114, 128, 0.1);
+  color: var(--text-primary);
 }
 
 /* ReactFlow custom styles */

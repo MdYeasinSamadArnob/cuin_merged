@@ -32,21 +32,21 @@ const formatFieldValue = (value: any) => {
 };
 
 const RecordCard = ({ title, data, color }: { title: string, data: any, color: string }) => (
-    <div className={`p-4 rounded-xl border ${color === 'blue' ? 'bg-blue-900/10 border-blue-800' : 'bg-purple-900/10 border-purple-800'}`}>
+    <div className={`p-4 rounded-xl border ${color === 'blue' ? 'bg-blue-50 dark:bg-blue-900/10 border-blue-200 dark:border-blue-800' : 'bg-purple-50 dark:bg-purple-900/10 border-purple-200 dark:border-purple-800'}`}>
         <div className="flex items-center gap-2 mb-3">
-            <div className={`w-2 h-2 rounded-full ${color === 'blue' ? 'bg-blue-400' : 'bg-purple-400'}`} />
-            <h3 className="font-medium text-white">{title}</h3>
+            <div className={`w-2 h-2 rounded-full ${color === 'blue' ? 'bg-blue-500 dark:bg-blue-400' : 'bg-purple-500 dark:bg-purple-400'}`} />
+            <h3 className="font-medium text-gray-900 dark:text-white">{title}</h3>
             {/* Rich Metadata Badges */}
             {data.metadata?.status && (
-                <span className={`text-[10px] px-1.5 py-0.5 rounded border uppercase ${data.metadata.status === 'ACT' ? 'bg-green-900/30 border-green-800 text-green-400' :
-                    data.metadata.status === 'SUSP' ? 'bg-red-900/30 border-red-800 text-red-400' :
-                        'bg-gray-800 border-gray-700 text-gray-400'
+                <span className={`text-[10px] px-1.5 py-0.5 rounded border uppercase ${data.metadata.status === 'ACT' ? 'bg-green-100 dark:bg-green-900/30 border-green-200 dark:border-green-800 text-green-700 dark:text-green-400' :
+                    data.metadata.status === 'SUSP' ? 'bg-red-100 dark:bg-red-900/30 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400' :
+                        'bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-400'
                     }`}>
                     {data.metadata.status}
                 </span>
             )}
             {data.metadata?.cust_type && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded border border-gray-700 bg-gray-800 text-gray-300">
+                <span className="text-[10px] px-1.5 py-0.5 rounded border border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300">
                     {data.metadata.cust_type}
                 </span>
             )}
@@ -54,51 +54,51 @@ const RecordCard = ({ title, data, color }: { title: string, data: any, color: s
 
         <div className="space-y-2 text-sm">
             <div className="flex justify-between">
-                <span className="text-gray-500">ID</span>
-                <span className="text-gray-300 font-mono">{formatFieldValue(data.source_customer_id || '—')}</span>
+                <span className="text-gray-500 dark:text-gray-500">ID</span>
+                <span className="text-gray-700 dark:text-gray-300 font-mono">{formatFieldValue(data.source_customer_id || '—')}</span>
             </div>
             <div className="flex justify-between">
-                <span className="text-gray-500">Name</span>
-                <span className="text-white font-medium">{formatFieldValue(data.name_norm)}</span>
+                <span className="text-gray-500 dark:text-gray-500">Name</span>
+                <span className="text-gray-900 dark:text-white font-medium">{formatFieldValue(data.name_norm)}</span>
             </div>
             <div className="flex justify-between">
-                <span className="text-gray-500">Phone</span>
-                <span className="text-gray-300">{formatFieldValue(data.phone_norm)}</span>
+                <span className="text-gray-500 dark:text-gray-500">Phone</span>
+                <span className="text-gray-700 dark:text-gray-300">{formatFieldValue(data.phone_norm)}</span>
             </div>
             <div className="flex justify-between">
-                <span className="text-gray-500">Email</span>
-                <span className="text-gray-300 truncate max-w-[150px]" title={data.email_norm}>
+                <span className="text-gray-500 dark:text-gray-500">Email</span>
+                <span className="text-gray-700 dark:text-gray-300 truncate max-w-[150px]" title={data.email_norm}>
                     {formatFieldValue(data.email_norm)}
                 </span>
             </div>
             <div className="flex justify-between">
-                <span className="text-gray-500">DOB</span>
-                <span className="text-gray-300">{formatFieldValue(data.dob_norm)}</span>
+                <span className="text-gray-500 dark:text-gray-500">DOB</span>
+                <span className="text-gray-700 dark:text-gray-300">{formatFieldValue(data.dob_norm)}</span>
             </div>
-            <div className="col-span-2 pt-2 border-t border-gray-800/50 mt-2">
+            <div className="col-span-2 pt-2 border-t border-gray-200 dark:border-gray-800/50 mt-2">
                 <div className="text-xs text-gray-500 mb-1 uppercase tracking-wider">Address</div>
-                <div className="text-gray-400 text-xs leading-relaxed">{formatFieldValue(data.address_norm)}</div>
+                <div className="text-gray-600 dark:text-gray-400 text-xs leading-relaxed">{formatFieldValue(data.address_norm)}</div>
             </div>
 
             {/* Extra Metadata Grid */}
             {data.metadata && Object.keys(data.metadata).length > 0 && (
-                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-gray-800/50 mt-2">
+                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-gray-200 dark:border-gray-800/50 mt-2">
                     {data.metadata.gender && (
                         <div className="flex flex-col">
                             <span className="text-[10px] text-gray-500">Gender</span>
-                            <span className="text-xs text-gray-300">{data.metadata.gender}</span>
+                            <span className="text-xs text-gray-700 dark:text-gray-300">{data.metadata.gender}</span>
                         </div>
                     )}
                     {data.metadata.branch && (
                         <div className="flex flex-col">
                             <span className="text-[10px] text-gray-500">Branch</span>
-                            <span className="text-xs text-gray-300">{data.metadata.branch}</span>
+                            <span className="text-xs text-gray-700 dark:text-gray-300">{data.metadata.branch}</span>
                         </div>
                     )}
                     {data.metadata.sponsor && (
                         <div className="flex flex-col col-span-2">
                             <span className="text-[10px] text-gray-500">Sponsor</span>
-                            <span className="text-xs text-gray-300">{data.metadata.sponsor}</span>
+                            <span className="text-xs text-gray-700 dark:text-gray-300">{data.metadata.sponsor}</span>
                         </div>
                     )}
                 </div>
@@ -302,7 +302,7 @@ export default function ExplorerPage() {
     if (isLoading) {
         return (
             <div className="p-8 flex items-center justify-center min-h-screen">
-                <div className="text-gray-400">Loading explorer...</div>
+                <div className="text-gray-500 dark:text-gray-400">Loading explorer...</div>
             </div>
         );
     }
@@ -312,21 +312,21 @@ export default function ExplorerPage() {
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div>
-                    <h1 className="text-3xl font-bold text-white">Match Explorer</h1>
-                    <p className="text-gray-400 mt-1">
+                    <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Match Explorer</h1>
+                    <p className="text-gray-500 dark:text-gray-400 mt-1">
                         Explore and compare match pairs side by side
                     </p>
                 </div>
             </div>
 
             {/* Filters */}
-            <div className="flex flex-wrap items-center gap-4 bg-gray-800/50 border border-gray-700 rounded-xl p-4">
+            <div className="flex flex-wrap items-center gap-4 bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-4 shadow-sm dark:shadow-none">
                 <div>
-                    <label className="block text-sm text-gray-400 mb-1">Select Run</label>
+                    <label className="block text-sm text-gray-500 dark:text-gray-400 mb-1">Select Run</label>
                     <select
                         value={selectedRunId || ''}
                         onChange={(e) => setSelectedRunId(e.target.value)}
-                        className="px-4 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white focus:border-blue-500 focus:outline-none"
+                        className="px-4 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white focus:border-blue-500 focus:outline-none"
                     >
                         {runs.map((run) => (
                             <option key={run.run_id} value={run.run_id}>
@@ -337,7 +337,7 @@ export default function ExplorerPage() {
                 </div>
 
                 <div>
-                    <label className="block text-sm text-gray-400 mb-1">Min Score</label>
+                    <label className="block text-sm text-gray-500 dark:text-gray-400 mb-1">Min Score</label>
                     <input
                         type="range"
                         value={minScore}
@@ -347,11 +347,11 @@ export default function ExplorerPage() {
                         step={5}
                         className="w-32"
                     />
-                    <span className="ml-2 text-gray-400">{minScore}%</span>
+                    <span className="ml-2 text-gray-500 dark:text-gray-400">{minScore}%</span>
                 </div>
 
                 <div>
-                    <label className="block text-sm text-gray-400 mb-1">Filter</label>
+                    <label className="block text-sm text-gray-500 dark:text-gray-400 mb-1">Filter</label>
                     <div className="flex gap-2">
                         {['all', 'auto_link', 'review', 'reject', 'unique', 'entities'].map((f) => (
                             <button
@@ -359,7 +359,7 @@ export default function ExplorerPage() {
                                 onClick={() => setFilter(f as any)}
                                 className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${filter === f
                                     ? 'bg-blue-600 text-white'
-                                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                                    : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
                                     }`}
                             >
                                 {f === 'all' ? 'All' : f.replace('_', ' ').toUpperCase()}
@@ -372,8 +372,8 @@ export default function ExplorerPage() {
             {/* Main Content: 3 Column Layout */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 {/* Scores List */}
-                <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4 flex flex-col h-[700px]">
-                    <h2 className="text-lg font-semibold text-white mb-4 flex justify-between items-center">
+                <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-4 flex flex-col h-[700px] shadow-sm dark:shadow-none">
+                    <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex justify-between items-center">
                         <span>Match Pairs ({totalScores})</span>
                         <span className="text-xs text-gray-500 font-normal">Page {currentPage}</span>
                     </h2>
@@ -390,16 +390,16 @@ export default function ExplorerPage() {
                                         key={score.pair_id}
                                         onClick={() => setSelectedMatch({ record_a: score._cluster.representative_record, record_b: null, _is_cluster: true, _cluster: score._cluster })}
                                         className={`p-3 rounded-lg border cursor-pointer transition-all ${selectedMatch?._cluster?.cluster_id === score.pair_id
-                                            ? 'border-blue-500 bg-blue-900/20'
-                                            : 'border-gray-700 bg-gray-900/50 hover:border-gray-600'
+                                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                                            : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 hover:border-gray-300 dark:hover:border-gray-600'
                                             }`}
                                     >
                                         <div className="flex items-center justify-between">
-                                            <span className={`px-2 py-0.5 rounded border text-sm font-medium ${score._cluster.size > 1 ? 'bg-purple-900/30 border-purple-700 text-purple-300' : 'bg-gray-800 border-gray-600 text-gray-300'}`}>
+                                            <span className={`px-2 py-0.5 rounded border text-sm font-medium ${score._cluster.size > 1 ? 'bg-purple-100 dark:bg-purple-900/30 border-purple-200 dark:border-purple-700 text-purple-700 dark:text-purple-300' : 'bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300'}`}>
                                                 {score._cluster.size > 1 ? `Entity (${score._cluster.size})` : 'Singleton'}
                                             </span>
                                         </div>
-                                        <div className="mt-2 text-sm text-white font-medium">
+                                        <div className="mt-2 text-sm text-gray-900 dark:text-white font-medium">
                                             {formatFieldValue(score._cluster.representative_record.name_norm)}
                                         </div>
                                         <div className="text-xs font-mono text-gray-500 truncate">
@@ -411,16 +411,16 @@ export default function ExplorerPage() {
                                         key={score.pair_id}
                                         onClick={() => setSelectedMatch({ record_a: score._record, record_b: null, _is_unique: true })}
                                         className={`p-3 rounded-lg border cursor-pointer transition-all ${selectedMatch?.record_a?.customer_key === score.pair_id
-                                            ? 'border-blue-500 bg-blue-900/20'
-                                            : 'border-gray-700 bg-gray-900/50 hover:border-gray-600'
+                                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                                            : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 hover:border-gray-300 dark:hover:border-gray-600'
                                             }`}
                                     >
                                         <div className="flex items-center justify-between">
-                                            <span className="px-2 py-0.5 rounded border text-sm font-medium bg-gray-800 border-gray-600 text-gray-300">
+                                            <span className="px-2 py-0.5 rounded border text-sm font-medium bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300">
                                                 Singleton
                                             </span>
                                         </div>
-                                        <div className="mt-2 text-sm text-white font-medium">
+                                        <div className="mt-2 text-sm text-gray-900 dark:text-white font-medium">
                                             {formatFieldValue(score._record.name_norm)}
                                         </div>
                                         <div className="text-xs font-mono text-gray-500 truncate">
@@ -432,8 +432,8 @@ export default function ExplorerPage() {
                                         key={score.pair_id}
                                         onClick={() => fetchMatchDetails(score.pair_id)}
                                         className={`p-3 rounded-lg border cursor-pointer transition-all ${selectedMatch?.pair_id === score.pair_id
-                                            ? 'border-blue-500 bg-blue-900/20'
-                                            : 'border-gray-700 bg-gray-900/50 hover:border-gray-600'
+                                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                                            : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 hover:border-gray-300 dark:hover:border-gray-600'
                                             }`}
                                     >
                                         <div className="flex items-center justify-between">
@@ -452,7 +452,7 @@ export default function ExplorerPage() {
                                             {score.a_key.slice(0, 8)}... ↔ {score.b_key.slice(0, 8)}...
                                         </div>
                                         {score.hard_conflicts.length > 0 && (
-                                            <div className="mt-1 text-xs text-red-400">
+                                            <div className="mt-1 text-xs text-red-500 dark:text-red-400">
                                                 ⚠️ {score.hard_conflicts.length} conflict(s)
                                             </div>
                                         )}
@@ -463,11 +463,11 @@ export default function ExplorerPage() {
                     )}
 
                     {/* Pagination Controls */}
-                    <div className="mt-4 pt-4 border-t border-gray-700 flex items-center justify-between">
+                    <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between">
                         <button
                             onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
                             disabled={currentPage === 1}
-                            className="px-3 py-1.5 text-sm rounded bg-gray-800 border border-gray-600 text-gray-300 disabled:opacity-50 hover:bg-gray-700 transition-colors"
+                            className="px-3 py-1.5 text-sm rounded bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 disabled:opacity-50 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
                         >
                             Previous
                         </button>
@@ -477,7 +477,7 @@ export default function ExplorerPage() {
                         <button
                             onClick={() => setCurrentPage(prev => (prev * pageSize < totalScores) ? prev + 1 : prev)}
                             disabled={currentPage * pageSize >= totalScores}
-                            className="px-3 py-1.5 text-sm rounded bg-gray-800 border border-gray-600 text-gray-300 disabled:opacity-50 hover:bg-gray-700 transition-colors"
+                            className="px-3 py-1.5 text-sm rounded bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 disabled:opacity-50 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
                         >
                             Next
                         </button>
@@ -487,18 +487,18 @@ export default function ExplorerPage() {
                 {/* Right Column: Match Details */}
                 <div className="lg:col-span-2 space-y-6">
                     {!selectedMatch ? (
-                        <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-12 text-center text-gray-400">
+                        <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-12 text-center text-gray-500 dark:text-gray-400 shadow-sm dark:shadow-none">
                             Select a record to view details
                         </div>
                     ) : isLoadingDetails ? (
-                        <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-12 text-center text-gray-400">
+                        <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-12 text-center text-gray-500 dark:text-gray-400 shadow-sm dark:shadow-none">
                             Loading details...
                         </div>
                     ) : selectedMatch._is_unique ? (
                         <div className="space-y-6">
-                            <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-6">
-                                <h2 className="text-xl font-semibold text-white mb-4">Singleton Entity</h2>
-                                <p className="text-gray-400 mb-6">This record has no high-confidence matches in the current run.</p>
+                            <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-6 shadow-sm dark:shadow-none">
+                                <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Singleton Entity</h2>
+                                <p className="text-gray-600 dark:text-gray-400 mb-6">This record has no high-confidence matches in the current run.</p>
                                 <div className="max-w-xl">
                                     <RecordCard title="Single Record" data={selectedMatch.record_a} color="blue" />
                                 </div>
@@ -506,19 +506,19 @@ export default function ExplorerPage() {
                         </div>
                     ) : selectedMatch._is_cluster ? (
                         <div className="space-y-6">
-                            <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-6">
-                                <h2 className="text-xl font-semibold text-white mb-2">Resolved Entity</h2>
+                            <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-6 shadow-sm dark:shadow-none">
+                                <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">Resolved Entity</h2>
                                 <div className="flex gap-2 mb-6">
-                                    <span className="px-2 py-1 bg-purple-900/40 border border-purple-700 text-purple-300 rounded text-xs">
+                                    <span className="px-2 py-1 bg-purple-100 dark:bg-purple-900/40 border border-purple-200 dark:border-purple-700 text-purple-700 dark:text-purple-300 rounded text-xs">
                                         Cluster ID: {selectedMatch._cluster.cluster_id.slice(0, 8)}...
                                     </span>
-                                    <span className="px-2 py-1 bg-gray-800 border border-gray-700 text-gray-300 rounded text-xs">
+                                    <span className="px-2 py-1 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 rounded text-xs">
                                         Size: {selectedMatch._cluster.size}
                                     </span>
                                 </div>
 
                                 <div className="mb-8">
-                                    <h3 className="text-sm font-medium text-gray-400 mb-3 uppercase tracking-wider">Representative / Golden Record</h3>
+                                    <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-3 uppercase tracking-wider">Representative / Golden Record</h3>
                                     <div className="max-w-xl">
                                         <RecordCard title="Representative Record" data={selectedMatch.record_a} color="blue" />
                                     </div>
@@ -526,7 +526,7 @@ export default function ExplorerPage() {
 
                                 {selectedMatch._cluster.members && selectedMatch._cluster.members.length > 0 && (
                                     <div>
-                                        <h3 className="text-sm font-medium text-gray-400 mb-3 uppercase tracking-wider">
+                                        <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-3 uppercase tracking-wider">
                                             Member Records ({selectedMatch._cluster.members.length})
                                         </h3>
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -555,13 +555,13 @@ export default function ExplorerPage() {
 
             {/* Evidence Detail (Hide for unique/cluster) */}
             {selectedMatch && !selectedMatch._is_unique && !selectedMatch._is_cluster && (
-                <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-6">
+                <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-6 shadow-sm dark:shadow-none">
                     <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-xl font-semibold text-white">Match Evidence</h2>
+                        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Match Evidence</h2>
                         <button
                             onClick={handleAskReferee}
                             disabled={isExplaining}
-                            className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors shadow-lg shadow-indigo-900/20"
+                            className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors shadow-lg shadow-indigo-500/20 dark:shadow-indigo-900/20"
                         >
                             {isExplaining ? (
                                 <>
@@ -578,14 +578,14 @@ export default function ExplorerPage() {
 
                     {explanation && (
                         <div className="mb-6 animate-in fade-in slide-in-from-top-4 duration-500">
-                            <div className={`p-4 rounded-xl border ${explanation.judgement === 'MATCH' ? 'bg-green-900/20 border-green-800' :
-                                explanation.judgement === 'NO_MATCH' ? 'bg-red-900/20 border-red-800' :
-                                    'bg-yellow-900/20 border-yellow-800'
+                            <div className={`p-4 rounded-xl border ${explanation.judgement === 'MATCH' ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800' :
+                                explanation.judgement === 'NO_MATCH' ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800' :
+                                    'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800'
                                 }`}>
                                 <div className="flex items-center gap-3 mb-2">
-                                    <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wider ${explanation.judgement === 'MATCH' ? 'bg-green-900/40 text-green-300 border border-green-700' :
-                                        explanation.judgement === 'NO_MATCH' ? 'bg-red-900/40 text-red-300 border border-red-700' :
-                                            'bg-yellow-900/40 text-yellow-300 border border-yellow-700'
+                                    <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wider ${explanation.judgement === 'MATCH' ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-700' :
+                                        explanation.judgement === 'NO_MATCH' ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-700' :
+                                            'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-300 border border-yellow-200 dark:border-yellow-700'
                                         }`}>
                                         {explanation.judgement.replace('_', ' ')}
                                     </span>
@@ -593,7 +593,7 @@ export default function ExplorerPage() {
                                         Model: {explanation.meta?.model}
                                     </span>
                                 </div>
-                                <p className="text-gray-300 text-sm leading-relaxed">
+                                <p className="text-gray-700 dark:text-gray-300 text-sm leading-relaxed">
                                     {explanation.explanation}
                                 </p>
                             </div>
@@ -608,7 +608,7 @@ export default function ExplorerPage() {
                                     <span className={`text-3xl font-bold ${getScoreColor(selectedMatch.score)}`}>
                                         {(selectedMatch.score * 100).toFixed(0)}%
                                     </span>
-                                    <p className="text-sm text-gray-400">Score</p>
+                                    <p className="text-sm text-gray-500 dark:text-gray-400">Score</p>
                                 </div>
                             </div>
                         </div>
@@ -616,21 +616,21 @@ export default function ExplorerPage() {
                         {/* Signals & Conflicts */}
                         <div className="space-y-4">
                             <div>
-                                <h3 className="text-sm font-medium text-gray-400 mb-2">Decision</h3>
-                                <span className={`px-3 py-1.5 rounded-lg text-sm ${selectedMatch.decision === 'AUTO_LINK' ? 'bg-emerald-900/50 text-emerald-400' :
-                                    selectedMatch.decision === 'REVIEW' ? 'bg-yellow-900/50 text-yellow-400' :
-                                        selectedMatch.decision === 'REJECT' ? 'bg-red-900/50 text-red-400' :
-                                            'bg-gray-700 text-gray-400'
+                                <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Decision</h3>
+                                <span className={`px-3 py-1.5 rounded-lg text-sm ${selectedMatch.decision === 'AUTO_LINK' ? 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-400' :
+                                    selectedMatch.decision === 'REVIEW' ? 'bg-yellow-100 dark:bg-yellow-900/50 text-yellow-700 dark:text-yellow-400' :
+                                        selectedMatch.decision === 'REJECT' ? 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-400' :
+                                            'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
                                     }`}>
                                     {selectedMatch.decision || 'Pending'}
                                 </span>
                             </div>
 
                             <div>
-                                <h3 className="text-sm font-medium text-gray-400 mb-2">Signals Hit</h3>
+                                <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Signals Hit</h3>
                                 <div className="flex flex-wrap gap-2">
                                     {selectedMatch.signals_hit?.map((signal: string) => (
-                                        <span key={signal} className="px-2 py-1 bg-purple-900/30 border border-purple-700 text-purple-400 rounded text-xs">
+                                        <span key={signal} className="px-2 py-1 bg-purple-100 dark:bg-purple-900/30 border border-purple-200 dark:border-purple-700 text-purple-700 dark:text-purple-400 rounded text-xs">
                                             {signal}
                                         </span>
                                     ))}
@@ -642,10 +642,10 @@ export default function ExplorerPage() {
 
                             {selectedMatch.hard_conflicts?.length > 0 && (
                                 <div>
-                                    <h3 className="text-sm font-medium text-red-400 mb-2">⚠️ Hard Conflicts</h3>
+                                    <h3 className="text-sm font-medium text-red-500 dark:text-red-400 mb-2">⚠️ Hard Conflicts</h3>
                                     <div className="flex flex-wrap gap-2">
                                         {selectedMatch.hard_conflicts.map((conflict: string) => (
-                                            <span key={conflict} className="px-2 py-1 bg-red-900/30 border border-red-700 text-red-400 rounded text-xs">
+                                            <span key={conflict} className="px-2 py-1 bg-red-100 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 rounded text-xs">
                                                 {conflict}
                                             </span>
                                         ))}
@@ -655,16 +655,16 @@ export default function ExplorerPage() {
 
                             {/* Related Matches (Transitivity) */}
                             {selectedMatch && !selectedMatch._is_unique && !selectedMatch._is_cluster && (
-                                <div className="pt-4 border-t border-gray-700">
-                                    <h3 className="text-sm font-medium text-gray-400 mb-2">🔗 Network Context</h3>
+                                <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+                                    <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">🔗 Network Context</h3>
                                     {getRelatedMatches(selectedMatch.pair_id, selectedMatch.record_a, selectedMatch.record_b).length > 0 ? (
                                         <div className="space-y-2">
                                             {getRelatedMatches(selectedMatch.pair_id, selectedMatch.record_a, selectedMatch.record_b).slice(0, 3).map((rel: any) => (
                                                 <div key={rel.pair_id}
-                                                    className="p-2 bg-gray-900/40 rounded border border-gray-700 text-xs flex justify-between items-center cursor-pointer hover:border-gray-500 transition-colors"
+                                                    className="p-2 bg-gray-50 dark:bg-gray-900/40 rounded border border-gray-200 dark:border-gray-700 text-xs flex justify-between items-center cursor-pointer hover:border-gray-300 dark:hover:border-gray-500 transition-colors"
                                                     onClick={() => fetchMatchDetails(rel.pair_id)}
                                                 >
-                                                    <span className="text-gray-300 font-mono">{rel.pair_id.slice(0, 8)}...</span>
+                                                    <span className="text-gray-700 dark:text-gray-300 font-mono">{rel.pair_id.slice(0, 8)}...</span>
                                                     <span className={`font-bold ${getScoreColor(rel.score)}`}>{(rel.score * 100).toFixed(0)}%</span>
                                                 </div>
                                             ))}
@@ -684,12 +684,12 @@ export default function ExplorerPage() {
 
                     {/* Evidence Table */}
                     {selectedMatch.evidence && selectedMatch.evidence.length > 0 && (
-                        <div className="mt-6 pt-6 border-t border-gray-700">
-                            <h3 className="text-lg font-medium text-white mb-3">Field Comparison</h3>
+                        <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
+                            <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-3">Field Comparison</h3>
                             <div className="overflow-x-auto">
                                 <table className="w-full">
                                     <thead>
-                                        <tr className="text-left text-gray-400 text-sm border-b border-gray-700">
+                                        <tr className="text-left text-gray-500 dark:text-gray-400 text-sm border-b border-gray-200 dark:border-gray-700">
                                             <th className="pb-2 pl-4">Field</th>
                                             <th className="pb-2">Value A</th>
                                             <th className="pb-2">Value B</th>
@@ -699,17 +699,17 @@ export default function ExplorerPage() {
                                     </thead>
                                     <tbody className="text-sm">
                                         {selectedMatch.evidence.map((ev: any, idx: number) => (
-                                            <tr key={idx} className="border-b border-gray-800 hover:bg-gray-800/30 transition-colors">
-                                                <td className="py-3 pl-4 font-medium text-white capitalize">{ev.field.replace('_norm', '').replace('_', ' ')}</td>
-                                                <td className="py-3 text-blue-300 font-mono text-xs">
+                                            <tr key={idx} className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors">
+                                                <td className="py-3 pl-4 font-medium text-gray-900 dark:text-white capitalize">{ev.field.replace('_norm', '').replace('_', ' ')}</td>
+                                                <td className="py-3 text-blue-600 dark:text-blue-300 font-mono text-xs">
                                                     {formatFieldValue(ev.value_a)}
                                                 </td>
-                                                <td className="py-3 text-purple-300 font-mono text-xs">
+                                                <td className="py-3 text-purple-600 dark:text-purple-300 font-mono text-xs">
                                                     {formatFieldValue(ev.value_b)}
                                                 </td>
                                                 <td className="py-3">
                                                     <div className="flex items-center gap-2">
-                                                        <div className="w-16 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                                                        <div className="w-16 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
                                                             <div
                                                                 className={`h-full rounded-full ${ev.similarity >= 0.99 ? 'bg-emerald-500' :
                                                                     ev.similarity >= 0.8 ? 'bg-emerald-400' :
@@ -718,19 +718,19 @@ export default function ExplorerPage() {
                                                                 style={{ width: `${(ev.similarity || 0) * 100}%` }}
                                                             />
                                                         </div>
-                                                        <span className={`text-xs font-medium ${ev.similarity >= 0.8 ? 'text-emerald-400' :
-                                                            ev.similarity >= 0.5 ? 'text-yellow-400' : 'text-red-400'
+                                                        <span className={`text-xs font-medium ${ev.similarity >= 0.8 ? 'text-emerald-600 dark:text-emerald-400' :
+                                                            ev.similarity >= 0.5 ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-600 dark:text-red-400'
                                                             }`}>
                                                             {((ev.similarity || 0) * 100).toFixed(0)}%
                                                         </span>
                                                     </div>
                                                 </td>
                                                 <td className="py-3">
-                                                    <span className={`inline-flex items-center px-2 py-1 rounded text-xs border ${ev.comparison_type === 'exact_match' ? 'bg-emerald-900/30 border-emerald-800 text-emerald-400' :
-                                                        ev.comparison_type === 'fuzzy_match' ? 'bg-blue-900/30 border-blue-800 text-blue-400' :
-                                                            ev.comparison_type === 'low_similarity' ? 'bg-yellow-900/30 border-yellow-800 text-yellow-400' :
-                                                                ev.comparison_type === 'mismatch' ? 'bg-red-900/30 border-red-800 text-red-400' :
-                                                                    'bg-gray-800 border-gray-700 text-gray-400'
+                                                    <span className={`inline-flex items-center px-2 py-1 rounded text-xs border ${ev.comparison_type === 'exact_match' ? 'bg-emerald-100 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400' :
+                                                        ev.comparison_type === 'fuzzy_match' ? 'bg-blue-100 dark:bg-blue-900/30 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-400' :
+                                                            ev.comparison_type === 'low_similarity' ? 'bg-yellow-100 dark:bg-yellow-900/30 border-yellow-200 dark:border-yellow-800 text-yellow-700 dark:text-yellow-400' :
+                                                                ev.comparison_type === 'mismatch' ? 'bg-red-100 dark:bg-red-900/30 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400' :
+                                                                    'bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400'
                                                         }`}>
                                                         {ev.comparison_type === 'exact_match' && <CheckCircle size={12} className="mr-1" />}
                                                         {ev.comparison_type === 'fuzzy_match' && <Search size={12} className="mr-1" />}
@@ -747,8 +747,8 @@ export default function ExplorerPage() {
                     )}
 
                     {/* Related Matches (Cluster Context) */}
-                    <div className="mt-8 pt-6 border-t border-gray-700">
-                        <h3 className="text-lg font-medium text-white mb-3">Related Matches (Cluster Context)</h3>
+                    <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
+                        <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-3">Related Matches (Cluster Context)</h3>
 
                         {getRelatedMatches(selectedMatch.pair_id, selectedMatch.record_a, selectedMatch.record_b).length === 0 ? (
                             <div className="text-gray-500 text-sm italic">No other related records found in this run.</div>
@@ -758,20 +758,20 @@ export default function ExplorerPage() {
                                     <div
                                         key={related.pair_id}
                                         onClick={() => fetchMatchDetails(related.pair_id)}
-                                        className="p-3 bg-gray-900 border border-gray-700 rounded-lg cursor-pointer hover:border-gray-500 transition-colors"
+                                        className="p-3 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg cursor-pointer hover:border-gray-300 dark:hover:border-gray-500 transition-colors"
                                     >
                                         <div className="flex justify-between items-center mb-2">
                                             <span className={`px-2 py-0.5 rounded text-xs font-medium ${getScoreBg(related.score)} ${getScoreColor(related.score)}`}>
                                                 {(related.score * 100).toFixed(0)}%
                                             </span>
-                                            <span className="text-xs text-blue-400 hover:underline">
+                                            <span className="text-xs text-blue-600 dark:text-blue-400 hover:underline">
                                                 View Pair
                                             </span>
                                         </div>
-                                        <div className="text-xs font-mono text-gray-400 truncate mb-1" title={related.a_key}>
+                                        <div className="text-xs font-mono text-gray-500 dark:text-gray-400 truncate mb-1" title={related.a_key}>
                                             A: {related.a_key.slice(0, 15)}...
                                         </div>
-                                        <div className="text-xs font-mono text-gray-400 truncate" title={related.b_key}>
+                                        <div className="text-xs font-mono text-gray-500 dark:text-gray-400 truncate" title={related.b_key}>
                                             B: {related.b_key.slice(0, 15)}...
                                         </div>
                                     </div>
