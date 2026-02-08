@@ -3,7 +3,9 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
-import { Search, CheckCircle, XCircle } from 'lucide-react';
+import { Search, CheckCircle, XCircle, LayoutGrid, List } from 'lucide-react';
+import { TuningPanel } from '@/components/explorer/TuningPanel';
+import { ClusterGraph } from '@/components/explorer/ClusterGraph';
 
 interface MatchScore {
     pair_id: string;
@@ -124,6 +126,58 @@ export default function ExplorerPage() {
     const [currentPage, setCurrentPage] = useState(1);
     const [pageSize] = useState(50);
     const [totalScores, setTotalScores] = useState(0);
+    
+    // Graph / Tuning View State
+    const [viewMode, setViewMode] = useState<'list' | 'graph'>('list');
+    const [previewData, setPreviewData] = useState<any>(null);
+    const [previewLoading, setPreviewLoading] = useState(false);
+    const [loadingMessage, setLoadingMessage] = useState("Running Clustering Algorithm...");
+    const [isTuningOpen, setIsTuningOpen] = useState(false);
+
+    useEffect(() => {
+        if (viewMode === 'graph' && !previewData && selectedRunId) {
+            setPreviewLoading(true);
+            setLoadingMessage("Loading Graph Data...");
+            (api as any).getGraphData(selectedRunId)
+                .then((data: any) => setPreviewData(data))
+                .catch((err: any) => console.error('Failed to load graph:', err))
+                .finally(() => setPreviewLoading(false));
+        }
+    }, [viewMode, selectedRunId]);
+
+    const handlePreview = async (config: any) => {
+        setPreviewLoading(true);
+        setLoadingMessage("Running Clustering Algorithm...");
+        try {
+            const data = await (api as any).previewClustering(selectedRunId, config);
+            setPreviewData(data);
+        } catch (err) {
+            console.error('Preview failed:', err);
+            // Optionally set error state to show in UI
+        } finally {
+            setPreviewLoading(false);
+        }
+    };
+
+    const handleSaveConfig = async (config: any) => {
+        try {
+            // Map to UpdateConfigRequest format
+            const updatePayload = {
+                match_name_weight: config.name_weight,
+                match_phone_weight: config.phone_weight,
+                match_email_weight: config.email_weight,
+                match_dob_weight: config.dob_weight,
+                match_natid_weight: config.natid_weight,
+                match_address_weight: config.address_weight,
+                auto_link_threshold: config.auto_link_threshold,
+                review_threshold: config.review_threshold
+            };
+            await api.updateConfig(updatePayload);
+            console.log('Config saved');
+        } catch (err) {
+            console.error('Failed to save config:', err);
+        }
+    };
 
     const searchParams = useSearchParams();
     const urlRunId = searchParams.get('runId');
@@ -351,6 +405,26 @@ export default function ExplorerPage() {
                 </div>
 
                 <div>
+                    <label className="block text-sm text-gray-400 mb-1">View</label>
+                    <div className="flex gap-2 bg-gray-900 rounded-lg p-1 border border-gray-700">
+                        <button
+                            onClick={() => setViewMode('list')}
+                            className={`p-1.5 rounded ${viewMode === 'list' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-300'}`}
+                            title="List View"
+                        >
+                            <List size={18} />
+                        </button>
+                        <button
+                            onClick={() => setViewMode('graph')}
+                            className={`p-1.5 rounded ${viewMode === 'graph' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-300'}`}
+                            title="Graph View"
+                        >
+                            <LayoutGrid size={18} />
+                        </button>
+                    </div>
+                </div>
+
+                <div>
                     <label className="block text-sm text-gray-400 mb-1">Filter</label>
                     <div className="flex gap-2">
                         {['all', 'auto_link', 'review', 'reject', 'unique', 'entities'].map((f) => (
@@ -369,9 +443,29 @@ export default function ExplorerPage() {
                 </div>
             </div>
 
-            {/* Main Content: 3 Column Layout */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Scores List */}
+            {/* Main Content */}
+            {viewMode === 'graph' ? (
+                <div className="relative h-[700px] bg-gray-900 rounded-xl border border-gray-700 overflow-hidden group">
+                    <div className={`absolute top-4 left-4 z-50 transition-opacity duration-300 ${!isTuningOpen ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'}`}>
+                        <TuningPanel 
+                            onPreview={handlePreview} 
+                            onSave={handleSaveConfig}
+                            loading={previewLoading}
+                            isOpen={isTuningOpen}
+                            setIsOpen={setIsTuningOpen}
+                        />
+                    </div>
+                    <div className="w-full h-full">
+                        <ClusterGraph 
+                            data={previewData} 
+                            loading={previewLoading} 
+                            loadingMessage={loadingMessage}
+                        />
+                    </div>
+                </div>
+            ) : (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    {/* Scores List */}
                 <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4 flex flex-col h-[700px]">
                     <h2 className="text-lg font-semibold text-white mb-4 flex justify-between items-center">
                         <span>Match Pairs ({totalScores})</span>
@@ -551,7 +645,8 @@ export default function ExplorerPage() {
                         </div>
                     )}
                 </div>
-            </div >
+            </div>
+            )}
 
             {/* Evidence Detail (Hide for unique/cluster) */}
             {selectedMatch && !selectedMatch._is_unique && !selectedMatch._is_cluster && (

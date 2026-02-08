@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from uuid import uuid4
 import json
-
+import os
 from engine.normalize.standardize import normalize_record
 from engine.blocking.multipass_blocker import MultiPassBlocker, BlockingConfig
 from engine.blocking.candidate_builder import CandidateBuilder, CandidatePair
@@ -101,13 +101,15 @@ class PipelineOrchestrator:
         self,
         blocking_config: Optional[BlockingConfig] = None,
         scoring_config: Optional[ScoringConfig] = None,
-        progress_callback: Optional[Callable[[StageProgress], None]] = None
+        progress_callback: Optional[Callable[[StageProgress], None]] = None,
+        run_id: Optional[str] = None
     ):
         self.blocker = MultiPassBlocker(blocking_config)
         self.candidate_builder = CandidateBuilder(self.blocker)
         self.scorer = SplinkScorer(scoring_config)
         self.decision_engine = DecisionEngine(scoring_config)
         self.progress_callback = progress_callback
+        self.run_id = run_id
         
         # In-memory storage for demo (replace with DB in production)
         self._records: Dict[str, dict] = {}
@@ -181,6 +183,16 @@ class PipelineOrchestrator:
             except Exception as e:
                 logger.warning(f"Failed to normalize record: {e}")
         
+        # Persist records to disk for reliability
+        if self.run_id:
+            try:
+                os.makedirs('data/runs', exist_ok=True)
+                with open(f'data/runs/{self.run_id}_records.json', 'w') as f:
+                    json.dump(self._records, f, default=str)
+                logger.info(f"Persisted {len(self._records)} records for run {self.run_id}")
+            except Exception as e:
+                logger.error(f"Failed to persist records: {e}")
+
         duration = int((datetime.utcnow() - start).total_seconds() * 1000)
         
         await self._emit_progress(StageProgress(
@@ -583,6 +595,11 @@ class PipelineOrchestrator:
             # Stage 8: Cluster
             # We pass normalized records because they have the customer_key used in matching
             await self._stage_cluster(scores, self._decisions, normalized)
+            
+            # Persist Cluster Snapshot
+            if self.run_id:
+                cm = get_cluster_manager()
+                cm.save_snapshot(f'data/runs/{self.run_id}_clusters.json')
             
             # Complete
             result.success = True

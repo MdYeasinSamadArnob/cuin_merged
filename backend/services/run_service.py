@@ -100,6 +100,59 @@ class RunService:
         self._runs: Dict[str, Run] = {}
         self._orchestrators: Dict[str, PipelineOrchestrator] = {}
         self._progress_callback: Optional[Callable[[str, StageProgress], Any]] = None
+        self._load_runs()
+
+    def _save_runs(self):
+        """Persist runs to disk."""
+        try:
+            import os
+            import json
+            os.makedirs('data', exist_ok=True)
+            # Convert datetime objects to ISO format strings for JSON serialization
+            data = {}
+            for rid, r in self._runs.items():
+                r_dict = r.to_dict()
+                data[rid] = r_dict
+            
+            with open('data/runs_index.json', 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to save runs: {e}")
+
+    def _load_runs(self):
+        """Load runs from disk."""
+        try:
+            import os
+            import json
+            if not os.path.exists('data/runs_index.json'):
+                return
+            
+            with open('data/runs_index.json', 'r') as f:
+                data = json.load(f)
+            
+            for rid, r_data in data.items():
+                # Reconstruct Run objects
+                # Convert string dates back to datetime
+                if r_data.get('started_at'):
+                    r_data['started_at'] = datetime.fromisoformat(r_data['started_at'])
+                if r_data.get('ended_at'):
+                    r_data['ended_at'] = datetime.fromisoformat(r_data['ended_at'])
+                
+                # Reconstruct counters
+                if 'counters' in r_data:
+                    r_data['counters'] = RunCounters(**r_data['counters'])
+                
+                # Convert mode/status back to Enum
+                if 'mode' in r_data:
+                    r_data['mode'] = RunMode(r_data['mode'])
+                if 'status' in r_data:
+                    r_data['status'] = RunStatus(r_data['status'])
+                
+                self._runs[rid] = Run(**r_data)
+            
+            logger.info(f"Loaded {len(self._runs)} runs from disk")
+        except Exception as e:
+            logger.error(f"Failed to load runs: {e}")
     
     def set_progress_callback(
         self,
@@ -128,6 +181,7 @@ class RunService:
         )
         
         self._runs[run_id] = run
+        self._save_runs()
         
         # Log audit event
         log_audit_event(
@@ -201,6 +255,7 @@ class RunService:
         
         # Update status
         run.status = RunStatus.RUNNING
+        self._save_runs()
         
         # Create orchestrator with progress callback and current configs
         from api.routes_config import get_current_blocking_config, get_current_scoring_config
@@ -208,7 +263,8 @@ class RunService:
         orchestrator = PipelineOrchestrator(
             blocking_config=get_current_blocking_config(),
             scoring_config=get_current_scoring_config(),
-            progress_callback=self._create_progress_handler(run_id)
+            progress_callback=self._create_progress_handler(run_id),
+            run_id=run_id
         )
         self._orchestrators[run_id] = orchestrator
         
@@ -235,6 +291,7 @@ class RunService:
             
             if result.success:
                 run.status = RunStatus.COMPLETED
+                self._save_runs()
                 
                 # Process auto-links through clustering
                 auto_links = orchestrator.get_auto_links()
@@ -256,6 +313,7 @@ class RunService:
             else:
                 run.status = RunStatus.FAILED
                 run.error_message = result.error_message
+                self._save_runs()
                 
                 log_audit_event(
                     AuditEventType.RUN_FAILED,
@@ -273,6 +331,7 @@ class RunService:
             run.error_message = str(e)
             run.ended_at = datetime.utcnow()
             run.duration_seconds = (run.ended_at - run.started_at).total_seconds()
+            self._save_runs()
             
             log_audit_event(
                 AuditEventType.RUN_FAILED,
@@ -294,6 +353,7 @@ class RunService:
         if run.status == RunStatus.RUNNING:
             run.status = RunStatus.CANCELLED
             run.ended_at = datetime.utcnow()
+            self._save_runs()
             return True
         
         return False

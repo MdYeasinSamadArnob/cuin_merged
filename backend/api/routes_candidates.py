@@ -114,18 +114,18 @@ async def get_candidate(pair_id: str) -> dict:
     """
     Get details of a specific candidate pair.
     
-    pair_id format: a_key:b_key or just search across all runs.
+    pair_id format: 
+    - a_key:b_key 
+    - OR UUID (if scored)
     """
     run_service = get_run_service()
     
-    # Try to parse pair_id as a_key:b_key
+    a_key = None
+    b_key = None
+    
+    # 1. Try to parse pair_id as a_key:b_key
     if ":" in pair_id:
         a_key, b_key = pair_id.split(":", 1)
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid pair_id format. Expected 'a_key:b_key'"
-        )
     
     # Search across all runs
     runs, _ = run_service.list_runs(page=1, page_size=100)
@@ -133,6 +133,19 @@ async def get_candidate(pair_id: str) -> dict:
     for run in runs:
         orchestrator = run_service.get_orchestrator(run.run_id)
         if orchestrator:
+            # 2. If not a_key:b_key, try to find in scores using UUID
+            if not a_key and not b_key:
+                scores = orchestrator.get_scores()
+                if pair_id in scores:
+                    score = scores[pair_id]
+                    a_key = score.a_key
+                    b_key = score.b_key
+            
+            # If we still don't have keys, we can't find the candidate in this run
+            # (unless we search all candidates which is slow, but let's assume UUID or colon format)
+            if not a_key or not b_key:
+                continue
+                
             for candidate in orchestrator._candidates:
                 if candidate.a_key == a_key and candidate.b_key == b_key:
                     # Get the records
@@ -150,4 +163,10 @@ async def get_candidate(pair_id: str) -> dict:
                         "record_b": record_b,
                     }
     
+    if not a_key:
+         raise HTTPException(
+            status_code=400,
+            detail="Invalid pair_id format. Expected 'a_key:b_key' or valid UUID"
+        )
+        
     raise HTTPException(status_code=404, detail="Candidate pair not found")

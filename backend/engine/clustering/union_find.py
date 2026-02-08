@@ -66,3 +66,15 @@ class UnionFind:
             clusters[root].add(element)
         
         return clusters
+    
+    def to_dict(self) -> Dict:
+        """Serialize state."""
+        return {
+            "parent": self._parent,
+            "rank": self._rank
+        }
+    
+    def from_dict(self, data: Dict):
+        """Restore state."""
+        self._parent = data.get("parent", {})
+        self._rank = data.get("rank", {})

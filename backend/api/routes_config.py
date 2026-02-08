@@ -45,9 +45,9 @@ class UpdateConfigRequest(BaseModel):
     match_natid_weight: Optional[float] = None
     match_address_weight: Optional[float] = None
     
-    # Thresholds (Used by Planner/Refereee) which we might want to expose here too
-    # but currently ScoringConfig handles weights, not decision thresholds. 
-    # For simplicity, we just stick to weight/blocking tuning.
+    # Decision Thresholds
+    auto_link_threshold: Optional[float] = None
+    review_threshold: Optional[float] = None
 
 class ConfigResponse(BaseModel):
     blocking: dict
@@ -91,6 +91,12 @@ async def update_config(request: UpdateConfigRequest) -> dict:
         _config_store.scoring.natid_weight = request.match_natid_weight
     if request.match_address_weight is not None:
         _config_store.scoring.address_weight = request.match_address_weight
+        
+    # Update Thresholds
+    if request.auto_link_threshold is not None:
+        _config_store.scoring.auto_link_threshold = request.auto_link_threshold
+    if request.review_threshold is not None:
+        _config_store.scoring.review_threshold = request.review_threshold
 
     return {
         "blocking": _config_store.blocking.__dict__,

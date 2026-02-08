@@ -367,8 +367,29 @@ class SplinkScorer:
         # Penalize slightly if total evidence is low (e.g. only name matched)
         # to prevent "FirstName Only" matches from being 100% confidence
         if available_weight < 0.4 and score > 0.8:
-            score = 0.8 # Cap confidence for low-info matches
+            # EXCEPTION: If we have an EXACT name match, we trust it more
+            name_evidence = next((e for e in evidence if e.field_name == "name_norm"), None)
+            is_exact_name = name_evidence and name_evidence.comparison_type == "exact_match"
+            
+            if not is_exact_name:
+                score = 0.8 # Cap confidence for low-info matches
         
+        # USER RULE: Exact Name Match + Any Other Field Match => Auto-Link
+        # Fixes issue where mismatches in other fields drag score down despite strong identity
+        name_ev = next((e for e in evidence if e.field_name == "name_norm"), None)
+        if name_ev and name_ev.comparison_type == "exact_match":
+            # Check if any other field contributes positively (fuzzy or exact)
+            other_match_found = any(
+                e.match_weight > 0 
+                for e in evidence 
+                if e.field_name != "name_norm"
+            )
+            
+            if other_match_found:
+                # Boost score to ensure auto-link (unless hard conflict exists)
+                if score < 0.98:
+                    score = 0.98
+
         # Check for hard conflicts
         hard_conflicts = self._check_hard_conflicts(record_a, record_b)
         if hard_conflicts:

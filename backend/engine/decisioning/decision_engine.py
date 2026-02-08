@@ -34,8 +34,9 @@ class DecisionEngine:
             return MatchDecision.REJECT
         
         # Auto-link requires high score AND multiple signals
+        # OR extremely high score (e.g. perfect match on key field)
         if (match_score.score >= self.config.auto_link_threshold and 
-            len(match_score.signals_hit) >= 2):
+            (len(match_score.signals_hit) >= 2 or match_score.score >= 0.98)):
             return MatchDecision.AUTO_LINK
         
         # Review for uncertain cases
