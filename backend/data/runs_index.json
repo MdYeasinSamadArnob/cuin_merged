@@ -262,5 +262,27 @@
     "duration_seconds": 0.460567,
     "error_message": null,
     "current_stage": "complete"
+  },
+  "6f0aca65-e3db-4045-837b-644f4c31f2fd": {
+    "run_id": "6f0aca65-e3db-4045-837b-644f4c31f2fd",
+    "mode": "AUTO",
+    "policy_version": 1,
+    "status": "COMPLETED",
+    "description": "File Upload: Untitled spreadsheet.xlsx",
+    "counters": {
+      "records_in": 210,
+      "records_normalized": 210,
+      "blocks_created": 248,
+      "candidates_generated": 1152,
+      "pairs_scored": 1152,
+      "auto_links": 889,
+      "review_items": 81,
+      "rejected": 182
+    },
+    "started_at": "2026-02-08T20:46:57.545895",
+    "ended_at": "2026-02-08T20:46:58.117580",
+    "duration_seconds": 0.571685,
+    "error_message": null,
+    "current_stage": "complete"
   }
 }
