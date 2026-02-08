@@ -238,12 +238,30 @@ def normalize_record(record: dict) -> dict:
     """
     # Combine first and last name if separate
     full_name = None
-    if record.get('first_name') or record.get('last_name'):
-        parts = [
-            record.get('first_name', ''),
-            record.get('last_name', '')
-        ]
-        full_name = ' '.join(p for p in parts if p)
+    
+    # Helper to check if value is effectively empty
+    def is_empty(val):
+        if val is None:
+            return True
+        if isinstance(val, str):
+            s = val.strip()
+            return s == '' or s.upper() in ['N/A', 'NA', 'NULL', 'NONE', '-', '—']
+        return False
+    
+    # Check for first_name/last_name or CUSNMF/CUSNML patterns
+    first_name = record.get('first_name') or record.get('CUSNMF') or record.get('fname')
+    last_name = record.get('last_name') or record.get('CUSNML') or record.get('lname')
+    
+    if not is_empty(first_name) and is_empty(last_name):
+        # If first_name contains spaces, it's likely a full name already
+        full_name = str(first_name).strip()
+    elif not is_empty(first_name) or not is_empty(last_name):
+        parts = []
+        if not is_empty(first_name):
+            parts.append(str(first_name).strip())
+        if not is_empty(last_name):
+            parts.append(str(last_name).strip())
+        full_name = ' '.join(parts)
     else:
         full_name = record.get('name', '')
     
@@ -252,7 +270,7 @@ def normalize_record(record: dict) -> dict:
     
     normalized = {
         'source_customer_id': record.get('customer_id') or record.get('id') or record.get('source_customer_id') or record.get('USCOD'),
-        'name_norm': normalize_name(full_name) or normalize_name(f"{record.get('CUSNMF', '')} {record.get('CUSNML', '')}".strip()),
+        'name_norm': normalize_name(full_name),
         'phone_norm': normalize_phone(phone) or normalize_phone(record.get('MOBLNO') or record.get('TELENO')),
         'email_norm': normalize_email(record.get('email')) or normalize_email(record.get('MAILID')),
         'dob_norm': normalize_dob(record.get('dob') or record.get('date_of_birth') or record.get('CUSDOB')),

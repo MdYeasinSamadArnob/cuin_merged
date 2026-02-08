@@ -218,5 +218,49 @@
     "duration_seconds": 0.529948,
     "error_message": null,
     "current_stage": "complete"
+  },
+  "c418588d-5903-4ed2-8678-4de7bd3e0d71": {
+    "run_id": "c418588d-5903-4ed2-8678-4de7bd3e0d71",
+    "mode": "AUTO",
+    "policy_version": 1,
+    "status": "COMPLETED",
+    "description": "File Upload: matched_records_original_20260129_164540 1 1.xlsx",
+    "counters": {
+      "records_in": 187,
+      "records_normalized": 187,
+      "blocks_created": 541,
+      "candidates_generated": 477,
+      "pairs_scored": 477,
+      "auto_links": 210,
+      "review_items": 30,
+      "rejected": 237
+    },
+    "started_at": "2026-02-08T20:22:29.289490",
+    "ended_at": "2026-02-08T20:22:29.768685",
+    "duration_seconds": 0.479195,
+    "error_message": null,
+    "current_stage": "complete"
+  },
+  "31c6c301-9375-4a21-abdf-d4678e8fe5cc": {
+    "run_id": "31c6c301-9375-4a21-abdf-d4678e8fe5cc",
+    "mode": "AUTO",
+    "policy_version": 1,
+    "status": "COMPLETED",
+    "description": "File Upload: matched_records_original_20260129_164540 1 1.xlsx",
+    "counters": {
+      "records_in": 187,
+      "records_normalized": 187,
+      "blocks_created": 541,
+      "candidates_generated": 497,
+      "pairs_scored": 497,
+      "auto_links": 225,
+      "review_items": 51,
+      "rejected": 221
+    },
+    "started_at": "2026-02-08T20:28:29.963862",
+    "ended_at": "2026-02-08T20:28:30.424429",
+    "duration_seconds": 0.460567,
+    "error_message": null,
+    "current_stage": "complete"
   }
 }

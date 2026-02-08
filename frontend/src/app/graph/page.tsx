@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { api } from '@/lib/api';
 import { ClusterGraph } from '@/components/explorer/ClusterGraph';
 import { TuningPanel } from '@/components/explorer/TuningPanel';
-import { RefreshCw, Sliders, Play } from 'lucide-react';
+import { RefreshCw, Sliders, Play, Type } from 'lucide-react';
 
 export default function GraphPage() {
     const [graphData, setGraphData] = useState<any>(null);
@@ -12,6 +12,7 @@ export default function GraphPage() {
     const [runs, setRuns] = useState<any[]>([]);
     const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
     const [showTuning, setShowTuning] = useState(false);
+    const [showLabels, setShowLabels] = useState(true);
 
     // Initial Fetch
     useEffect(() => {
@@ -136,6 +137,14 @@ export default function GraphPage() {
                     >
                         <Sliders size={18} />
                     </button>
+
+                    <button 
+                        onClick={() => setShowLabels(!showLabels)}
+                        className={`p-2 rounded-lg border transition-colors ${showLabels ? 'bg-blue-100 dark:bg-blue-900/50 border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400' : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
+                        title={showLabels ? "Hide Labels" : "Show Labels"}
+                    >
+                        <Type size={18} />
+                    </button>
                     
                     <button 
                         onClick={() => selectedRunId && fetchGraph(selectedRunId)}
@@ -154,6 +163,7 @@ export default function GraphPage() {
                     <ClusterGraph 
                         data={graphData} 
                         loading={isLoading} 
+                        showLabels={showLabels}
                     />
                 </div>
 

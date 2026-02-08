@@ -2,13 +2,14 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as d3 from 'd3';
-import { X, ZoomIn, ZoomOut, Maximize, RotateCcw } from 'lucide-react';
+import { X, ZoomIn, ZoomOut, Maximize, RotateCcw, FileJson, Code } from 'lucide-react';
 import { useAppStore } from '@/stores/useAppStore';
 
 interface ClusterGraphProps {
     data: any;
     loading: boolean;
     loadingMessage?: string;
+    showLabels?: boolean;
 }
 
 interface GraphNode extends d3.SimulationNodeDatum {
@@ -30,11 +31,12 @@ interface GraphEdge extends d3.SimulationLinkDatum<GraphNode> {
     properties?: any;
 }
 
-export function ClusterGraph({ data, loading, loadingMessage = "Running Clustering Algorithm..." }: ClusterGraphProps) {
+export function ClusterGraph({ data, loading, loadingMessage = "Running Clustering Algorithm...", showLabels = true }: ClusterGraphProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
     const [hoveredNode, setHoveredNode] = useState<GraphNode | null>(null);
+    const [showJson, setShowJson] = useState(false);
 
     // Simulation refs to persist across renders
     const simulationRef = useRef<d3.Simulation<GraphNode, GraphEdge> | null>(null);
@@ -288,8 +290,13 @@ export function ClusterGraph({ data, loading, loadingMessage = "Running Clusteri
                 ctx.strokeStyle = isSelected ? '#fff' : nodeColor.stroke;
                 ctx.stroke();
 
-                // Label
-                if (node.type === 'cluster' || isSelected || isHovered || k > 0.6) {
+                // Label Logic:
+                // 1. Always show if selected or hovered
+                // 2. Always show if it's a Cluster node
+                // 3. Otherwise, check showLabels prop and zoom level
+                const shouldShowLabel = isSelected || isHovered || node.type === 'cluster' || (showLabels && k > 0.6);
+
+                if (shouldShowLabel) {
                     ctx.shadowBlur = 0;
                     ctx.fillStyle = colors.text;
                     ctx.font = `${node.type === 'cluster' ? 'bold 12px' : '10px'} Inter, sans-serif`;
@@ -318,7 +325,7 @@ export function ClusterGraph({ data, loading, loadingMessage = "Running Clusteri
         return () => {
             if (animationRef.current) cancelAnimationFrame(animationRef.current);
         };
-    }, [selectedNode, hoveredNode, colors]);
+    }, [selectedNode, hoveredNode, colors, showLabels]);
 
     // --- Mouse Handlers ---
     const handleWheel = (e: React.WheelEvent) => {
@@ -555,70 +562,79 @@ export function ClusterGraph({ data, loading, loadingMessage = "Running Clusteri
                             <div className={`w-3 h-3 rounded-full ${selectedNode.type === 'cluster' ? 'bg-purple-500 shadow-[0_0_8px_#a855f7]' : 'bg-cyan-500 shadow-[0_0_8px_#06b6d4]'}`}></div>
                             {selectedNode.type === 'cluster' ? 'Cluster Profile' : 'Identity Profile'}
                         </h3>
-                        <button onClick={() => setSelectedNode(null)} className="text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors">
-                            <X size={18} />
-                        </button>
+                        <div className="flex items-center gap-1">
+                             <button 
+                                onClick={() => setShowJson(!showJson)} 
+                                className={`p-1.5 rounded transition-colors ${showJson ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
+                                title={showJson ? "Show Formatted View" : "Show Raw JSON"}
+                            >
+                                {showJson ? <FileJson size={18} /> : <Code size={18} />}
+                            </button>
+                            <button onClick={() => setSelectedNode(null)} className="text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors">
+                                <X size={18} />
+                            </button>
+                        </div>
                     </div>
 
                     <div className="p-4 space-y-4 overflow-y-auto custom-scrollbar">
-                        <div>
-                            <label className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">System ID</label>
-                            <div className="text-xs font-mono break-all text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-900/50 p-2 rounded mt-1 border border-gray-200 dark:border-gray-700">{selectedNode.id}</div>
-                        </div>
-
-                        <div>
-                            <label className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Primary Name</label>
-                            <div className="text-sm font-medium text-gray-900 dark:text-white text-lg">{getDisplayLabel(selectedNode)}</div>
-                        </div>
-
-                        {selectedNode.type === 'record' && (
-                            <div className="space-y-3 bg-gray-100 dark:bg-gray-900/30 p-3 rounded-lg border border-gray-200 dark:border-gray-700/50">
-                                <div className="grid grid-cols-2 gap-3">
-                                    <div>
-                                        <label className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">DOB</label>
-                                        <div className="text-sm text-gray-700 dark:text-gray-300">{selectedNode.properties.dob || selectedNode.properties.dob_norm || 'N/A'}</div>
-                                    </div>
-                                    <div>
-                                        <label className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Phone</label>
-                                        <div className="text-sm text-gray-700 dark:text-gray-300">{selectedNode.properties.phone || selectedNode.properties.phone_norm || 'N/A'}</div>
-                                    </div>
-                                </div>
-                                <div>
-                                    <label className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Address</label>
-                                    <div className="text-sm text-gray-700 dark:text-gray-300 break-words">
-                                        {selectedNode.properties.address || selectedNode.properties.address_norm || 'N/A'}
-                                    </div>
-                                </div>
-                                <div>
-                                    <label className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Email</label>
-                                    <div className="text-sm text-gray-700 dark:text-gray-300 break-words">
-                                        {selectedNode.properties.email || selectedNode.properties.email_norm || 'N/A'}
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
-                        {selectedNode.type === 'cluster' && (
-                            <div className="bg-purple-50 dark:bg-purple-900/20 p-4 rounded-lg border border-purple-200 dark:border-purple-500/30">
-                                <div className="flex justify-between items-center">
-                                    <label className="text-xs text-purple-700 dark:text-purple-300 uppercase tracking-wider font-semibold">Cluster Size</label>
-                                    <span className="text-2xl font-bold text-purple-600 dark:text-purple-400">{selectedNode.properties.size}</span>
-                                </div>
-                                <div className="mt-2 text-xs text-purple-600/70 dark:text-purple-300/70">
-                                    Contains {selectedNode.properties.size} linked records
-                                </div>
-                            </div>
-                        )}
-
-                        {/* JSON Data for Debug - Hidden by default as requested */}
-                        {/* <div className="pt-2 border-t border-gray-700 mt-2">
-                            <details className="text-xs text-gray-500">
-                                <summary className="cursor-pointer hover:text-gray-300">Raw Properties</summary>
-                                <pre className="mt-2 bg-black/30 p-2 rounded overflow-x-auto text-[10px] text-gray-400">
-                                    {JSON.stringify(selectedNode.properties, null, 2)}
+                        {showJson ? (
+                            <div className="relative">
+                                <pre className="text-xs font-mono bg-gray-50 dark:bg-gray-900 p-3 rounded-lg border border-gray-200 dark:border-gray-700 overflow-x-auto text-gray-800 dark:text-gray-200 whitespace-pre-wrap break-all">
+                                    {JSON.stringify(selectedNode, null, 2)}
                                 </pre>
-                            </details>
-                        </div> */}
+                            </div>
+                        ) : (
+                            <>
+                                <div>
+                                    <label className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">System ID</label>
+                                    <div className="text-xs font-mono break-all text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-900/50 p-2 rounded mt-1 border border-gray-200 dark:border-gray-700">{selectedNode.id}</div>
+                                </div>
+
+                                <div>
+                                    <label className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Primary Name</label>
+                                    <div className="text-sm font-medium text-gray-900 dark:text-white text-lg">{getDisplayLabel(selectedNode)}</div>
+                                </div>
+
+                                {selectedNode.type === 'cluster' && (
+                                    <div className="bg-purple-50 dark:bg-purple-900/20 p-4 rounded-lg border border-purple-100 dark:border-purple-800/50">
+                                        <div className="flex justify-between items-center mb-2">
+                                            <span className="text-xs font-bold text-purple-700 dark:text-purple-400 uppercase tracking-wider">Cluster Size</span>
+                                            <span className="text-2xl font-bold text-purple-600 dark:text-purple-400">{selectedNode.properties.size || 0}</span>
+                                        </div>
+                                        <div className="text-xs text-purple-600/70 dark:text-purple-400/70">
+                                            Contains {selectedNode.properties.size || 0} linked records
+                                        </div>
+                                    </div>
+                                )}
+
+                                {selectedNode.type === 'record' && (
+                                    <div className="space-y-3 bg-gray-100 dark:bg-gray-900/30 p-3 rounded-lg border border-gray-200 dark:border-gray-700/50">
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div>
+                                                <label className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">DOB</label>
+                                                <div className="text-sm text-gray-700 dark:text-gray-300">{selectedNode.properties.dob || selectedNode.properties.dob_norm || 'N/A'}</div>
+                                            </div>
+                                            <div>
+                                                <label className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Phone</label>
+                                                <div className="text-sm text-gray-700 dark:text-gray-300">{selectedNode.properties.phone || selectedNode.properties.phone_norm || 'N/A'}</div>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Address</label>
+                                            <div className="text-sm text-gray-700 dark:text-gray-300 break-words">
+                                                {selectedNode.properties.address || selectedNode.properties.address_norm || 'N/A'}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Email</label>
+                                            <div className="text-sm text-gray-700 dark:text-gray-300 break-words">
+                                                {selectedNode.properties.email || selectedNode.properties.email_norm || 'N/A'}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </>
+                        )}
                     </div>
                 </div>
             )}
