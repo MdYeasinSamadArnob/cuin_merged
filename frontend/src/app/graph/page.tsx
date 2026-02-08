@@ -94,7 +94,7 @@ export default function GraphPage() {
     const fetchGraphData = async () => {
         try {
             const [graphResponse, statsResponse] = await Promise.all([
-                fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/graph/clusters?limit=50`).then(r => r.json()),
+                fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/graph/clusters?limit=1000`).then(r => r.json()),
                 fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/graph/stats`).then(r => r.json()),
             ]);
 
