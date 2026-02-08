@@ -34,6 +34,9 @@ def normalize_name(name: Optional[str]) -> Optional[str]:
     name = ''.join(c for c in name if unicodedata.category(c) != 'Mn')
     
     # Remove punctuation except spaces and hyphens
+    # Keep alphanumeric, spaces, hyphens
+    # Also consider keeping apostrophes for names like O'Connor (optional, but standard usually removes them)
+    # Current regex: [^\w\s-] -> removes everything except [a-zA-Z0-9_], whitespace, and -
     name = re.sub(r"[^\w\s-]", "", name)
     
     # Replace hyphens with space
@@ -42,7 +45,12 @@ def normalize_name(name: Optional[str]) -> Optional[str]:
     # Collapse multiple spaces
     name = re.sub(r'\s+', ' ', name).strip()
     
-    return name if name else None
+    if not name:
+        # Log warning if we had a non-empty input that became empty
+        # but avoid spamming logs for truly empty inputs
+        return None
+        
+    return name
 
 
 def normalize_phone(phone: Optional[str]) -> Optional[str]:

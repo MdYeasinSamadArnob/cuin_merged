@@ -5,6 +5,7 @@
  */
 
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import { Run, DashboardMetrics } from "@/lib/api";
 
 interface AppState {
@@ -25,6 +26,8 @@ interface AppState {
     // UI state
     sidebarCollapsed: boolean;
     toggleSidebar: () => void;
+    theme: 'dark' | 'light';
+    toggleTheme: () => void;
 
     // Pipeline progress (for real-time updates)
     pipelineProgress: Record<string, PipelineStage>;
@@ -42,48 +45,62 @@ interface PipelineStage {
     message?: string;
 }
 
-export const useAppStore = create<AppState>((set) => ({
-    // Current run
-    currentRunId: null,
-    setCurrentRunId: (runId) => set({ currentRunId: runId }),
+export const useAppStore = create<AppState>()(
+    persist(
+        (set) => ({
+            // Current run
+            currentRunId: null,
+            setCurrentRunId: (runId) => set({ currentRunId: runId }),
 
-    // Runs
-    runs: [],
-    setRuns: (runs) => set({ runs }),
-    addRun: (run) => set((state) => ({ runs: [run, ...state.runs] })),
-    updateRun: (runId, updates) =>
-        set((state) => ({
-            runs: state.runs.map((r) =>
-                r.run_id === runId ? { ...r, ...updates } : r
-            ),
-        })),
+            // Runs
+            runs: [],
+            setRuns: (runs) => set({ runs }),
+            addRun: (run) => set((state) => ({ runs: [run, ...state.runs] })),
+            updateRun: (runId, updates) =>
+                set((state) => ({
+                    runs: state.runs.map((r) =>
+                        r.run_id === runId ? { ...r, ...updates } : r
+                    ),
+                })),
 
-    // KPIs
-    kpis: null,
-    setKpis: (kpis) => set({ kpis }),
+            // KPIs
+            kpis: null,
+            setKpis: (kpis) => set({ kpis }),
 
-    // UI
-    sidebarCollapsed: false,
-    toggleSidebar: () =>
-        set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+            // UI
+            sidebarCollapsed: false,
+            toggleSidebar: () =>
+                set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
+            theme: 'dark',
+            toggleTheme: () =>
+                set((state) => ({ theme: state.theme === 'dark' ? 'light' : 'dark' })),
 
-    // Pipeline progress
-    pipelineProgress: {},
-    updatePipelineStage: (runId, stage) =>
-        set((state) => ({
-            pipelineProgress: {
-                ...state.pipelineProgress,
-                [`${runId}:${stage.name}`]: stage,
-            },
-        })),
-    clearPipelineProgress: (runId) =>
-        set((state) => {
-            const newProgress = { ...state.pipelineProgress };
-            Object.keys(newProgress).forEach((key) => {
-                if (key.startsWith(`${runId}:`)) {
-                    delete newProgress[key];
-                }
-            });
-            return { pipelineProgress: newProgress };
+            // Pipeline progress
+            pipelineProgress: {},
+            updatePipelineStage: (runId, stage) =>
+                set((state) => ({
+                    pipelineProgress: {
+                        ...state.pipelineProgress,
+                        [`${runId}:${stage.name}`]: stage,
+                    },
+                })),
+            clearPipelineProgress: (runId) =>
+                set((state) => {
+                    const newProgress = { ...state.pipelineProgress };
+                    Object.keys(newProgress).forEach((key) => {
+                        if (key.startsWith(`${runId}:`)) {
+                            delete newProgress[key];
+                        }
+                    });
+                    return { pipelineProgress: newProgress };
+                }),
         }),
-}));
+        {
+            name: 'cuin-storage',
+            partialize: (state) => ({
+                theme: state.theme,
+                sidebarCollapsed: state.sidebarCollapsed
+            }),
+        }
+    )
+);

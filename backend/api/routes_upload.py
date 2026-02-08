@@ -71,24 +71,56 @@ async def upload_file(
             lname = None
             full_name = None
             
+            # First pass: Look for exact/strong matches
             for k, v in r.items():
                 if k is None: continue
                 k_norm = str(k).lower().strip().replace('_', '')
                 
                 # First Name
-                if k_norm in ['cusnmf', 'firstname', 'fname', 'givenname', 'mn']:
+                if k_norm in ['cusnmf', 'firstname', 'fname', 'givenname', 'mn', 'first']:
                      fname = v
                 # Last Name
-                elif k_norm in ['cusnml', 'lastname', 'lname', 'surname', 'familyname']:
+                elif k_norm in ['cusnml', 'lastname', 'lname', 'surname', 'familyname', 'last']:
                      lname = v
                 # Full Name
-                elif k_norm in ['name', 'fullname', 'cusname', 'customername']:
+                elif k_norm in ['name', 'fullname', 'cusname', 'customername', 'entity', 'company', 'organization']:
                      full_name = v
-                     
+            
+            # Second pass: Fuzzy matches if we still lack data
+            if not (fname or lname or full_name):
+                for k, v in r.items():
+                    if k is None: continue
+                    k_norm = str(k).lower().strip().replace('_', '')
+                    
+                    if 'name' in k_norm and not any(x in k_norm for x in ['file', 'date', 'user']):
+                        # Use as full name if it seems like a name field
+                        full_name = v
+                        break
+
             if fname or lname:
-                new_record['name'] = f"{fname or ''} {lname or ''}".strip()
-            elif full_name:
-                new_record['name'] = full_name
+                # Handle cases where one might be None/Empty
+                f_part = str(fname).strip() if fname else ""
+                l_part = str(lname).strip() if lname else ""
+                combined = f"{f_part} {l_part}".strip()
+                if combined:
+                    new_record['name'] = combined
+            
+            if not new_record.get('name') and full_name:
+                new_record['name'] = str(full_name).strip()
+                
+            # Fallback: If still no name, try to use a "Description" or "Label" field
+            if not new_record.get('name'):
+                 for k, v in r.items():
+                    if k is None: continue
+                    k_norm = str(k).lower().strip().replace('_', '')
+                    if k_norm in ['description', 'desc', 'label', 'title']:
+                        new_record['name'] = str(v).strip()
+                        break
+            
+            # Final Fallback: Log warning but don't crash
+            if not new_record.get('name'):
+                # Try to use Email or Phone as name proxy if available (better than nothing)
+                pass
                 
             # 2. Iterate for other fields
             for k, v in r.items():
@@ -154,7 +186,28 @@ async def upload_file(
                 
                 else:
                     new_record[k_clean] = v
-                    
+            
+            # 3. Post-Processing Fallbacks
+            if not new_record.get('name'):
+                if new_record.get('email'):
+                    new_record['name'] = new_record['email'].split('@')[0]
+                elif new_record.get('phone'):
+                    new_record['name'] = f"Phone: {new_record['phone']}"
+                elif new_record.get('source_customer_id'):
+                    new_record['name'] = f"ID: {new_record['source_customer_id']}"
+                elif new_record.get('natid'):
+                    new_record['name'] = f"NID: {new_record['natid']}"
+                else:
+                    # Last resort: try to find ANY string value
+                    for val in new_record.values():
+                        if isinstance(val, str) and len(val) > 2:
+                            new_record['name'] = val
+                            break
+                            
+            if not new_record.get('name'):
+                 print(f"Warning: Record dropped due to missing name and no fallback found: {new_record}")
+                 continue # Skip this record if we absolutely can't identify it
+
             mapped_records.append(new_record)
             
         # Trigger Pipeline

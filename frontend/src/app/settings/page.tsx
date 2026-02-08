@@ -68,7 +68,7 @@ export default function SettingsPage() {
     };
 
     if (loading && !config.blocking.max_block_size) {
-        return <div className="p-8 text-white">Loading settings...</div>;
+        return <div className="p-8 text-gray-900 dark:text-white">Loading settings...</div>;
     }
 
     return (
@@ -76,8 +76,8 @@ export default function SettingsPage() {
             {/* Header */}
             <div className="flex justify-between items-center">
                 <div>
-                    <h1 className="text-2xl font-bold text-white">Settings</h1>
-                    <p className="text-gray-400 mt-1">
+                    <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Settings</h1>
+                    <p className="text-gray-600 dark:text-gray-400 mt-1">
                         Configure CUIN v2 Pipeline Parameters
                     </p>
                 </div>
@@ -99,33 +99,33 @@ export default function SettingsPage() {
                     className="glass-card p-6"
                 >
                     <div className="flex items-center gap-3 mb-6">
-                        <div className="p-2 rounded-lg bg-blue-500/20">
-                            <Database size={20} className="text-blue-400" />
+                        <div className="p-2 rounded-lg bg-blue-100 dark:bg-blue-500/20">
+                            <Database size={20} className="text-blue-600 dark:text-blue-400" />
                         </div>
-                        <h2 className="font-semibold text-white">Blocking Strategy</h2>
+                        <h2 className="font-semibold text-gray-900 dark:text-white">Blocking Strategy</h2>
                     </div>
 
                     <div className="space-y-6">
                         <div>
                             <div className="flex justify-between mb-2">
-                                <label className="text-sm text-gray-300">Max Block Size</label>
-                                <span className="text-xs text-blue-400">{config.blocking.max_block_size} records</span>
+                                <label className="text-sm text-gray-600 dark:text-gray-300">Max Block Size</label>
+                                <span className="text-xs text-blue-600 dark:text-blue-400">{config.blocking.max_block_size} records</span>
                             </div>
                             <input
                                 type="number"
                                 value={config.blocking.max_block_size || 200}
                                 onChange={(e) => updateNested('blocking', 'max_block_size', e.target.value)}
-                                className="input input-sm w-full bg-gray-900 border-gray-700 text-white"
+                                className="input input-sm w-full bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white"
                             />
-                            <p className="text-xs text-gray-500 mt-1">
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                                 Blocks larger than this are skipped or require secondary blocking.
                             </p>
                         </div>
 
                         <div>
                             <div className="flex justify-between mb-2">
-                                <label className="text-sm text-gray-300">Suppression Frequency</label>
-                                <span className="text-xs text-blue-400">{config.blocking.suppress_frequency_pct}%</span>
+                                <label className="text-sm text-gray-600 dark:text-gray-300">Suppression Frequency</label>
+                                <span className="text-xs text-blue-600 dark:text-blue-400">{config.blocking.suppress_frequency_pct}%</span>
                             </div>
                             <input
                                 type="range"
@@ -134,15 +134,15 @@ export default function SettingsPage() {
                                 onChange={(e) => updateNested('blocking', 'suppress_frequency_pct', e.target.value)}
                                 className="range range-xs range-primary"
                             />
-                            <p className="text-xs text-gray-500 mt-1">
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                                 Keys appearing in more than X% of records are dropped.
                             </p>
                         </div>
 
                         <div>
                             <div className="flex justify-between mb-2">
-                                <label className="text-sm text-gray-300">LSH Threshold (MinHash)</label>
-                                <span className="text-xs text-blue-400">{config.blocking.lsh_threshold}</span>
+                                <label className="text-sm text-gray-600 dark:text-gray-300">LSH Threshold (MinHash)</label>
+                                <span className="text-xs text-blue-600 dark:text-blue-400">{config.blocking.lsh_threshold}</span>
                             </div>
                             <input
                                 type="range"
@@ -151,7 +151,7 @@ export default function SettingsPage() {
                                 onChange={(e) => updateNested('blocking', 'lsh_threshold', e.target.value)}
                                 className="range range-xs range-secondary"
                             />
-                            <p className="text-xs text-gray-500 mt-1">
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                                 Lower threshold captures more fuzzy duplicates but increases load.
                             </p>
                         </div>
@@ -166,10 +166,10 @@ export default function SettingsPage() {
                     className="glass-card p-6"
                 >
                     <div className="flex items-center gap-3 mb-6">
-                        <div className="p-2 rounded-lg bg-emerald-500/20">
-                            <Shield size={20} className="text-emerald-400" />
+                        <div className="p-2 rounded-lg bg-emerald-100 dark:bg-emerald-500/20">
+                            <Shield size={20} className="text-emerald-600 dark:text-emerald-400" />
                         </div>
-                        <h2 className="font-semibold text-white">Matching Weights</h2>
+                        <h2 className="font-semibold text-gray-900 dark:text-white">Matching Weights</h2>
                     </div>
 
                     <div className="space-y-4">
@@ -183,8 +183,8 @@ export default function SettingsPage() {
                         ].map((field) => (
                             <div key={field.id}>
                                 <div className="flex justify-between mb-1">
-                                    <label className="text-xs text-gray-300 uppercase font-semibold">{field.label}</label>
-                                    <span className="text-xs font-mono text-white">{config.scoring[field.id]}</span>
+                                    <label className="text-xs text-gray-600 dark:text-gray-300 uppercase font-semibold">{field.label}</label>
+                                    <span className="text-xs font-mono text-gray-900 dark:text-white">{config.scoring[field.id]}</span>
                                 </div>
                                 <input
                                     type="range"
@@ -196,7 +196,7 @@ export default function SettingsPage() {
                             </div>
                         ))}
                     </div>
-                    <div className="mt-4 p-3 bg-gray-900/50 rounded text-xs text-gray-400">
+                    <div className="mt-4 p-3 bg-gray-100 dark:bg-gray-900/50 rounded text-xs text-gray-500 dark:text-gray-400">
                         Weights determine impact on final match score (0.0 - 1.0).
                         Higher weights mean that field is more important.
                     </div>

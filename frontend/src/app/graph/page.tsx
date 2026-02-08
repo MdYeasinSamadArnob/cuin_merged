@@ -89,11 +89,11 @@ export default function GraphPage() {
     };
 
     return (
-        <div className="flex flex-col h-[calc(100vh-6rem)] bg-gray-900 text-white">
+        <div className="flex flex-col h-[calc(100vh-6rem)] bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white transition-colors duration-300">
             {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800 bg-gray-900/50 backdrop-blur">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-800 bg-white/50 dark:bg-gray-900/50 backdrop-blur">
                 <div>
-                    <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
+                    <h1 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-400 dark:to-purple-400 bg-clip-text text-transparent">
                         Identity Graph 360
                     </h1>
                     <p className="text-xs text-gray-500 mt-1">Interactive Customer Single View</p>
@@ -105,7 +105,7 @@ export default function GraphPage() {
                         <select 
                             value={selectedRunId || ''}
                             onChange={(e) => setSelectedRunId(e.target.value)}
-                            className="bg-gray-800 border border-gray-700 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
                         >
                             {runs.map(r => (
                                 <option key={r.run_id} value={r.run_id}>
@@ -118,20 +118,20 @@ export default function GraphPage() {
                     {/* Stats Badges */}
                     {graphData?.stats && (
                         <div className="flex gap-2">
-                            <div className="px-3 py-1 rounded bg-purple-900/30 border border-purple-800">
-                                <span className="text-xs text-purple-400 block">Clusters</span>
-                                <span className="text-lg font-bold">{graphData.stats.total_clusters}</span>
+                            <div className="px-3 py-1 rounded bg-purple-50 dark:bg-purple-900/30 border border-purple-200 dark:border-purple-800">
+                                <span className="text-xs text-purple-600 dark:text-purple-400 block">Clusters</span>
+                                <span className="text-lg font-bold text-gray-900 dark:text-white">{graphData.stats.total_clusters}</span>
                             </div>
-                            <div className="px-3 py-1 rounded bg-blue-900/30 border border-blue-800">
-                                <span className="text-xs text-blue-400 block">Identities</span>
-                                <span className="text-lg font-bold">{graphData.stats.total_members}</span>
+                            <div className="px-3 py-1 rounded bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800">
+                                <span className="text-xs text-blue-600 dark:text-blue-400 block">Identities</span>
+                                <span className="text-lg font-bold text-gray-900 dark:text-white">{graphData.stats.total_members}</span>
                             </div>
                         </div>
                     )}
 
                     <button 
                         onClick={() => setShowTuning(!showTuning)}
-                        className={`p-2 rounded-lg border transition-colors ${showTuning ? 'bg-blue-600 border-blue-500 text-white' : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-white'}`}
+                        className={`p-2 rounded-lg border transition-colors ${showTuning ? 'bg-blue-600 border-blue-500 text-white' : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
                         title="Toggle Tuning Panel"
                     >
                         <Sliders size={18} />
@@ -139,7 +139,7 @@ export default function GraphPage() {
                     
                     <button 
                         onClick={() => selectedRunId && fetchGraph(selectedRunId)}
-                        className="p-2 rounded-lg bg-gray-800 border border-gray-700 text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
+                        className="p-2 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                         title="Refresh Data"
                     >
                         <RefreshCw size={18} />
@@ -159,9 +159,9 @@ export default function GraphPage() {
 
                 {/* Tuning Panel (Overlay or Sidebar) */}
                 {showTuning && (
-                    <div className="w-80 border-l border-gray-800 bg-gray-900/95 backdrop-blur absolute right-0 top-0 bottom-0 z-10 shadow-2xl overflow-y-auto transition-transform">
+                    <div className="w-80 border-l border-gray-200 dark:border-gray-800 bg-white/95 dark:bg-gray-900/95 backdrop-blur absolute right-0 top-0 bottom-0 z-10 shadow-2xl overflow-y-auto transition-transform">
                         <div className="p-4">
-                            <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                            <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
                                 <Sliders size={14} />
                                 Clustering Logic
                             </h2>

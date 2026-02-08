@@ -131,15 +131,15 @@ export default function ReviewPage() {
     };
 
     const getScoreColor = (score: number) => {
-        if (score >= 0.7) return 'text-emerald-400';
-        if (score >= 0.5) return 'text-yellow-400';
-        return 'text-orange-400';
+        if (score >= 0.7) return 'text-emerald-600 dark:text-emerald-400';
+        if (score >= 0.5) return 'text-yellow-600 dark:text-yellow-400';
+        return 'text-orange-600 dark:text-orange-400';
     };
 
     const getScoreBg = (score: number) => {
-        if (score >= 0.7) return 'bg-emerald-900/30 border-emerald-700';
-        if (score >= 0.5) return 'bg-yellow-900/30 border-yellow-700';
-        return 'bg-orange-900/30 border-orange-700';
+        if (score >= 0.7) return 'bg-emerald-100 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-700';
+        if (score >= 0.5) return 'bg-yellow-100 dark:bg-yellow-900/30 border-yellow-200 dark:border-yellow-700';
+        return 'bg-orange-100 dark:bg-orange-900/30 border-orange-200 dark:border-orange-700';
     };
 
     if (isLoading) {
@@ -155,46 +155,46 @@ export default function ReviewPage() {
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div>
-                    <h1 className="text-3xl font-bold text-white">Review Queue</h1>
-                    <p className="text-gray-400 mt-1">
+                    <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Review Queue</h1>
+                    <p className="text-gray-600 dark:text-gray-400 mt-1">
                         Human-in-the-loop review for uncertain matches
                     </p>
                 </div>
             </div>
 
             {error && (
-                <div className="bg-red-900/20 border border-red-700 rounded-lg p-4 text-red-400">
+                <div className="bg-red-100 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-lg p-4 text-red-600 dark:text-red-400">
                     {error}
                 </div>
             )}
 
             {/* Stats Cards */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div className="bg-yellow-900/20 border border-yellow-700 rounded-xl p-4">
-                    <p className="text-yellow-400 text-sm">Pending</p>
-                    <p className="text-2xl font-bold text-yellow-400">{stats?.pending || 0}</p>
+                <div className="bg-yellow-100 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded-xl p-4">
+                    <p className="text-yellow-600 dark:text-yellow-400 text-sm">Pending</p>
+                    <p className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">{stats?.pending || 0}</p>
                 </div>
-                <div className="bg-emerald-900/20 border border-emerald-700 rounded-xl p-4">
-                    <p className="text-emerald-400 text-sm">Approved</p>
-                    <p className="text-2xl font-bold text-emerald-400">{stats?.approved || 0}</p>
+                <div className="bg-emerald-100 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-700 rounded-xl p-4">
+                    <p className="text-emerald-600 dark:text-emerald-400 text-sm">Approved</p>
+                    <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{stats?.approved || 0}</p>
                 </div>
-                <div className="bg-red-900/20 border border-red-700 rounded-xl p-4">
-                    <p className="text-red-400 text-sm">Rejected</p>
-                    <p className="text-2xl font-bold text-red-400">{stats?.rejected || 0}</p>
+                <div className="bg-red-100 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-xl p-4">
+                    <p className="text-red-600 dark:text-red-400 text-sm">Rejected</p>
+                    <p className="text-2xl font-bold text-red-600 dark:text-red-400">{stats?.rejected || 0}</p>
                 </div>
-                <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4">
-                    <p className="text-gray-400 text-sm">Total</p>
-                    <p className="text-2xl font-bold text-white">{stats?.total || 0}</p>
+                <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
+                    <p className="text-gray-600 dark:text-gray-400 text-sm">Total</p>
+                    <p className="text-2xl font-bold text-gray-900 dark:text-white">{stats?.total || 0}</p>
                 </div>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Queue List */}
-                <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-6">
-                    <h2 className="text-xl font-semibold text-white mb-4">Pending Reviews</h2>
+                <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-6 shadow-sm dark:shadow-none">
+                    <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Pending Reviews</h2>
 
                     {queue.filter(item => item.status === 'PENDING').length === 0 ? (
-                        <div className="text-center py-12 text-gray-400">
+                        <div className="text-center py-12 text-gray-500 dark:text-gray-400">
                             <p className="text-4xl mb-4">✅</p>
                             <p>No items pending review!</p>
                         </div>

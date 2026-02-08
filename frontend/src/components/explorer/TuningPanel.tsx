@@ -62,7 +62,7 @@ export function TuningPanel({ onPreview, onSave, loading, isOpen, setIsOpen }: T
         return (
             <button
                 onClick={() => setIsOpen(true)}
-                className="p-2.5 bg-gray-800/90 hover:bg-gray-700 text-white rounded-lg border border-gray-600 shadow-xl backdrop-blur transition-all hover:scale-105"
+                className="p-2.5 bg-white/90 dark:bg-gray-800/90 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-white rounded-lg border border-gray-200 dark:border-gray-600 shadow-xl backdrop-blur transition-all hover:scale-105"
                 title="Open Tuning Configuration"
             >
                 <Sliders size={20} />
@@ -71,28 +71,28 @@ export function TuningPanel({ onPreview, onSave, loading, isOpen, setIsOpen }: T
     }
 
     return (
-        <div className="w-80 max-h-[660px] bg-gray-800/95 backdrop-blur border border-gray-700 rounded-xl p-4 flex flex-col gap-6 overflow-y-auto shadow-2xl">
+        <div className="w-80 max-h-[660px] bg-white/95 dark:bg-gray-800/95 backdrop-blur border border-gray-200 dark:border-gray-700 rounded-xl p-4 flex flex-col gap-6 overflow-y-auto shadow-2xl">
             <button
                 onClick={() => setIsOpen(false)}
-                className="absolute top-2 right-2 p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
+                className="absolute top-2 right-2 p-1.5 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
                 title="Close Panel"
             >
                 <ChevronLeft size={16} />
             </button>
 
             <div className="mt-2">
-                <h3 className="text-white font-medium mb-1">Tuning & Weights</h3>
-                <p className="text-xs text-gray-400">Adjust matching importance</p>
+                <h3 className="text-gray-900 dark:text-white font-medium mb-1">Tuning & Weights</h3>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Adjust matching importance</p>
             </div>
 
             {/* Thresholds */}
             <div className="space-y-4">
-                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Decision Thresholds</h4>
+                <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Decision Thresholds</h4>
                 
                 <div className="space-y-2">
                     <div className="flex justify-between text-sm">
-                        <span className="text-gray-300">Auto-Link</span>
-                        <span className="text-emerald-400 font-mono">{thresholds.autoLink.toFixed(2)}</span>
+                        <span className="text-gray-600 dark:text-gray-300">Auto-Link</span>
+                        <span className="text-emerald-600 dark:text-emerald-400 font-mono">{thresholds.autoLink.toFixed(2)}</span>
                     </div>
                     <input
                         type="range"
@@ -107,8 +107,8 @@ export function TuningPanel({ onPreview, onSave, loading, isOpen, setIsOpen }: T
 
                 <div className="space-y-2">
                     <div className="flex justify-between text-sm">
-                        <span className="text-gray-300">Review</span>
-                        <span className="text-yellow-400 font-mono">{thresholds.review.toFixed(2)}</span>
+                        <span className="text-gray-600 dark:text-gray-300">Review</span>
+                        <span className="text-yellow-600 dark:text-yellow-400 font-mono">{thresholds.review.toFixed(2)}</span>
                     </div>
                     <input
                         type="range"
@@ -122,17 +122,17 @@ export function TuningPanel({ onPreview, onSave, loading, isOpen, setIsOpen }: T
                 </div>
             </div>
 
-            <hr className="border-gray-700" />
+            <hr className="border-gray-200 dark:border-gray-700" />
 
             {/* Weights */}
             <div className="space-y-4">
-                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Field Weights</h4>
+                <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Field Weights</h4>
                 
                 {Object.entries(weights).map(([field, weight]) => (
                     <div key={field} className="space-y-1">
                         <div className="flex justify-between text-sm">
-                            <span className="text-gray-300 capitalize">{field}</span>
-                            <span className="text-blue-400 font-mono">{weight.toFixed(1)}</span>
+                            <span className="text-gray-600 dark:text-gray-300 capitalize">{field}</span>
+                            <span className="text-blue-600 dark:text-blue-400 font-mono">{weight.toFixed(1)}</span>
                         </div>
                         <input
                             type="range"
@@ -147,7 +147,7 @@ export function TuningPanel({ onPreview, onSave, loading, isOpen, setIsOpen }: T
                 ))}
             </div>
 
-            <div className="mt-auto pt-4 border-t border-gray-700 space-y-3">
+            <div className="mt-auto pt-4 border-t border-gray-200 dark:border-gray-700 space-y-3">
                 <button
                     onClick={handleApply}
                     disabled={loading}
@@ -162,13 +162,13 @@ export function TuningPanel({ onPreview, onSave, loading, isOpen, setIsOpen }: T
                 </button>
                 
                 {message && (
-                    <div className="text-xs text-green-400 text-center animate-pulse">{message}</div>
+                    <div className="text-xs text-green-600 dark:text-green-400 text-center animate-pulse">{message}</div>
                 )}
 
                 <div className="grid grid-cols-2 gap-2">
                     <button 
                         onClick={handleSave}
-                        className="flex items-center justify-center gap-2 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm"
+                        className="flex items-center justify-center gap-2 px-3 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg text-sm transition-colors"
                     >
                         <Save size={14} />
                         Save
@@ -178,7 +178,7 @@ export function TuningPanel({ onPreview, onSave, loading, isOpen, setIsOpen }: T
                             setWeights({ name: 1.0, dob: 1.0, email: 1.0, phone: 1.0, address: 0.5, city: 0.5 });
                             setThresholds({ autoLink: 0.95, review: 0.75 });
                         }}
-                        className="flex items-center justify-center gap-2 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm"
+                        className="flex items-center justify-center gap-2 px-3 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg text-sm transition-colors"
                     >
                         <RotateCcw size={14} />
                         Reset

@@ -130,5 +130,93 @@
     "duration_seconds": 0.46018,
     "error_message": null,
     "current_stage": "complete"
+  },
+  "71163db5-b33e-482b-9917-70263083a102": {
+    "run_id": "71163db5-b33e-482b-9917-70263083a102",
+    "mode": "AUTO",
+    "policy_version": 1,
+    "status": "COMPLETED",
+    "description": "File Upload: Untitled spreadsheet.xlsx",
+    "counters": {
+      "records_in": 210,
+      "records_normalized": 210,
+      "blocks_created": 248,
+      "candidates_generated": 1009,
+      "pairs_scored": 1009,
+      "auto_links": 784,
+      "review_items": 79,
+      "rejected": 146
+    },
+    "started_at": "2026-02-08T19:28:24.302023",
+    "ended_at": "2026-02-08T19:28:24.916081",
+    "duration_seconds": 0.614058,
+    "error_message": null,
+    "current_stage": "complete"
+  },
+  "a771fed7-da7a-45c2-892c-17cb0ddd0e5d": {
+    "run_id": "a771fed7-da7a-45c2-892c-17cb0ddd0e5d",
+    "mode": "AUTO",
+    "policy_version": 1,
+    "status": "COMPLETED",
+    "description": "File Upload: Untitled spreadsheet.xlsx",
+    "counters": {
+      "records_in": 210,
+      "records_normalized": 210,
+      "blocks_created": 248,
+      "candidates_generated": 1063,
+      "pairs_scored": 1063,
+      "auto_links": 773,
+      "review_items": 75,
+      "rejected": 215
+    },
+    "started_at": "2026-02-08T19:52:48.119783",
+    "ended_at": "2026-02-08T19:52:48.727971",
+    "duration_seconds": 0.608188,
+    "error_message": null,
+    "current_stage": "complete"
+  },
+  "7e2c37b8-3774-4dad-bb95-038a8bc0544e": {
+    "run_id": "7e2c37b8-3774-4dad-bb95-038a8bc0544e",
+    "mode": "AUTO",
+    "policy_version": 1,
+    "status": "COMPLETED",
+    "description": "File Upload: Untitled spreadsheet.xlsx",
+    "counters": {
+      "records_in": 210,
+      "records_normalized": 210,
+      "blocks_created": 248,
+      "candidates_generated": 1037,
+      "pairs_scored": 1037,
+      "auto_links": 775,
+      "review_items": 121,
+      "rejected": 141
+    },
+    "started_at": "2026-02-08T20:03:50.208826",
+    "ended_at": "2026-02-08T20:03:50.903075",
+    "duration_seconds": 0.694249,
+    "error_message": null,
+    "current_stage": "complete"
+  },
+  "3e511b8f-70c7-4b58-9545-1612aa809de9": {
+    "run_id": "3e511b8f-70c7-4b58-9545-1612aa809de9",
+    "mode": "AUTO",
+    "policy_version": 1,
+    "status": "COMPLETED",
+    "description": "File Upload: Untitled spreadsheet.xlsx",
+    "counters": {
+      "records_in": 210,
+      "records_normalized": 210,
+      "blocks_created": 248,
+      "candidates_generated": 1069,
+      "pairs_scored": 1069,
+      "auto_links": 761,
+      "review_items": 95,
+      "rejected": 213
+    },
+    "started_at": "2026-02-08T20:14:38.406376",
+    "ended_at": "2026-02-08T20:14:38.936324",
+    "duration_seconds": 0.529948,
+    "error_message": null,
+    "current_stage": "complete"
   }
 }

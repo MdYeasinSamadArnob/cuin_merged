@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as d3 from 'd3';
 import { X, ZoomIn, ZoomOut, Maximize, RotateCcw } from 'lucide-react';
+import { useAppStore } from '@/stores/useAppStore';
 
 interface ClusterGraphProps {
     data: any;
@@ -51,19 +52,34 @@ export function ClusterGraph({ data, loading, loadingMessage = "Running Clusteri
     const lastMousePos = useRef({ x: 0, y: 0 });
     const draggedNodeRef = useRef<GraphNode | null>(null);
 
+    // Get theme from store
+    const { theme } = useAppStore();
+
     // Theme colors
     const colors = {
         cluster: { fill: '#7c3aed', stroke: '#a78bfa', glow: '#8b5cf6' },
         record: { fill: '#06b6d4', stroke: '#67e8f9', glow: '#22d3ee' },
         golden: { fill: '#f59e0b', stroke: '#fcd34d', glow: '#fbbf24' },
-        background: '#111827',
-        text: '#e5e7eb',
+        background: theme === 'dark' ? '#111827' : '#ffffff',
+        text: theme === 'dark' ? '#f3f4f6' : '#111827',
+        textSecondary: theme === 'dark' ? '#9ca3af' : '#4b5563',
         edge: {
             match: '#3b82f6',
-            member: '#4b5563',
+            member: theme === 'dark' ? '#4b5563' : '#cbd5e1',
             review: '#f59e0b'
         }
     };
+
+    // Helper: Get display label
+    const getDisplayLabel = useCallback((node: GraphNode) => {
+        if (node.label && !node.label.startsWith('UNKNOWN')) return node.label;
+        if (node.properties) {
+            if (node.properties.email && node.properties.email !== '—') return node.properties.email;
+            if (node.properties.phone && node.properties.phone !== '—') return node.properties.phone;
+            if (node.properties.source_customer_id) return node.properties.source_customer_id;
+        }
+        return node.label || node.id;
+    }, []);
 
     // Helper: Get node at point
     const getNodeAtPoint = useCallback((x: number, y: number): GraphNode | null => {
@@ -275,18 +291,20 @@ export function ClusterGraph({ data, loading, loadingMessage = "Running Clusteri
                 // Label
                 if (node.type === 'cluster' || isSelected || isHovered || k > 0.6) {
                     ctx.shadowBlur = 0;
-                    ctx.fillStyle = '#fff';
+                    ctx.fillStyle = colors.text;
                     ctx.font = `${node.type === 'cluster' ? 'bold 12px' : '10px'} Inter, sans-serif`;
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
 
+                    const label = getDisplayLabel(node);
+
                     if (node.type === 'cluster') {
                         ctx.fillText(node.properties?.size || 'C', node.x || 0, node.y || 0);
-                        ctx.fillStyle = '#9ca3af';
+                        ctx.fillStyle = colors.textSecondary;
                         ctx.font = '10px Inter, sans-serif';
-                        ctx.fillText(node.label.substring(0, 15), node.x || 0, (node.y || 0) + radius + 12);
+                        ctx.fillText(label.substring(0, 15), node.x || 0, (node.y || 0) + radius + 12);
                     } else {
-                        ctx.fillText(node.label.substring(0, 20), node.x || 0, (node.y || 0) + radius + 12);
+                        ctx.fillText(label.substring(0, 20), node.x || 0, (node.y || 0) + radius + 12);
                     }
                 }
             });
@@ -449,10 +467,10 @@ export function ClusterGraph({ data, loading, loadingMessage = "Running Clusteri
 
     if (loading) {
         return (
-            <div className="h-full flex items-center justify-center bg-gray-900 rounded-xl border border-gray-700">
+            <div className="h-full flex items-center justify-center bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700">
                 <div className="flex flex-col items-center gap-4">
                     <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                    <div className="text-blue-400 font-medium">{loadingMessage}</div>
+                    <div className="text-blue-500 dark:text-blue-400 font-medium">{loadingMessage}</div>
                 </div>
             </div>
         );
@@ -460,14 +478,14 @@ export function ClusterGraph({ data, loading, loadingMessage = "Running Clusteri
 
     if (!data) {
         return (
-            <div className="h-full flex items-center justify-center bg-gray-900 rounded-xl border border-gray-700">
-                <div className="text-gray-500">Run preview to see clusters</div>
+            <div className="h-full flex items-center justify-center bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700">
+                <div className="text-gray-500 dark:text-gray-400">Run preview to see clusters</div>
             </div>
         );
     }
 
     return (
-        <div ref={containerRef} className="h-full w-full bg-gray-900 rounded-xl border border-gray-700 overflow-hidden relative">
+        <div ref={containerRef} className="h-full w-full bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden relative">
             <canvas
                 ref={canvasRef}
                 className="block w-full h-full outline-none touch-none"
@@ -481,24 +499,24 @@ export function ClusterGraph({ data, loading, loadingMessage = "Running Clusteri
 
             {/* Controls Overlay */}
             <div className="absolute bottom-4 left-4 flex flex-col gap-2">
-                <div className="bg-gray-800/90 p-1.5 rounded-lg border border-gray-700 shadow-xl backdrop-blur-sm flex flex-col gap-1">
+                <div className="bg-white/90 dark:bg-gray-800/90 p-1.5 rounded-lg border border-gray-200 dark:border-gray-700 shadow-xl backdrop-blur-sm flex flex-col gap-1">
                     <button
                         onClick={handleZoomIn}
-                        className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
+                        className="p-1.5 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
                         title="Zoom In"
                     >
                         <ZoomIn size={18} />
                     </button>
                     <button
                         onClick={handleZoomOut}
-                        className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
+                        className="p-1.5 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
                         title="Zoom Out"
                     >
                         <ZoomOut size={18} />
                     </button>
                     <button
                         onClick={() => fitView(true)}
-                        className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
+                        className="p-1.5 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
                         title="Fit View"
                     >
                         <Maximize size={18} />
@@ -508,14 +526,14 @@ export function ClusterGraph({ data, loading, loadingMessage = "Running Clusteri
                             if (!simulationRef.current) return;
                             simulationRef.current.alpha(1).restart();
                         }}
-                        className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded transition-colors"
+                        className="p-1.5 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
                         title="Restart Simulation"
                     >
                         <RotateCcw size={18} />
                     </button>
                 </div>
 
-                <div className="bg-gray-800/90 p-2 rounded-lg border border-gray-700 text-gray-300 shadow-xl backdrop-blur-sm">
+                <div className="bg-white/90 dark:bg-gray-800/90 p-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 shadow-xl backdrop-blur-sm">
                     <div className="flex flex-col gap-2">
                         <div className="flex items-center gap-2">
                             <div className="w-3 h-3 rounded-full bg-purple-600 border border-purple-400 shadow-[0_0_5px_#7c3aed]"></div>
@@ -531,13 +549,13 @@ export function ClusterGraph({ data, loading, loadingMessage = "Running Clusteri
 
             {/* Node Details Panel */}
             {selectedNode && (
-                <div className="absolute top-4 right-4 w-80 bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden flex flex-col max-h-[90%] animate-in fade-in slide-in-from-right-10 duration-200">
-                    <div className="flex justify-between items-center p-4 border-b border-gray-700 bg-gray-800">
-                        <h3 className="text-lg font-bold text-blue-400 flex items-center gap-2">
+                <div className="absolute top-4 right-4 w-80 bg-white/95 dark:bg-gray-800/95 backdrop-blur border border-gray-200 dark:border-gray-600 rounded-lg shadow-2xl overflow-hidden flex flex-col max-h-[90%] animate-in fade-in slide-in-from-right-10 duration-200">
+                    <div className="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
+                        <h3 className="text-lg font-bold text-blue-600 dark:text-blue-400 flex items-center gap-2">
                             <div className={`w-3 h-3 rounded-full ${selectedNode.type === 'cluster' ? 'bg-purple-500 shadow-[0_0_8px_#a855f7]' : 'bg-cyan-500 shadow-[0_0_8px_#06b6d4]'}`}></div>
                             {selectedNode.type === 'cluster' ? 'Cluster Profile' : 'Identity Profile'}
                         </h3>
-                        <button onClick={() => setSelectedNode(null)} className="text-gray-400 hover:text-white transition-colors">
+                        <button onClick={() => setSelectedNode(null)} className="text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors">
                             <X size={18} />
                         </button>
                     </div>
@@ -545,35 +563,35 @@ export function ClusterGraph({ data, loading, loadingMessage = "Running Clusteri
                     <div className="p-4 space-y-4 overflow-y-auto custom-scrollbar">
                         <div>
                             <label className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">System ID</label>
-                            <div className="text-xs font-mono break-all text-gray-300 bg-gray-900/50 p-2 rounded mt-1 border border-gray-700">{selectedNode.id}</div>
+                            <div className="text-xs font-mono break-all text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-900/50 p-2 rounded mt-1 border border-gray-200 dark:border-gray-700">{selectedNode.id}</div>
                         </div>
 
                         <div>
                             <label className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Primary Name</label>
-                            <div className="text-sm font-medium text-white text-lg">{selectedNode.label}</div>
+                            <div className="text-sm font-medium text-gray-900 dark:text-white text-lg">{getDisplayLabel(selectedNode)}</div>
                         </div>
 
                         {selectedNode.type === 'record' && (
-                            <div className="space-y-3 bg-gray-900/30 p-3 rounded-lg border border-gray-700/50">
+                            <div className="space-y-3 bg-gray-100 dark:bg-gray-900/30 p-3 rounded-lg border border-gray-200 dark:border-gray-700/50">
                                 <div className="grid grid-cols-2 gap-3">
                                     <div>
                                         <label className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">DOB</label>
-                                        <div className="text-sm text-gray-300">{selectedNode.properties.dob || selectedNode.properties.dob_norm || 'N/A'}</div>
+                                        <div className="text-sm text-gray-700 dark:text-gray-300">{selectedNode.properties.dob || selectedNode.properties.dob_norm || 'N/A'}</div>
                                     </div>
                                     <div>
                                         <label className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Phone</label>
-                                        <div className="text-sm text-gray-300">{selectedNode.properties.phone || selectedNode.properties.phone_norm || 'N/A'}</div>
+                                        <div className="text-sm text-gray-700 dark:text-gray-300">{selectedNode.properties.phone || selectedNode.properties.phone_norm || 'N/A'}</div>
                                     </div>
                                 </div>
                                 <div>
                                     <label className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Address</label>
-                                    <div className="text-sm text-gray-300 break-words">
+                                    <div className="text-sm text-gray-700 dark:text-gray-300 break-words">
                                         {selectedNode.properties.address || selectedNode.properties.address_norm || 'N/A'}
                                     </div>
                                 </div>
                                 <div>
                                     <label className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Email</label>
-                                    <div className="text-sm text-gray-300 break-words">
+                                    <div className="text-sm text-gray-700 dark:text-gray-300 break-words">
                                         {selectedNode.properties.email || selectedNode.properties.email_norm || 'N/A'}
                                     </div>
                                 </div>
@@ -581,12 +599,12 @@ export function ClusterGraph({ data, loading, loadingMessage = "Running Clusteri
                         )}
 
                         {selectedNode.type === 'cluster' && (
-                            <div className="bg-purple-900/20 p-4 rounded-lg border border-purple-500/30">
+                            <div className="bg-purple-50 dark:bg-purple-900/20 p-4 rounded-lg border border-purple-200 dark:border-purple-500/30">
                                 <div className="flex justify-between items-center">
-                                    <label className="text-xs text-purple-300 uppercase tracking-wider font-semibold">Cluster Size</label>
-                                    <span className="text-2xl font-bold text-purple-400">{selectedNode.properties.size}</span>
+                                    <label className="text-xs text-purple-700 dark:text-purple-300 uppercase tracking-wider font-semibold">Cluster Size</label>
+                                    <span className="text-2xl font-bold text-purple-600 dark:text-purple-400">{selectedNode.properties.size}</span>
                                 </div>
-                                <div className="mt-2 text-xs text-purple-300/70">
+                                <div className="mt-2 text-xs text-purple-600/70 dark:text-purple-300/70">
                                     Contains {selectedNode.properties.size} linked records
                                 </div>
                             </div>
