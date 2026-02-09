@@ -48,7 +48,7 @@ export default function GraphPage() {
         setIsLoading(true);
         try {
             // Fetch graph data with singletons included
-            const data = await (api as any).getGraphData(runId, 2000);
+            const data = await api.getGraphData(runId, 2000);
             setGraphData(data);
         } catch (err) {
             console.error('Failed to fetch graph data:', err);
@@ -60,7 +60,7 @@ export default function GraphPage() {
     const handlePreview = async (config: any) => {
         setIsLoading(true);
         try {
-            const data = await (api as any).previewClustering(selectedRunId, config);
+            const data = await api.previewClustering(selectedRunId ?? undefined, config);
             setGraphData(data);
         } catch (err) {
             console.error('Preview failed:', err);
@@ -103,7 +103,7 @@ export default function GraphPage() {
                 <div className="flex items-center gap-4">
                     {/* Run Selector */}
                     {runs.length > 0 && (
-                        <select 
+                        <select
                             value={selectedRunId || ''}
                             onChange={(e) => setSelectedRunId(e.target.value)}
                             className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -130,7 +130,7 @@ export default function GraphPage() {
                         </div>
                     )}
 
-                    <button 
+                    <button
                         onClick={() => setShowTuning(!showTuning)}
                         className={`p-2 rounded-lg border transition-colors ${showTuning ? 'bg-blue-600 border-blue-500 text-white' : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
                         title="Toggle Tuning Panel"
@@ -138,15 +138,15 @@ export default function GraphPage() {
                         <Sliders size={18} />
                     </button>
 
-                    <button 
+                    <button
                         onClick={() => setShowLabels(!showLabels)}
                         className={`p-2 rounded-lg border transition-colors ${showLabels ? 'bg-blue-100 dark:bg-blue-900/50 border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400' : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
                         title={showLabels ? "Hide Labels" : "Show Labels"}
                     >
                         <Type size={18} />
                     </button>
-                    
-                    <button 
+
+                    <button
                         onClick={() => selectedRunId && fetchGraph(selectedRunId)}
                         className="p-2 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                         title="Refresh Data"
@@ -160,9 +160,9 @@ export default function GraphPage() {
             <div className="flex-1 flex overflow-hidden relative">
                 {/* Graph Canvas */}
                 <div className="flex-1 h-full relative">
-                    <ClusterGraph 
-                        data={graphData} 
-                        loading={isLoading} 
+                    <ClusterGraph
+                        data={graphData}
+                        loading={isLoading}
                         showLabels={showLabels}
                     />
                 </div>
@@ -175,8 +175,8 @@ export default function GraphPage() {
                                 <Sliders size={14} />
                                 Clustering Logic
                             </h2>
-                            <TuningPanel 
-                                onPreview={handlePreview} 
+                            <TuningPanel
+                                onPreview={handlePreview}
                                 onSave={handleSaveConfig}
                                 loading={isLoading}
                                 isOpen={showTuning}
