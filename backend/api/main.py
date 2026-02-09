@@ -25,6 +25,7 @@ from api.routes_review import router as review_router
 from api.routes_audit import router as audit_router
 from api.routes_metrics import router as metrics_router
 from api.routes_graph import router as graph_router
+from api.routes_admin import router as admin_router
 from api.ws_events import ConnectionManager
 from api import db_init
 
@@ -208,6 +209,9 @@ app.include_router(graph_router, prefix="/graph", tags=["Graph"])
 
 from api.routes_config import router as config_router
 app.include_router(config_router, prefix="/config", tags=["Config"])
+
+from api.routes_admin import router as admin_router
+app.include_router(admin_router, prefix="/admin", tags=["Admin"])
 
 
 # ============================================

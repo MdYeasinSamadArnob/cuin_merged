@@ -259,7 +259,8 @@ function ExplorerPageContent() {
 
     const fetchClusters = async (runId: string, page: number) => {
         try {
-            const data = await (api as any).getClusters(runId, page, pageSize);
+            // Use getClusterEntities with min_size=2 to exclude singletons
+            const data = await api.getClusterEntities(page, pageSize, 2, runId);
             setScores(data.clusters?.map((c: any) => ({
                 pair_id: c.cluster_id,
                 a_key: c.representative_record.customer_key || c.representative_record.source_customer_id,

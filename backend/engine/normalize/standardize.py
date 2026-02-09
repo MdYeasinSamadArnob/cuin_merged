@@ -235,6 +235,7 @@ def normalize_record(record: dict) -> dict:
     """
     Normalize all fields in a customer record.
     Returns a new dict with normalized values.
+    Preserves all data - does not skip or remove any rows/columns.
     """
     # Combine first and last name if separate
     full_name = None
@@ -246,7 +247,21 @@ def normalize_record(record: dict) -> dict:
         if isinstance(val, str):
             s = val.strip()
             return s == '' or s.upper() in ['N/A', 'NA', 'NULL', 'NONE', '-', '—']
+        # Handle NaN from pandas
+        if isinstance(val, float):
+            import math
+            return math.isnan(val)
         return False
+    
+    # Helper to safely convert to string, handling NaN and None
+    def safe_str(val):
+        if val is None:
+            return None
+        if isinstance(val, float):
+            import math
+            if math.isnan(val):
+                return None
+        return str(val).strip() if str(val).strip() else None
     
     # Check for first_name/last_name or CUSNMF/CUSNML patterns
     first_name = record.get('first_name') or record.get('CUSNMF') or record.get('fname')
@@ -268,25 +283,46 @@ def normalize_record(record: dict) -> dict:
     # Get phone from multiple possible fields
     phone = record.get('phone') or record.get('mobile') or record.get('telephone')
     
+    # Support both CUSCOD and USCOD (keep both for compatibility)
+    customer_id = (
+        record.get('customer_id') or 
+        record.get('id') or 
+        record.get('source_customer_id') or 
+        safe_str(record.get('CUSCOD')) or 
+        safe_str(record.get('USCOD'))
+    )
+    
+    # Handle both phone fields separately - try mobile first, then landline
+    phone_normalized = (
+        normalize_phone(phone) or 
+        normalize_phone(safe_str(record.get('MOBLNO'))) or 
+        normalize_phone(safe_str(record.get('TELENO'))) or
+        normalize_phone(record.get('mobile')) or
+        normalize_phone(record.get('telephone'))
+    )
+    
     normalized = {
-        'source_customer_id': record.get('customer_id') or record.get('id') or record.get('source_customer_id') or record.get('USCOD'),
+        'source_customer_id': customer_id,
         'name_norm': normalize_name(full_name),
-        'phone_norm': normalize_phone(phone) or normalize_phone(record.get('MOBLNO') or record.get('TELENO')),
+        'phone_norm': phone_normalized,
         'email_norm': normalize_email(record.get('email')) or normalize_email(record.get('MAILID')),
-        'dob_norm': normalize_dob(record.get('dob') or record.get('date_of_birth') or record.get('CUSDOB')),
+        'dob_norm': normalize_dob(safe_str(record.get('dob')) or safe_str(record.get('date_of_birth')) or safe_str(record.get('CUSDOB'))),
         'address_norm': normalize_address(record.get('address')) or normalize_address(record.get('ADDRS1')),
         'city_norm': normalize_name(record.get('city')) or normalize_name(record.get('CITYNM')),
-        'natid_norm': normalize_natid(record.get('natid') or record.get('national_id') or record.get('NATLID')),
-        'source_system': record.get('source_system', 'UNKNOWN'),
+        'natid_norm': normalize_natid(safe_str(record.get('natid')) or safe_str(record.get('national_id')) or safe_str(record.get('NATLID'))),
+        'source_system': record.get('source_system') or record.get('SOURCE_SYSTEM') or 'LEGACY_SYSTEM',
         
-        # Preserve rich metadata for UI
+        # Preserve rich metadata for UI (keep all original data)
         'metadata': {
-            'cust_type': record.get('cust_type') or record.get('CUSTYP'),
-            'status': record.get('status') or record.get('CUSSTS'),
-            'gender': record.get('gender') or record.get('GENDER'),
-            'branch': record.get('branch') or record.get('OPRBRA'),
-            'sponsor': record.get('sponsor') or record.get('SPONAM'),
-            'timestamp': record.get('timestamp') or record.get('TIMSTAMP')
+            'cust_type': safe_str(record.get('cust_type')) or safe_str(record.get('CUSTYP')),
+            'status': safe_str(record.get('status')) or safe_str(record.get('CUSSTS')),
+            'gender': safe_str(record.get('gender')) or safe_str(record.get('GENDER')),
+            'branch': safe_str(record.get('branch')) or safe_str(record.get('OPRBRA')),
+            'sponsor': safe_str(record.get('sponsor')) or safe_str(record.get('SPONAM')),
+            'timestamp': safe_str(record.get('timestamp')) or safe_str(record.get('TIMSTAMP')),
+            # Keep both phone fields for reference
+            'mobile': safe_str(record.get('MOBLNO')),
+            'landline': safe_str(record.get('TELENO')),
         }
     }
     

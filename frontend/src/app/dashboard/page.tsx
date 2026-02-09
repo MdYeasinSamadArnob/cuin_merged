@@ -55,12 +55,29 @@ export default function DashboardPage() {
         }
     };
 
-    const startQuickRun = async () => {
+    const resetAllData = async () => {
+        // Show confirmation dialog
+        const confirmed = window.confirm(
+            '⚠️ WARNING: This will permanently delete ALL data including:\n\n' +
+            '• All pipeline runs and metadata\n' +
+            '• All cluster information\n' +
+            '• All records data\n' +
+            '• All cached files\n\n' +
+            'This operation is IRREVERSIBLE!\n\n' +
+            'Are you sure you want to continue?'
+        );
+
+        if (!confirmed) return;
+
         try {
-            await api.startRun('FULL', 'Quick run from dashboard');
-            fetchDashboardData();
+            const result = await api.resetAllData();
+            console.log('Reset complete:', result);
+            alert(`✅ ${result.message}\n\nDeleted ${result.deleted_files} files and cleared ${result.deleted_runs} runs.`);
+            // Refresh dashboard data
+            window.location.reload();
         } catch (err) {
-            console.error('Failed to start run:', err);
+            console.error('Failed to reset data:', err);
+            alert('❌ Failed to reset data. Please check the console for details.');
         }
     };
 
@@ -101,8 +118,8 @@ export default function DashboardPage() {
                 </div>
                 <div className="flex items-center gap-4">
                     <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full ${isConnected
-                            ? 'bg-emerald-100 dark:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-700'
-                            : 'bg-red-100 dark:bg-red-900/30 border border-red-200 dark:border-red-700'
+                        ? 'bg-emerald-100 dark:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-700'
+                        : 'bg-red-100 dark:bg-red-900/30 border border-red-200 dark:border-red-700'
                         }`}>
                         <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500 dark:bg-emerald-400 animate-pulse' : 'bg-red-500 dark:bg-red-400'}`} />
                         <span className={`text-sm ${isConnected ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
@@ -110,10 +127,10 @@ export default function DashboardPage() {
                         </span>
                     </div>
                     <button
-                        onClick={startQuickRun}
-                        className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white px-4 py-2 rounded-lg font-semibold transition-all duration-200"
+                        onClick={resetAllData}
+                        className="bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white px-4 py-2 rounded-lg font-semibold transition-all duration-200 shadow-md hover:shadow-lg"
                     >
-                        ▶️ Start Run
+                        🗑️ Reset All Data
                     </button>
                 </div>
             </div>
@@ -164,8 +181,8 @@ export default function DashboardPage() {
 
                 {/* Review Backlog */}
                 <div className={`border rounded-xl p-6 transition-colors shadow-sm dark:shadow-none ${(metrics?.review_backlog || 0) > 0
-                        ? 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-700 hover:border-yellow-300 dark:hover:border-yellow-600'
-                        : 'bg-white dark:bg-gray-800/50 border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
+                    ? 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-700 hover:border-yellow-300 dark:hover:border-yellow-600'
+                    : 'bg-white dark:bg-gray-800/50 border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
                     }`}>
                     <div className="flex items-center justify-between">
                         <div>
@@ -226,8 +243,8 @@ export default function DashboardPage() {
                                 <p className="text-emerald-500 dark:text-emerald-300 text-sm">✓ Online</p>
                             </div>
                             <div className={`text-center p-3 rounded-lg border ${isConnected
-                                    ? 'bg-emerald-50 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-800'
-                                    : 'bg-red-50 dark:bg-red-900/30 border-red-200 dark:border-red-800'
+                                ? 'bg-emerald-50 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-800'
+                                : 'bg-red-50 dark:bg-red-900/30 border-red-200 dark:border-red-800'
                                 }`}>
                                 <p className={isConnected ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}>WS</p>
                                 <p className={`text-sm ${isConnected ? 'text-emerald-500 dark:text-emerald-300' : 'text-red-500 dark:text-red-300'}`}>
@@ -279,9 +296,9 @@ export default function DashboardPage() {
                                         </td>
                                         <td className="py-3">
                                             <span className={`px-2 py-1 rounded text-xs ${run.status === 'COMPLETED' ? 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800' :
-                                                    run.status === 'RUNNING' ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800' :
-                                                        run.status === 'FAILED' ? 'bg-red-100 dark:bg-red-900/50 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800' :
-                                                            'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-600'
+                                                run.status === 'RUNNING' ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800' :
+                                                    run.status === 'FAILED' ? 'bg-red-100 dark:bg-red-900/50 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800' :
+                                                        'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-600'
                                                 }`}>
                                                 {run.status}
                                             </span>
