@@ -1050,31 +1050,6 @@ function ExplorerPageContent() {
                                     </div>
                                 </div>
 
-                                {/* Matching Breakdown */}
-                                <div className="mb-8">
-                                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-                                        <CheckCircle size={20} className="text-emerald-500" />
-                                        Matching Decision Breakdown
-                                    </h3>
-                                    <div className="grid grid-cols-3 gap-4">
-                                        <div className="bg-emerald-50 dark:bg-emerald-900/20 p-4 rounded-xl border border-emerald-200 dark:border-emerald-800 text-center">
-                                            <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{reportData.matching.autoLinks}</div>
-                                            <div className="text-sm text-emerald-700 dark:text-emerald-300 mt-1">Auto-Linked</div>
-                                            <div className="text-xs text-emerald-600/70 dark:text-emerald-400/70">High confidence matches</div>
-                                        </div>
-                                        <div className="bg-yellow-50 dark:bg-yellow-900/20 p-4 rounded-xl border border-yellow-200 dark:border-yellow-800 text-center">
-                                            <div className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">{reportData.matching.reviewItems}</div>
-                                            <div className="text-sm text-yellow-700 dark:text-yellow-300 mt-1">Needs Review</div>
-                                            <div className="text-xs text-yellow-600/70 dark:text-yellow-400/70">Manual verification required</div>
-                                        </div>
-                                        <div className="bg-red-50 dark:bg-red-900/20 p-4 rounded-xl border border-red-200 dark:border-red-800 text-center">
-                                            <div className="text-2xl font-bold text-red-600 dark:text-red-400">{reportData.matching.rejectItems}</div>
-                                            <div className="text-sm text-red-700 dark:text-red-300 mt-1">Rejected</div>
-                                            <div className="text-xs text-red-600/70 dark:text-red-400/70">Low confidence / conflicts</div>
-                                        </div>
-                                    </div>
-                                </div>
-
                                 {/* Top Entities & Unique Records */}
                                 <div className="grid md:grid-cols-2 gap-6">
                                     {/* Top Merged Entities */}
@@ -1135,19 +1110,57 @@ function ExplorerPageContent() {
                                 <div className="flex gap-3">
                                     <button
                                         onClick={() => {
-                                            // Export as JSON
-                                            const blob = new Blob([JSON.stringify(reportData, null, 2)], { type: 'application/json' });
-                                            const url = URL.createObjectURL(blob);
-                                            const a = document.createElement('a');
-                                            a.href = url;
-                                            a.download = `identity-report-${reportData.runId.slice(0, 8)}.json`;
-                                            a.click();
-                                            URL.revokeObjectURL(url);
+                                            // Export as Excel using xlsx library
+                                            import('xlsx').then((XLSX) => {
+                                                // Create workbook
+                                                const wb = XLSX.utils.book_new();
+
+                                                // Summary sheet
+                                                const summaryData = [
+                                                    ['Identity Resolution Report'],
+                                                    ['Generated:', reportData.generatedAt],
+                                                    ['Run ID:', reportData.runId],
+                                                    [],
+                                                    ['Summary'],
+                                                    ['Total Records', reportData.summary.totalRecords],
+                                                    ['Entities Found', reportData.summary.totalEntities],
+                                                    ['Unique (Singleton)', reportData.summary.totalUniques],
+                                                    ['Deduplication Rate', `${reportData.summary.deduplicationRate}%`],
+                                                ];
+                                                const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
+                                                XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+
+                                                // Top Merged Entities sheet
+                                                const entitiesData = [
+                                                    ['Rank', 'Entity Name', 'Number of Records'],
+                                                    ...reportData.topClusters.map((c: any, idx: number) => [
+                                                        idx + 1,
+                                                        c.name,
+                                                        c.size
+                                                    ])
+                                                ];
+                                                const wsEntities = XLSX.utils.aoa_to_sheet(entitiesData);
+                                                XLSX.utils.book_append_sheet(wb, wsEntities, 'Top Merged Entities');
+
+                                                // Unique Records sheet
+                                                const uniquesData = [
+                                                    ['Name', 'Customer ID'],
+                                                    ...reportData.uniqueRecords.map((r: any) => [
+                                                        r.name,
+                                                        r.id
+                                                    ])
+                                                ];
+                                                const wsUniques = XLSX.utils.aoa_to_sheet(uniquesData);
+                                                XLSX.utils.book_append_sheet(wb, wsUniques, 'Unique Records');
+
+                                                // Generate Excel file
+                                                XLSX.writeFile(wb, `identity-report-${reportData.runId.slice(0, 8)}.xlsx`);
+                                            });
                                         }}
-                                        className="flex items-center gap-2 px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors text-sm font-medium"
+                                        className="flex items-center gap-2 px-4 py-2 bg-emerald-600 dark:bg-emerald-700 text-white rounded-lg hover:bg-emerald-500 dark:hover:bg-emerald-600 transition-colors text-sm font-medium"
                                     >
                                         <Download size={16} />
-                                        Export JSON
+                                        Export Excel
                                     </button>
                                     <button
                                         onClick={() => setIsReportOpen(false)}

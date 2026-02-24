@@ -42,7 +42,7 @@ class MatchScore:
 @dataclass
 class ScoringConfig:
     """Configuration for scoring operations."""
-    auto_link_threshold: float = 0.92
+    auto_link_threshold: float = 0.90
     review_threshold: float = 0.55
     
     # Field weights (should sum to ~1.0)

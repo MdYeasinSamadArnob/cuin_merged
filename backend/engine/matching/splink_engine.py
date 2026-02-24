@@ -178,11 +178,57 @@ class SplinkScorer:
         """
         conflicts = []
         
+        # Check for Strong Identity Signals to override Hard Conflicts
+        # We define a "Strong Identity" as:
+        # 1. Exact Name + Exact Email (Previous fix)
+        # 2. High Fuzzy Name (>0.85) + High Fuzzy Address (>0.85) (New case from screenshot)
+        # 3. High Fuzzy Name (>0.85) + Exact Phone
+        # 4. High Fuzzy Name (>0.85) + Exact Email
+        
+        name_weight = 0.0
+        other_strong_signal = False
+        
+        # Check Name
+        name_a = record_a.get('name_norm')
+        name_b = record_b.get('name_norm')
+        if name_a and name_b:
+            # Re-calculate similarity (duplicate logic, but needed for conflict check context)
+            sim = self._jaro_winkler(name_a, name_b)
+            if sim == 1.0:
+                name_weight = 1.0
+            elif sim >= 0.85:
+                name_weight = 0.85
+        
+        # Check Other Signals
+        email_a = record_a.get('email_norm')
+        email_b = record_b.get('email_norm')
+        if email_a and email_b and email_a == email_b:
+            other_strong_signal = True
+            
+        phone_a = record_a.get('phone_norm')
+        phone_b = record_b.get('phone_norm')
+        if phone_a and phone_b and phone_a == phone_b:
+            other_strong_signal = True
+            
+        addr_a = record_a.get('address_norm')
+        addr_b = record_b.get('address_norm')
+        if addr_a and addr_b:
+            sim = self._jaro_winkler(addr_a, addr_b)
+            if sim >= 0.85: # High fuzzy address
+                other_strong_signal = True
+
+        has_strong_identity = (name_weight >= 0.85 and other_strong_signal)
+        
         # NatID conflict: both present but different
         natid_a = record_a.get('natid_norm')
         natid_b = record_b.get('natid_norm')
         if natid_a and natid_b and natid_a != natid_b:
-            conflicts.append("natid_mismatch")
+            if has_strong_identity:
+                # Log or just ignore as hard conflict?
+                # For now, let's treat it as a signal but NOT a hard blocker
+                pass 
+            else:
+                conflicts.append("natid_mismatch")
         
         # DOB conflict: both present but differ by > 2 years
         dob_a = record_a.get('dob_norm')
@@ -371,8 +417,31 @@ class SplinkScorer:
             name_evidence = next((e for e in evidence if e.field_name == "name_norm"), None)
             is_exact_name = name_evidence and name_evidence.comparison_type == "exact_match"
             
-            if not is_exact_name:
-                score = 0.8 # Cap confidence for low-info matches
+            # EXCEPTION 2: High confidence fuzzy match on a LONG name
+            # For "GOLAM MOHD ZUBAYED A" vs "GOLAM MOHAMMED ZUBAYED A", similarity is > 0.9
+            # and name is long (high entropy), so we trust it.
+            is_high_fuzzy = (name_evidence and 
+                             name_evidence.comparison_type == "fuzzy_match" and
+                             name_evidence.similarity_score > 0.88 and
+                             len(str(name_evidence.value_a or '')) > 10)
+            
+            if not is_exact_name and not is_high_fuzzy:
+                score = 0.8 # Cap confidence for low-info matches only if not high-fuzzy
+        
+        # USER RULE: High Similarity Name Match -> Boost Score
+        # If name similarity is very high (>0.9) and name is long, trust it significantly
+        name_ev = next((e for e in evidence if e.field_name == "name_norm"), None)
+        if name_ev and name_ev.similarity_score >= 0.90:
+            # Boost score to at least 0.93 (above auto-link 0.92) if name is long enough
+            if len(str(name_ev.value_a or '')) > 8:
+                 if score < 0.93:
+                     score = 0.93
+        elif name_ev and name_ev.similarity_score >= 0.85:
+            # Boost moderate-high fuzzy matches (e.g. MOHD vs MOHAMMED) to 0.90
+            # Needs one more signal or slight boost to cross 0.92 if very close
+             if len(str(name_ev.value_a or '')) > 10:
+                 if score < 0.90:
+                     score = 0.90
         
         # USER RULE: Exact Name Match + Any Other Field Match => Auto-Link
         # Fixes issue where mismatches in other fields drag score down despite strong identity

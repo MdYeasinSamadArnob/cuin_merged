@@ -12,14 +12,14 @@ import {
 
 // --- Agents Config ---
 const AGENTS = {
-    ingest: { name: 'Data Ingestor', role: 'System', icon: Database, color: 'text-blue-600 dark:text-blue-400', message: 'Reading raw data stream...' },
-    normalize: { name: 'Standardizer Droid', role: 'Cleaner', icon: FileText, color: 'text-cyan-600 dark:text-cyan-400', message: 'Formatting phone numbers & addresses...' },
-    block: { name: 'Blocker Bee', role: 'Indexer', icon: Cpu, color: 'text-indigo-600 dark:text-indigo-400', message: 'Creating candidate clusters...' },
-    candidates: { name: 'Pair Finder', role: 'Scout', icon: Search, color: 'text-yellow-600 dark:text-yellow-400', message: 'Identifying potential duplicates...' },
-    score: { name: 'Splink Oracle', role: 'Analyst', icon: Activity, color: 'text-pink-600 dark:text-pink-400', message: 'Calculating similarity vectors...' },
-    decide: { name: 'Judge AI', role: 'Decision', icon: Shield, color: 'text-emerald-600 dark:text-emerald-400', message: 'Applying business rules...' },
-    cluster: { name: 'Graph Weaver', role: 'Architect', icon: Network, color: 'text-purple-600 dark:text-purple-400', message: 'Resolving identity clusters...' },
-    complete: { name: 'System', role: 'Admin', icon: CheckCircle, color: 'text-green-600 dark:text-green-500', message: 'Pipeline complete.' }
+    ingest: { name: 'Data Ingestion', role: 'System', icon: Database, color: 'text-blue-600 dark:text-blue-400', message: 'Loading customer records...' },
+    normalize: { name: 'Data Standardization', role: 'Processing', icon: FileText, color: 'text-cyan-600 dark:text-cyan-400', message: 'Standardizing data formats...' },
+    block: { name: 'Record Blocking', role: 'Indexing', icon: Cpu, color: 'text-indigo-600 dark:text-indigo-400', message: 'Grouping similar records...' },
+    candidates: { name: 'Match Candidate Generation', role: 'Analysis', icon: Search, color: 'text-yellow-600 dark:text-yellow-400', message: 'Identifying potential matches...' },
+    score: { name: 'Similarity Scoring', role: 'Evaluation', icon: Activity, color: 'text-pink-600 dark:text-pink-400', message: 'Calculating match confidence...' },
+    decide: { name: 'Decision Engine', role: 'Classification', icon: Shield, color: 'text-emerald-600 dark:text-emerald-400', message: 'Applying matching rules...' },
+    cluster: { name: 'Entity Resolution', role: 'Consolidation', icon: Network, color: 'text-purple-600 dark:text-purple-400', message: 'Creating unified customer records...' },
+    complete: { name: 'System', role: 'Complete', icon: CheckCircle, color: 'text-green-600 dark:text-green-500', message: 'Processing complete.' }
 };
 
 interface LogEntry {
@@ -101,7 +101,7 @@ export default function RunDetailsPage() {
         else if (data.type === 'RUN_COMPLETE') {
             setActiveStage('complete');
             setVisualStage('complete');
-            addLog("System", "Run analysis completed successfully.", 'success', 'complete');
+            addLog("System", "Processing completed successfully.", 'success', 'complete');
             fetchRunDetails();
         }
         else if (data.type === 'RUN_FAILED') {
@@ -109,9 +109,11 @@ export default function RunDetailsPage() {
         }
     }, [lastEvent, runId, isReplaying]);
 
-    // Cleanup logs scrolling
+    // Cleanup logs scrolling - use auto scroll instead of smooth to prevent jumping
     useEffect(() => {
-        logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        if (logsEndRef.current) {
+            logsEndRef.current.scrollIntoView({ behavior: 'auto', block: 'nearest' });
+        }
     }, [agentLogs]);
 
     const fetchRunDetails = async () => {
@@ -131,7 +133,7 @@ export default function RunDetailsPage() {
 
             // Populate initial logs if empty
             if (agentLogs.length === 0 && data.status !== 'PENDING') {
-                addLog("System", "Initializing agent swarm...", "info", 'ingest');
+                addLog("System", "Initializing pipeline...", "info", 'ingest');
             }
         } catch (err) {
             console.error("Failed to load run", err);
@@ -167,7 +169,7 @@ export default function RunDetailsPage() {
     const currentAgent = AGENTS[visualStage as keyof typeof AGENTS] || AGENTS.ingest;
     const AgentIcon = currentAgent.icon;
 
-    if (!run) return <div className="flex justify-center items-center h-screen text-blue-500 animate-pulse">Initializing Agent Swarm...</div>;
+    if (!run) return <div className="flex justify-center items-center h-screen text-blue-500 animate-pulse">Loading pipeline status...</div>;
 
     // Filter logs based on selection
     const displayedLogs = selectedStep
@@ -188,7 +190,7 @@ export default function RunDetailsPage() {
                     <div className="h-8 w-[1px] bg-gray-200 dark:bg-gray-800 mx-2" />
                     <div>
                         <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-emerald-600 dark:from-blue-400 dark:to-emerald-400">
-                            Agentic Analysis Protocol
+                            Identity Resolution Pipeline
                         </h1>
                         <div className="flex items-center gap-2 text-xs text-gray-500 font-mono mt-1">
                             <span>RUN-ID: {runId.split('-')[0].toUpperCase()}</span>
@@ -203,9 +205,9 @@ export default function RunDetailsPage() {
                 </div>
             </div>
 
-            {/* Mission Progress Pipeline (Interactive) */}
+            {/* Processing Pipeline Status */}
             <div className="mb-8 overflow-x-auto pb-4">
-                <div className="flex items-center justify-between min-w-[800px] relative px-10">
+                <div className="flex items-center justify-between min-w-[700px] max-w-full relative px-4 md:px-10">
                     {/* Connecting Line */}
                     <div className="absolute top-1/2 left-0 w-full h-1 bg-gray-200 dark:bg-gray-800 -z-0 -translate-y-1/2" />
                     <div
@@ -261,7 +263,7 @@ export default function RunDetailsPage() {
 
                         <div className="relative z-10">
                             <h2 className="text-sm font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-2">
-                                {isReplaying ? 'Live Replay: Active Agent' : 'Current Active Agent'}
+                                {isReplaying ? 'Replay: Current Stage' : 'Current Processing Stage'}
                             </h2>
                             <div className="flex items-center gap-4 mb-6">
                                 <div className={`p-4 rounded-xl bg-gray-100 dark:bg-gray-800 border-2 border-dashed ${currentAgent.color.replace('text-', 'border-')}`}>
@@ -286,8 +288,8 @@ export default function RunDetailsPage() {
                         </div>
                     </div>
 
-                    {/* Interactive Log Console */}
-                    <div className="bg-white dark:bg-black border border-gray-200 dark:border-gray-800 rounded-xl p-4 font-mono text-sm h-[350px] flex flex-col shadow-inner relative">
+                    {/* Processing Log */}
+                    <div className="bg-white dark:bg-black border border-gray-200 dark:border-gray-800 rounded-xl p-4 font-mono text-sm h-[350px] max-h-[350px] flex flex-col shadow-inner relative overflow-hidden">
                         <div className="flex items-center justify-between text-gray-500 border-b border-gray-200 dark:border-gray-800 pb-2 mb-2">
                             <div className="flex items-center gap-2">
                                 <Terminal size={14} />
@@ -305,7 +307,7 @@ export default function RunDetailsPage() {
                             ) : (
                                 displayedLogs.map((log, i) => (
                                     <div key={i} className={`flex gap-3 group animate-in fade-in slide-in-from-left-2 duration-300 ${log.type === 'warn' ? 'text-red-700 dark:text-red-400' :
-                                            log.type === 'success' ? 'text-green-700 dark:text-green-400' : 'text-blue-800 dark:text-blue-200'
+                                        log.type === 'success' ? 'text-green-700 dark:text-green-400' : 'text-blue-800 dark:text-blue-200'
                                         }`}>
                                         <span className="text-gray-400 dark:text-gray-600 shrink-0 text-[10px] mt-1">[{log.time}]</span>
                                         <span className={`font-bold shrink-0 w-24 border-r border-gray-200 dark:border-gray-800 mr-2 opacity-70 ${log.stage === selectedStep ? 'text-yellow-700 dark:text-yellow-300' : ''
