@@ -26,6 +26,7 @@ from api.routes_audit import router as audit_router
 from api.routes_metrics import router as metrics_router
 from api.routes_graph import router as graph_router
 from api.routes_admin import router as admin_router
+from api.routes_datasource import router as datasource_router
 from api.ws_events import ConnectionManager
 from api import db_init
 
@@ -206,6 +207,7 @@ app.include_router(review_router, prefix="/review", tags=["Review"])
 app.include_router(audit_router, prefix="/audit", tags=["Audit"])
 app.include_router(metrics_router, prefix="/metrics", tags=["Metrics"])
 app.include_router(graph_router, prefix="/graph", tags=["Graph"])
+app.include_router(datasource_router, prefix="/datasource", tags=["DataSource"])
 
 from api.routes_config import router as config_router
 app.include_router(config_router, prefix="/config", tags=["Config"])

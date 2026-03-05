@@ -14,6 +14,7 @@ import {
     ChevronLeft,
     ChevronRight,
     Upload,
+    Database,
     Sun,
     Moon,
 } from "lucide-react";
@@ -24,6 +25,7 @@ import { useAppStore } from "@/stores/useAppStore";
 const navigation = [
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
     { name: "Upload", href: "/upload", icon: Upload },
+    { name: "Data Source", href: "/datasource", icon: Database },
     { name: "Pipeline", href: "/pipeline", icon: GitBranch },
     { name: "Explorer", href: "/explorer", icon: Search },
     { name: "Review", href: "/review", icon: ClipboardCheck },

@@ -30,3 +30,8 @@ htmlcov/
 
 # Mypy
 .mypy_cache/
+
+# Local runtime data
+/data/
+backend/data/
+**/data/runs/
