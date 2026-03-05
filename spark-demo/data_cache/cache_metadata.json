@@ -1,0 +1,10 @@
+{
+  "timestamp": "2026-02-09T12:06:37.647470",
+  "record_count": 1567782,
+  "load_duration": 0,
+  "cache_format": "parquet",
+  "oracle_dsn": "10.11.200.21:1527/STLBAS",
+  "record_limit": 0,
+  "query_hash": 4398934730100289740,
+  "expiry_hours": 24
+}

@@ -97,3 +97,5 @@ Thumbs.db
 
 # Local runtime data
 /data/
+backend/data/
+**/data/runs/

@@ -60,6 +60,7 @@ class StageProgress:
     reduction_pct: float = 0.0
     duration_ms: int = 0
     message: str = ""
+    data: Optional[Dict[str, Any]] = None
 
 
 @dataclass

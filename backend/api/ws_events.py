@@ -63,7 +63,7 @@ class WSEvent:
         """Convert event to JSON string."""
         return json.dumps({
             "type": self.type.value,
-            "payload": self.payload,
+            "data": self.payload,
             "timestamp": self.timestamp.isoformat(),
             "run_id": self.run_id,
         })
@@ -189,7 +189,9 @@ class ConnectionManager:
         message: str,
         records_in: int = 0,
         records_out: int = 0,
-        duration_ms: int = 0
+        reduction_pct: float = 0.0,
+        duration_ms: int = 0,
+        data: Optional[Dict[str, Any]] = None
     ) -> int:
         """Broadcast pipeline stage progress."""
         return await self.broadcast(
@@ -200,7 +202,9 @@ class ConnectionManager:
                 "message": message,
                 "records_in": records_in,
                 "records_out": records_out,
+                "reduction_pct": reduction_pct,
                 "duration_ms": duration_ms,
+                "data": data,
             },
             run_id=run_id
         )

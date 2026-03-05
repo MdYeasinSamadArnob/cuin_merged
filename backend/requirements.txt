@@ -34,6 +34,11 @@ openpyxl==3.1.2
 # Entity Resolution - Splink
 # ============================================
 splink==3.9.14
+sqlglot==20.10.0
+setuptools
+pyspark==3.5.0
+xgboost==2.0.3
+scikit-learn==1.4.1.post1
 
 # ============================================
 # Blocking Algorithms

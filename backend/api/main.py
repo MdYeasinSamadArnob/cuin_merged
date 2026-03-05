@@ -28,6 +28,7 @@ from api.routes_graph import router as graph_router
 from api.routes_admin import router as admin_router
 from api.ws_events import ConnectionManager
 from api import db_init
+from services.run_service import get_run_service
 
 # Configure logging
 # Setup logging
@@ -52,6 +53,25 @@ async def lifespan(app: FastAPI):
     # Initialize Databases
     db_init.init_db()
     db_init.init_graph()
+    
+    # Hook up RunService to WebSockets
+    run_service = get_run_service()
+    
+    async def ws_progress_callback(run_id: str, progress):
+        await ws_manager.broadcast_stage_progress(
+            run_id=run_id,
+            stage=progress.stage.value,
+            status=progress.status,
+            message=progress.message,
+            records_in=progress.records_in,
+            records_out=progress.records_out,
+            reduction_pct=progress.reduction_pct,
+            duration_ms=progress.duration_ms,
+            data=progress.data
+        )
+    
+    run_service.set_progress_callback(ws_progress_callback)
+    logger.info("✅ RunService hooked up to WebSockets with enhanced payload support")
     
     yield
     
@@ -212,6 +232,9 @@ app.include_router(config_router, prefix="/config", tags=["Config"])
 
 from api.routes_admin import router as admin_router
 app.include_router(admin_router, prefix="/admin", tags=["Admin"])
+
+from api.routes_datasource import router as datasource_router
+app.include_router(datasource_router, prefix="/datasource", tags=["Datasource"])
 
 
 # ============================================

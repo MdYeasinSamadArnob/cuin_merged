@@ -1,24 +1,46 @@
 {
-  "7a066acb-6804-4c31-98f1-585a45739bd3": {
-    "run_id": "7a066acb-6804-4c31-98f1-585a45739bd3",
-    "mode": "AUTO",
+  "15bd7285-3c7f-490b-ba1e-e89b6127be3b": {
+    "run_id": "15bd7285-3c7f-490b-ba1e-e89b6127be3b",
+    "mode": "FULL",
+    "policy_version": 1,
+    "status": "FAILED",
+    "description": "Datasource Spark Demo",
+    "counters": {
+      "records_in": 0,
+      "records_normalized": 0,
+      "blocks_created": 0,
+      "candidates_generated": 0,
+      "pairs_scored": 0,
+      "auto_links": 0,
+      "review_items": 0,
+      "rejected": 0
+    },
+    "started_at": "2026-03-05T09:10:25.413456",
+    "ended_at": "2026-03-05T09:10:28.923550",
+    "duration_seconds": 3.510094,
+    "error_message": "name 'record_count' is not defined",
+    "current_stage": null
+  },
+  "169b1c4c-a7ba-4dd9-b0e9-33f8227f811d": {
+    "run_id": "169b1c4c-a7ba-4dd9-b0e9-33f8227f811d",
+    "mode": "FULL",
     "policy_version": 1,
     "status": "COMPLETED",
-    "description": "File Upload: matched_records_original_20260129_164540 1 1.xlsx",
+    "description": "Datasource Spark Demo",
     "counters": {
-      "records_in": 187,
-      "records_normalized": 187,
-      "blocks_created": 541,
-      "candidates_generated": 548,
-      "pairs_scored": 548,
-      "auto_links": 231,
-      "review_items": 35,
-      "rejected": 282
+      "records_in": 1567782,
+      "records_normalized": 0,
+      "blocks_created": 0,
+      "candidates_generated": 903680,
+      "pairs_scored": 0,
+      "auto_links": 451840,
+      "review_items": 0,
+      "rejected": 0
     },
-    "started_at": "2026-02-24T09:36:18.237858",
-    "ended_at": "2026-02-24T09:36:18.428263",
-    "duration_seconds": 0.190405,
+    "started_at": "2026-03-05T09:19:48.527397",
+    "ended_at": "2026-03-05T09:25:38.180124",
+    "duration_seconds": 349.652727,
     "error_message": null,
-    "current_stage": "complete"
+    "current_stage": null
   }
 }

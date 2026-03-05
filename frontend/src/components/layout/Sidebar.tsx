@@ -16,6 +16,7 @@ import {
     Upload,
     Sun,
     Moon,
+    Database,
 } from "lucide-react";
 import { useState } from "react";
 import { clsx } from "clsx";
@@ -24,6 +25,7 @@ import { useAppStore } from "@/stores/useAppStore";
 const navigation = [
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
     { name: "Upload", href: "/upload", icon: Upload },
+    { name: "Datasource", href: "/datasource", icon: Database },
     { name: "Pipeline", href: "/pipeline", icon: GitBranch },
     { name: "Explorer", href: "/explorer", icon: Search },
     { name: "Review", href: "/review", icon: ClipboardCheck },

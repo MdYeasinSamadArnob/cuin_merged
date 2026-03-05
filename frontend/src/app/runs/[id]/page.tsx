@@ -7,8 +7,9 @@ import { useWebSocket } from "@/lib/ws";
 import Link from "next/link";
 import {
     ArrowLeft, Terminal, Activity, Search, Network,
-    Cpu, Database, Shield, Zap, FileText, CheckCircle
+    Cpu, Database, Shield, Zap, FileText, CheckCircle, Share2, ArrowRight
 } from "lucide-react";
+import { ClusterGraph } from '@/components/explorer/ClusterGraph';
 
 // --- Agents Config ---
 const AGENTS = {
@@ -42,6 +43,8 @@ export default function RunDetailsPage() {
     const [isReplaying, setIsReplaying] = useState(false);
     const [agentLogs, setAgentLogs] = useState<LogEntry[]>([]);
     const [selectedStep, setSelectedStep] = useState<string | null>(null); // For filtering logs
+    const [liveMatches, setLiveMatches] = useState<any[]>([]);
+    const [graphData, setGraphData] = useState<any>(null);
     const logsEndRef = useRef<HTMLDivElement>(null);
 
     // Ordered stages for the pipeline view
@@ -82,11 +85,14 @@ export default function RunDetailsPage() {
     useEffect(() => {
         if (!lastEvent || !runId || isReplaying) return; // Ignore live updates during replay
 
-        const data = lastEvent;
-        if (data.run_id && data.run_id !== runId) return;
+        const event = lastEvent;
+        const payload = event.data as any;
+        const eventRunId = event.run_id || payload?.run_id;
 
-        if (data.type === 'STAGE_PROGRESS') {
-            const payload = data.data as any;
+        if (eventRunId && eventRunId !== runId) return;
+
+        if (event.type === 'STAGE_PROGRESS') {
+            const payload = event.data as any;
             setActiveStage(payload.stage);
             setVisualStage(payload.stage); // Sync visual
             setSelectedStep(payload.stage); // Auto-focus active
@@ -97,15 +103,51 @@ export default function RunDetailsPage() {
             } else if (payload.status === 'complete') {
                 addLog(agent.name, `${agent.role} task finished.`, 'success', payload.stage);
             }
+
+            // Update run counters for real-time metrics
+            setRun((prev: any) => {
+                if (!prev) return prev;
+                const newCounters = { ...prev.counters };
+
+                if (payload.stage === 'ingest') newCounters.records_in = payload.records_in;
+                if (payload.stage === 'candidates') newCounters.candidates_generated = payload.records_out; // Or appropriate field
+                if (payload.stage === 'score') newCounters.auto_links = payload.records_out;
+
+                return { ...prev, counters: newCounters, current_stage: payload.stage };
+            });
+
+            // Handle live data payloads
+            if (payload.data?.sample_matches) {
+                setLiveMatches(payload.data.sample_matches);
+
+                // Construct live graph data from matches
+                const nodes: any[] = [];
+                const edges: any[] = [];
+                const nodeIds = new Set();
+
+                payload.data.sample_matches.forEach((m: any) => {
+                    if (!nodeIds.has(m.id1)) {
+                        nodes.push({ id: m.id1, label: `ID: ${m.id1}`, type: 'record', properties: {} });
+                        nodeIds.add(m.id1);
+                    }
+                    if (!nodeIds.has(m.id2)) {
+                        nodes.push({ id: m.id2, label: `ID: ${m.id2}`, type: 'record', properties: {} });
+                        nodeIds.add(m.id2);
+                    }
+                    edges.push({ source: m.id1, target: m.id2, type: 'MATCHES' });
+                });
+                setGraphData({ nodes, edges });
+            }
         }
-        else if (data.type === 'RUN_COMPLETE') {
+        else if (event.type === 'RUN_COMPLETE') {
             setActiveStage('complete');
             setVisualStage('complete');
             addLog("System", "Processing completed successfully.", 'success', 'complete');
             fetchRunDetails();
         }
-        else if (data.type === 'RUN_FAILED') {
-            addLog("System", `Run failed: ${data.data?.error || 'Unknown error'}`, 'warn', activeStage);
+        else if (event.type === 'RUN_FAILED') {
+            const payload = event.data as any;
+            addLog("System", `Run failed: ${payload?.error || 'Unknown error'}`, 'warn', activeStage);
         }
     }, [lastEvent, runId, isReplaying]);
 
@@ -360,6 +402,71 @@ export default function RunDetailsPage() {
                         </button>
                     </div>
                 </div>
+
+                {/* Live Insight Section (New) */}
+                {(liveMatches.length > 0 || visualStage === 'cluster' || visualStage === 'score') && (
+                    <div className="lg:col-span-3 grid grid-cols-1 lg:grid-cols-3 gap-8 animate-in fade-in slide-in-from-bottom-8 duration-700">
+                        {/* Live Match Feed */}
+                        <div className="lg:col-span-1 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden flex flex-col h-[400px] shadow-lg">
+                            <div className="p-4 border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 flex items-center justify-between">
+                                <h3 className="text-gray-900 dark:text-white font-bold flex items-center gap-2 text-sm">
+                                    <Zap className="text-yellow-500 w-4 h-4 animate-pulse" />
+                                    Live Match Signals
+                                </h3>
+                                <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Realtime</span>
+                            </div>
+                            <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+                                {liveMatches.length > 0 ? (
+                                    liveMatches.map((match, i) => (
+                                        <div key={i} className="p-3 bg-gray-50 dark:bg-gray-800/30 border border-gray-100 dark:border-gray-700/50 rounded-xl hover:bg-white dark:hover:bg-gray-800/50 transition-colors group shadow-sm">
+                                            <div className="flex items-center justify-between mb-2">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+                                                    <span className="text-[10px] text-blue-600 dark:text-blue-400 font-mono font-bold">MATCH</span>
+                                                </div>
+                                                <span className="text-[10px] font-mono text-gray-500">Prob: {(match.probability * 100).toFixed(1)}%</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-gray-900 dark:text-white">
+                                                <div className="flex flex-col">
+                                                    <span className="text-xs font-mono">{match.id1}</span>
+                                                </div>
+                                                <ArrowRight className="w-3 h-3 text-gray-400 group-hover:text-blue-500 transition-colors" />
+                                                <div className="flex flex-col text-right">
+                                                    <span className="text-xs font-mono">{match.id2}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))
+                                ) : (
+                                    <div className="h-full flex items-center justify-center text-gray-400 text-xs italic">
+                                        Detecting potential duplicates...
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Live Identity Graph */}
+                        <div className="lg:col-span-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden flex flex-col h-[400px] shadow-lg">
+                            <div className="p-4 border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 flex items-center justify-between">
+                                <h3 className="text-gray-900 dark:text-white font-bold flex items-center gap-2 text-sm">
+                                    <Share2 className="text-purple-500 w-4 h-4" />
+                                    Identity Network Visualization
+                                </h3>
+                                <div className="flex items-center gap-2 text-[10px] text-gray-500 uppercase font-bold">
+                                    <Activity className="text-blue-500 w-3 h-3 animate-ping" />
+                                    Live
+                                </div>
+                            </div>
+                            <div className="flex-1 relative">
+                                <ClusterGraph
+                                    data={graphData}
+                                    loading={!graphData && (run?.status === 'RUNNING' || isReplaying)}
+                                    loadingMessage="Constructing live identity graph..."
+                                />
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
 
             <style jsx global>{`

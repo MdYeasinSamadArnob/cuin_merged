@@ -1,0 +1,162 @@
+[
+    {
+        "CUSNMF": "MD MOHI UDDIN",
+        "CUSNML": "",
+        "TELENO": "123-456-7890",
+        "MAILID": "mohi@example.com",
+        "CUSDOB": "1971-12-30",
+        "CITYNM": "Dhaka"
+    },
+    {
+        "CUSNMF": "MOHIUDDIN",
+        "CUSNML": "MD",
+        "TELENO": "123-456-7890",
+        "MAILID": "mohi@example.com",
+        "CUSDOB": "1971-12-30",
+        "CITYNM": "Dhaka"
+    },
+    {
+        "CUSNMF": "GOLAM MOHD",
+        "CUSNML": "ZUBAYED",
+        "TELENO": "987-654-3210",
+        "MAILID": "zubayed@example.org",
+        "CUSDOB": "1987-09-06",
+        "CITYNM": "Chittagong"
+    },
+    {
+        "CUSNMF": "GOLAM MOHAMMAD",
+        "CUSNML": "ZUBAYED",
+        "TELENO": "987-654-3210",
+        "MAILID": "zubayed@gmail.com",
+        "CUSDOB": "1987-09-06",
+        "CITYNM": "Chittagong"
+    },
+    {
+        "CUSNMF": "FATEMA BEGUM",
+        "CUSNML": "",
+        "TELENO": "01711-223344",
+        "MAILID": "fatema.begum@yahoo.com",
+        "CUSDOB": "1992-05-14",
+        "CITYNM": "Dhaka"
+    },
+    {
+        "CUSNMF": "FATEMA",
+        "CUSNML": "BEGUM",
+        "TELENO": "01711-223344",
+        "MAILID": "fatema.begum@yahoo.com",
+        "CUSDOB": "1992-05-15",
+        "CITYNM": "Dhaka"
+    },
+    {
+        "CUSNMF": "MD ABDUL KARIM",
+        "CUSNML": "",
+        "TELENO": "01912-345678",
+        "MAILID": "karim.abdul@gmail.com",
+        "CUSDOB": "1965-03-22",
+        "CITYNM": "Sylhet"
+    },
+    {
+        "CUSNMF": "ABDUL KARIM",
+        "CUSNML": "MD",
+        "TELENO": "01912-345678",
+        "MAILID": "karim.abdul@gmail.com",
+        "CUSDOB": "1965-03-22",
+        "CITYNM": "Sylhet"
+    },
+    {
+        "CUSNMF": "SHARMIN AKTER",
+        "CUSNML": "",
+        "TELENO": "01819-876543",
+        "MAILID": "sharmin.akter@outlook.com",
+        "CUSDOB": "1998-11-08",
+        "CITYNM": "Dhaka"
+    },
+    {
+        "CUSNMF": "SHARMIN",
+        "CUSNML": "AKTER",
+        "TELENO": "01819-876543",
+        "MAILID": "sharmin123@outlook.com",
+        "CUSDOB": "1998-11-08",
+        "CITYNM": "Dhaka"
+    },
+    {
+        "CUSNMF": "MD RAHIM UDDIN",
+        "CUSNML": "",
+        "TELENO": "123-456-7890",
+        "MAILID": "rahim.uddin@gmail.com",
+        "CUSDOB": "1975-07-19",
+        "CITYNM": "Dhaka"
+    },
+    {
+        "CUSNMF": "RAHIM UDDIN",
+        "CUSNML": "MD",
+        "TELENO": "123-456-7890",
+        "MAILID": "rahim.uddin@gmail.com",
+        "CUSDOB": "1975-07-19",
+        "CITYNM": "Dhaka"
+    },
+    {
+        "CUSNMF": "NASRIN SULTANA",
+        "CUSNML": "",
+        "TELENO": "01678-901234",
+        "MAILID": "nasrin.sultana@hotmail.com",
+        "CUSDOB": "1985-04-03",
+        "CITYNM": "Chittagong"
+    },
+    {
+        "CUSNMF": "NASRIN",
+        "CUSNML": "SULTANA",
+        "TELENO": "01678-901234",
+        "MAILID": "nasrin.sultana@hotmail.com",
+        "CUSDOB": "1985-04-03",
+        "CITYNM": "Chittagong"
+    },
+    {
+        "CUSNMF": "MD SHAH ALAM",
+        "CUSNML": "",
+        "TELENO": "01555-667788",
+        "MAILID": "shah.alam.bd@gmail.com",
+        "CUSDOB": "1978-10-25",
+        "CITYNM": "Dhaka"
+    },
+    {
+        "CUSNMF": "SHAH ALAM",
+        "CUSNML": "MD",
+        "TELENO": "01555-667788",
+        "MAILID": "mdshah.alam@gmail.com",
+        "CUSDOB": "1978-10-25",
+        "CITYNM": "Dhaka"
+    },
+    {
+        "CUSNMF": "TAHMINA AKHTER",
+        "CUSNML": "",
+        "TELENO": "01722-334455",
+        "MAILID": "tahmina.akhter@yahoo.com",
+        "CUSDOB": "1990-02-17",
+        "CITYNM": "Rajshahi"
+    },
+    {
+        "CUSNMF": "TAHMINA",
+        "CUSNML": "AKHTER",
+        "TELENO": "01722-334455",
+        "MAILID": "tahmina.akhter@yahoo.com",
+        "CUSDOB": "1990-02-17",
+        "CITYNM": "Rajshahi"
+    },
+    {
+        "CUSNMF": "MD KAMAL HOSSAIN",
+        "CUSNML": "",
+        "TELENO": "01988-112233",
+        "MAILID": "kamal.hossain@proton.me",
+        "CUSDOB": "1982-08-12",
+        "CITYNM": "Dhaka"
+    },
+    {
+        "CUSNMF": "KAMAL HOSSAIN",
+        "CUSNML": "MD",
+        "TELENO": "01988-112233",
+        "MAILID": "kamalhossain@proton.me",
+        "CUSDOB": "1982-08-12",
+        "CITYNM": "Dhaka"
+    }
+]

@@ -217,9 +217,9 @@ class RunService:
         
         return runs[start:end], len(runs)
     
-    def _create_progress_handler(self, run_id: str) -> Callable:
+    async def _create_progress_handler(self, run_id: str) -> Callable:
         """Create a progress handler that broadcasts updates."""
-        def handler(progress: StageProgress):
+        async def handler(progress: StageProgress):
             # Update run's current stage
             run = self._runs.get(run_id)
             if run:
@@ -228,7 +228,11 @@ class RunService:
             # Broadcast via callback
             if self._progress_callback:
                 try:
-                    self._progress_callback(run_id, progress)
+                    # Check if callback is async
+                    if asyncio.iscoroutinefunction(self._progress_callback):
+                        await self._progress_callback(run_id, progress)
+                    else:
+                        self._progress_callback(run_id, progress)
                 except Exception as e:
                     logger.error(f"Progress callback error: {e}")
         
@@ -259,11 +263,12 @@ class RunService:
         
         # Create orchestrator with progress callback and current configs
         from api.routes_config import get_current_blocking_config, get_current_scoring_config
+        from pipeline.spark_orchestrator import SparkPipelineOrchestrator
         
-        orchestrator = PipelineOrchestrator(
+        orchestrator = SparkPipelineOrchestrator(
             blocking_config=get_current_blocking_config(),
             scoring_config=get_current_scoring_config(),
-            progress_callback=self._create_progress_handler(run_id),
+            progress_callback=await self._create_progress_handler(run_id),
             run_id=run_id
         )
         self._orchestrators[run_id] = orchestrator

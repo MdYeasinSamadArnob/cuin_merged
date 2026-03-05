@@ -4,7 +4,9 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '@/lib/api';
 import { useWebSocket } from '@/lib/ws';
 import Link from "next/link";
-import { FileSpreadsheet, ArrowRight } from "lucide-react";
+import { FileSpreadsheet, ArrowRight, Zap, Share2, Activity } from "lucide-react";
+import { ClusterGraph } from '@/components/explorer/ClusterGraph';
+
 // Hook for counting animation
 const useCounter = (end: number, duration: number = 1000) => {
     const [count, setCount] = useState(0);
@@ -85,6 +87,9 @@ export default function PipelinePage() {
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const { lastEvent } = useWebSocket();
+    const [liveMatches, setLiveMatches] = useState<any[]>([]);
+    const [graphData, setGraphData] = useState<any>(null);
+    const [showLiveInsight, setShowLiveInsight] = useState(false);
 
     // Stats for counting animation
     const recordsIn = useCounter(activeRun?.counters?.records_in || 0);
@@ -95,35 +100,86 @@ export default function PipelinePage() {
     useEffect(() => {
         if (!lastEvent) return;
 
-        try {
-            const event = lastEvent;
-            if (event.type === 'STAGE_PROGRESS' || event.type === 'STAGE_COMPLETE') {
-                const payload = event.data as any;
-                setStages(prevStages =>
-                    prevStages.map(stage =>
-                        stage.id === payload.stage
-                            ? {
-                                ...stage,
-                                status: payload.status as StageInfo['status'],
-                                recordsIn: payload.records_in || stage.recordsIn,
-                                recordsOut: payload.records_out || stage.recordsOut,
-                                reductionPct: payload.reduction_pct || stage.reductionPct,
-                                durationMs: payload.duration_ms || stage.durationMs,
-                                message: payload.message || stage.message,
-                            }
-                            : stage
-                    )
-                );
+        const event = lastEvent;
+        const payload = event.data as any;
+        const eventRunId = event.run_id || payload?.run_id;
+
+        if (eventRunId && activeRun && eventRunId !== activeRun.run_id) return;
+
+        if (event.type === 'STAGE_PROGRESS') {
+
+            // Sync stages status
+            setStages(prevStages =>
+                prevStages.map(stage =>
+                    stage.id === payload.stage
+                        ? {
+                            ...stage,
+                            status: payload.status as StageInfo['status'],
+                            recordsIn: payload.records_in || stage.recordsIn,
+                            recordsOut: payload.records_out || stage.recordsOut,
+                            reductionPct: payload.reduction_pct || stage.reductionPct,
+                            durationMs: payload.duration_ms || stage.durationMs,
+                            message: payload.message || stage.message,
+                        }
+                        : stage
+                )
+            );
+
+            // Sync global run status and metrics
+            setActiveRun((prev: any) => {
+                if (!prev || prev.run_id !== payload.run_id) return prev;
+                const newCounters = { ...prev.counters };
+
+                if (payload.stage === 'ingest') newCounters.records_in = payload.records_in;
+                if (payload.stage === 'candidates') newCounters.candidates_generated = payload.records_out;
+                if (payload.stage === 'score') newCounters.auto_links = payload.records_out;
+                if (payload.stage === 'decide') newCounters.auto_links = payload.records_out; // Sync Decide too
+
+                return { ...prev, counters: newCounters, current_stage: payload.stage };
+            });
+
+            // Handle live data payloads
+            if (payload.data?.sample_matches) {
+                setLiveMatches(payload.data.sample_matches);
+                setShowLiveInsight(true);
+
+                // Construct live graph data from matches
+                const nodes: any[] = [];
+                const edges: any[] = [];
+                const nodeIds = new Set();
+
+                payload.data.sample_matches.forEach((m: any) => {
+                    if (!nodeIds.has(m.id1)) {
+                        nodes.push({ id: m.id1, label: `ID: ${m.id1}`, type: 'record', properties: {} });
+                        nodeIds.add(m.id1);
+                    }
+                    if (!nodeIds.has(m.id2)) {
+                        nodes.push({ id: m.id2, label: `ID: ${m.id2}`, type: 'record', properties: {} });
+                        nodeIds.add(m.id2);
+                    }
+                    edges.push({ source: m.id1, target: m.id2, type: 'MATCHES' });
+                });
+                setGraphData({ nodes, edges });
             }
 
-            if (event.type === 'RUN_COMPLETE' || event.type === 'RUN_FAILED') {
-                // Refresh run info
-                if (activeRun) {
-                    fetchRunInfo(activeRun.run_id);
-                }
+            if (payload.data?.live_graph) {
+                setShowLiveInsight(true);
             }
-        } catch {
-            console.error('Failed to parse WebSocket message');
+        }
+        else if (event.type === 'RUN_COMPLETE') {
+            const payload = event.data as any;
+            if (activeRun && activeRun.run_id === payload.run_id) {
+                fetchRunInfo(payload.run_id);
+                setIsLoading(false);
+            }
+        }
+        else if (event.type === 'RUN_FAILED') {
+            const payload = event.data as any;
+            if (activeRun && activeRun.run_id === payload.run_id) {
+                setError(payload.error || 'Pipeline run failed');
+                setIsLoading(false);
+                fetchRunInfo(payload.run_id);
+            }
         }
     }, [lastEvent, activeRun]);
 
@@ -132,7 +188,7 @@ export default function PipelinePage() {
             const run = await api.getRun(runId);
             setActiveRun(run);
 
-            // Update stages based on counters
+            // Update stages based on status
             if (run.status === 'COMPLETED') {
                 setStages(prevStages =>
                     prevStages.map(stage => ({
@@ -172,22 +228,13 @@ export default function PipelinePage() {
         setIsLoading(true);
         setError(null);
         setStages(DEFAULT_STAGES);
+        setLiveMatches([]);
+        setGraphData(null);
+        setShowLiveInsight(false);
 
         try {
             const run = await api.startRun('FULL', 'Manual run from UI');
             setActiveRun(run);
-
-            // Poll for completion
-            const pollInterval = setInterval(async () => {
-                const updatedRun = await api.getRun(run.run_id);
-                setActiveRun(updatedRun);
-
-                if (updatedRun.status === 'COMPLETED' || updatedRun.status === 'FAILED') {
-                    clearInterval(pollInterval);
-                    setIsLoading(false);
-                    fetchRunInfo(run.run_id);
-                }
-            }, 500);
         } catch (err) {
             setError('Failed to start pipeline run');
             setIsLoading(false);
@@ -393,6 +440,70 @@ export default function PipelinePage() {
                             <div
                                 className="h-full bg-blue-500/30 transition-all duration-1000"
                                 style={{ width: `${(Math.min(activeRun.counters.pairs_scored / (recordsIn || 1), 1)) * 100}%` }}
+                            />
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Live Insight Section */}
+            {showLiveInsight && (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 animate-in fade-in slide-in-from-bottom-8 duration-500">
+                    {/* Live Matches Feed */}
+                    <div className="lg:col-span-1 bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden flex flex-col h-[500px]">
+                        <div className="p-4 border-b border-gray-800 bg-gray-900/50 flex items-center justify-between">
+                            <h3 className="text-white font-bold flex items-center gap-2">
+                                <Zap className="text-yellow-400 w-4 h-4 animate-pulse" />
+                                Live Match Feed
+                            </h3>
+                            <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Latest 50</span>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+                            {liveMatches.length > 0 ? (
+                                liveMatches.map((match, i) => (
+                                    <div key={i} className="p-3 bg-gray-800/30 border border-gray-700/50 rounded-xl hover:bg-gray-800/50 transition-colors group">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <div className="flex items-center gap-2">
+                                                <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                                                <span className="text-[10px] text-blue-400 font-mono font-bold">MATCH</span>
+                                            </div>
+                                            <span className="text-[10px] font-mono text-gray-500">Prob: {(match.probability * 100).toFixed(1)}%</span>
+                                        </div>
+                                        <div className="flex items-center gap-2 text-white">
+                                            <div className="flex flex-col">
+                                                <span className="text-[10px] text-gray-500 uppercase font-bold">Record A</span>
+                                                <span className="text-xs font-mono">{match.id1}</span>
+                                            </div>
+                                            <ArrowRight className="w-3 h-3 text-gray-600 group-hover:text-blue-500 transition-colors" />
+                                            <div className="flex flex-col text-right">
+                                                <span className="text-[10px] text-gray-500 uppercase font-bold">Record B</span>
+                                                <span className="text-xs font-mono">{match.id2}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))
+                            ) : (
+                                <div className="h-full flex items-center justify-center text-gray-600 text-sm italic">
+                                    Waiting for match signals...
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Live Identity Graph */}
+                    <div className="lg:col-span-2 bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden flex flex-col h-[500px]">
+                        <div className="p-4 border-b border-gray-800 bg-gray-900/50 flex items-center justify-between">
+                            <h3 className="text-white font-bold flex items-center gap-2">
+                                <Share2 className="text-purple-400 w-4 h-4" />
+                                Live Identity Graph
+                            </h3>
+                            <Activity className="text-blue-500 w-4 h-4 animate-pulse" />
+                        </div>
+                        <div className="flex-1 relative">
+                            <ClusterGraph
+                                data={graphData}
+                                loading={!graphData && activeRun?.status === 'RUNNING'}
+                                loadingMessage="Building real-time graph..."
                             />
                         </div>
                     </div>
