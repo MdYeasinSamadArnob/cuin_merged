@@ -1,23 +1,23 @@
 {
-  "7a066acb-6804-4c31-98f1-585a45739bd3": {
-    "run_id": "7a066acb-6804-4c31-98f1-585a45739bd3",
+  "018ecdea-7e42-4dd2-a981-92a9c98125c9": {
+    "run_id": "018ecdea-7e42-4dd2-a981-92a9c98125c9",
     "mode": "AUTO",
     "policy_version": 1,
     "status": "COMPLETED",
-    "description": "File Upload: matched_records_original_20260129_164540 1 1.xlsx",
+    "description": "File Upload: Untitled spreadsheet.xlsx",
     "counters": {
-      "records_in": 187,
-      "records_normalized": 187,
-      "blocks_created": 541,
-      "candidates_generated": 548,
-      "pairs_scored": 548,
-      "auto_links": 231,
-      "review_items": 35,
-      "rejected": 282
+      "records_in": 210,
+      "records_normalized": 210,
+      "blocks_created": 448,
+      "candidates_generated": 997,
+      "pairs_scored": 997,
+      "auto_links": 926,
+      "review_items": 0,
+      "rejected": 71
     },
-    "started_at": "2026-02-24T09:36:18.237858",
-    "ended_at": "2026-02-24T09:36:18.428263",
-    "duration_seconds": 0.190405,
+    "started_at": "2026-03-05T09:51:51.788956",
+    "ended_at": "2026-03-05T09:51:52.071500",
+    "duration_seconds": 0.282544,
     "error_message": null,
     "current_stage": "complete"
   }
