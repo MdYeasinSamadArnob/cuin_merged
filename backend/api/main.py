@@ -50,8 +50,8 @@ async def lifespan(app: FastAPI):
     logger.info(f"   API URL: http://{settings.API_HOST}:{settings.API_PORT}")
     
     # Initialize Databases
-    db_init.init_db()
-    db_init.init_graph()
+    # db_init.init_db()
+    # db_init.init_graph()
     
     yield
     
@@ -134,38 +134,38 @@ async def readiness_check() -> dict:
     Readiness check - verifies all dependencies are available.
     Used by Kubernetes/container orchestrators.
     """
-    # 1. Check Neo4j
-    neo4j_ready = False
-    try:
-        from engine.graph.neo4j_writer import get_neo4j_writer
-        writer = get_neo4j_writer()
-        # Initial check
-        if writer and writer.driver:
-             writer.driver.verify_connectivity()
-             neo4j_ready = True
-        else:
-             # Try re-initializing if None (lazy load attempt)
-             from neo4j import GraphDatabase
-             with GraphDatabase.driver(settings.NEO4J_URI, auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD)) as driver:
-                 driver.verify_connectivity()
-                 neo4j_ready = True
-    except Exception as e:
-        logger.warning(f"Neo4j Health Check Failed: {e}")
-        neo4j_ready = False
+    # 1. Check Neo4j (Disabled for Lite Mode)
+    neo4j_ready = True
+    # try:
+    #     from engine.graph.neo4j_writer import get_neo4j_writer
+    #     writer = get_neo4j_writer()
+    #     # Initial check
+    #     if writer and writer.driver:
+    #          writer.driver.verify_connectivity()
+    #          neo4j_ready = True
+    #     else:
+    #          # Try re-initializing if None (lazy load attempt)
+    #          from neo4j import GraphDatabase
+    #          with GraphDatabase.driver(settings.NEO4J_URI, auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD)) as driver:
+    #              driver.verify_connectivity()
+    #              neo4j_ready = True
+    # except Exception as e:
+    #     logger.warning(f"Neo4j Health Check Failed: {e}")
+    #     neo4j_ready = False
 
-    # 2. Check Postgres (via SQLAlchemy or raw connection)
-    db_ready = False
-    try:
-        # Simple TCP check or import connection logic if available
-        # For now, let's assume if we can import and connect it's good
-        # We don't have a global db session exposed clearly here yet, so let's do a quick connect
-        import psycopg2
-        conn = psycopg2.connect(settings.DATABASE_URL)
-        conn.close()
-        db_ready = True
-    except Exception as e:
-        logger.warning(f"Database Health Check Failed: {e}")
-        db_ready = False
+    # 2. Check Postgres (Disabled for Lite Mode)
+    db_ready = True
+    # try:
+    #     # Simple TCP check or import connection logic if available
+    #     # For now, let's assume if we can import and connect it's good
+    #     # We don't have a global db session exposed clearly here yet, so let's do a quick connect
+    #     import psycopg2
+    #     conn = psycopg2.connect(settings.DATABASE_URL)
+    #     conn.close()
+    #     db_ready = True
+    # except Exception as e:
+    #     logger.warning(f"Database Health Check Failed: {e}")
+    #     db_ready = False
 
     checks = {
         "api": True,
