@@ -13,34 +13,18 @@ websockets==12.0
 # Database
 # ============================================
 sqlalchemy==2.0.25
-psycopg2-binary==2.9.9
-alembic==1.13.1
-asyncpg==0.29.0
-
-# ============================================
-# Neo4j Graph Database
-# ============================================
-neo4j==5.17.0
 
 # ============================================
 # Data Processing
 # ============================================
 pandas==2.2.0
 numpy==1.26.4
-polars==0.20.7
 openpyxl==3.1.2
 
 # ============================================
-# Entity Resolution - Splink
+# Entity Resolution - Splink Logic
 # ============================================
-splink==3.9.14
-
-# ============================================
-# Blocking Algorithms
-# ============================================
-datasketch==1.6.4          # MinHash LSH
-jellyfish==1.0.3           # Phonetic algorithms (Soundex, Metaphone)
-python-Levenshtein==0.25.1 # Fast string similarity
+jellyfish==1.0.3
 
 # ============================================
 # Validation & Serialization
@@ -66,28 +50,3 @@ pyyaml==6.0.1
 # ============================================
 structlog==24.1.0
 rich==13.7.0
-
-# ============================================
-# Testing
-# ============================================
-pytest==7.4.4
-pytest-asyncio==0.23.4
-pytest-cov==4.1.0
-httpx==0.26.0
-faker==22.6.0
-
-# ============================================
-# Code Quality
-# ============================================
-ruff==0.2.1
-mypy==1.8.0
-types-PyYAML==6.0.12.12
-types-python-dateutil==2.8.19.20240106
-
-# ============================================
-# Optional: LLM for Referee Agent
-# ============================================
-# Uncomment if using local LLM
-# transformers==4.37.2
-# torch==2.2.0
-# accelerate==0.27.0
