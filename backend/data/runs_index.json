@@ -1,1 +1,24 @@
-[]
+{
+  "24343685-eaba-42fc-ada7-6b026b3372dc": {
+    "run_id": "24343685-eaba-42fc-ada7-6b026b3372dc",
+    "mode": "AUTO",
+    "policy_version": 1,
+    "status": "COMPLETED",
+    "description": "File Upload: matched_records_original_20260129_164540 1 1.xlsx",
+    "counters": {
+      "records_in": 187,
+      "records_normalized": 187,
+      "blocks_created": 541,
+      "candidates_generated": 481,
+      "pairs_scored": 481,
+      "auto_links": 214,
+      "review_items": 14,
+      "rejected": 253
+    },
+    "started_at": "2026-03-08T14:43:19.613358",
+    "ended_at": "2026-03-08T14:43:20.014666",
+    "duration_seconds": 0.401308,
+    "error_message": null,
+    "current_stage": "complete"
+  }
+}

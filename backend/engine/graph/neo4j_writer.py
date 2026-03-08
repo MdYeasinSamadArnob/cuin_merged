@@ -21,15 +21,16 @@ class Neo4jWriter:
 
         # Try to connect immediately if checking health, or lazy load?
         # For now, we assume enabled if config present
-        try:
-            self.driver = GraphDatabase.driver(self.uri, auth=self.auth)
-            # Verify connectivity
-            self.driver.verify_connectivity()
-            self.enabled = True
-            logger.info(f"Connected to Neo4j at {self.uri}")
-        except Exception as e:
-            logger.warning(f"Could not connect to Neo4j: {e}. Graph projection disabled.")
-            self.enabled = False
+        self.enabled = False
+        # try:
+        #     self.driver = GraphDatabase.driver(self.uri, auth=self.auth)
+        #     # Verify connectivity
+        #     self.driver.verify_connectivity()
+        #     self.enabled = True
+        #     logger.info(f"Connected to Neo4j at {self.uri}")
+        # except Exception as e:
+        #     logger.warning(f"Could not connect to Neo4j: {e}. Graph projection disabled.")
+        #     self.enabled = False
 
     def write_graph(self, clusters: Dict[str, List[Dict]], golden_records: Dict[str, Dict]):
         """
