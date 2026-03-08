@@ -197,6 +197,7 @@ class ConnectionManager:
         return await self.broadcast(
             EventType.STAGE_PROGRESS,
             {
+                "run_id": run_id,   # included in payload so frontend guard matches
                 "stage": stage,
                 "status": status,
                 "message": message,
@@ -221,6 +222,7 @@ class ConnectionManager:
         return await self.broadcast(
             event_type,
             {
+                "run_id": run_id,
                 "success": success,
                 "counters": counters,
             },

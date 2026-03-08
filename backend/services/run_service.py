@@ -52,6 +52,7 @@ class RunCounters:
     auto_links: int = 0
     review_items: int = 0
     rejected: int = 0
+    clusters_created: int = 0
 
 
 @dataclass

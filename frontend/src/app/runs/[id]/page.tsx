@@ -7,7 +7,7 @@ import { useWebSocket } from "@/lib/ws";
 import Link from "next/link";
 import {
     ArrowLeft, Terminal, Activity, Search, Network,
-    Cpu, Database, Shield, Zap, FileText, CheckCircle, Share2, ArrowRight
+    Cpu, Database, Shield, Zap, FileText, CheckCircle, Share2, ArrowRight, Users
 } from "lucide-react";
 import { ClusterGraph } from '@/components/explorer/ClusterGraph';
 
@@ -45,6 +45,13 @@ export default function RunDetailsPage() {
     const [selectedStep, setSelectedStep] = useState<string | null>(null); // For filtering logs
     const [liveMatches, setLiveMatches] = useState<any[]>([]);
     const [graphData, setGraphData] = useState<any>(null);
+    const [liveMessage, setLiveMessage] = useState<string>('');  // latest WS message for current stage
+    const [clustersCreated, setClustersCreated] = useState(0);  // unique identity clusters after cluster stage
+    const [scoreEta, setScoreEta] = useState<string | null>(null);  // ETA for score stage
+    const [tick, setTick] = useState(0);  // 1s heartbeat for live elapsed display
+    const lastLoggedStageRef = useRef<Record<string, string>>({});  // stage → last logged message (dedup)
+    const stageStartRef = useRef<Record<string, number>>({});  // unix ms when each stage entered running
+    const stageDurRef = useRef<Record<string, number>>({});    // actual duration_ms for completed stages
     const logsEndRef = useRef<HTMLDivElement>(null);
 
     // Ordered stages for the pipeline view
@@ -54,6 +61,71 @@ export default function RunDetailsPage() {
     useEffect(() => {
         if (runId) fetchRunDetails();
     }, [runId]);
+
+    // Polling fallback — keeps UI in sync even when WS events are missed
+    // (e.g. user navigated mid-run, tab backgrounded, WS reconnect gap)
+    const lastPolledStageRef = useRef<string>('');
+    useEffect(() => {
+        if (!runId) return;
+        const interval = setInterval(async () => {
+            if (isReplaying) return;
+            try {
+                const data = await api.getRun(runId);
+                if (!data) return;
+
+                // Sync run object (counters + status)
+                setRun((prev: any) => {
+                    if (!prev) return data;
+                    return {
+                        ...prev,
+                        status:           data.status,
+                        counters:         data.counters,
+                        current_stage:    data.current_stage ?? prev.current_stage,
+                        ended_at:         data.ended_at,
+                        duration_seconds: data.duration_seconds,
+                    };
+                });
+
+                // Sync visual stage and log a transition entry when stage changes
+                if (data.current_stage && data.current_stage !== lastPolledStageRef.current) {
+                    const prevStage = lastPolledStageRef.current;
+                    lastPolledStageRef.current = data.current_stage;
+                    setActiveStage(data.current_stage);
+                    setVisualStage(data.current_stage);
+
+                    // Log completion of previous stage
+                    if (prevStage) {
+                        const prevAgent = AGENTS[prevStage as keyof typeof AGENTS];
+                        if (prevAgent && lastLoggedStageRef.current[prevStage] !== 'complete') {
+                            lastLoggedStageRef.current[prevStage] = 'complete';
+                            addLog(prevAgent.name, `${prevAgent.role} stage completed`, 'success', prevStage);
+                        }
+                    }
+                    // Log start of new stage
+                    const nextAgent = AGENTS[data.current_stage as keyof typeof AGENTS];
+                    if (nextAgent && lastLoggedStageRef.current[data.current_stage] !== 'running'
+                                  && lastLoggedStageRef.current[data.current_stage] !== 'complete') {
+                        lastLoggedStageRef.current[data.current_stage] = 'running';
+                        addLog(nextAgent.name, `${nextAgent.role} stage started`, 'info', data.current_stage);
+                    }
+                }
+
+                // Stop polling once terminal state reached
+                if (data.status === 'COMPLETED' || data.status === 'FAILED' || data.status === 'CANCELLED') {
+                    clearInterval(interval);
+                    if (data.status === 'COMPLETED') {
+                        setActiveStage('complete');
+                        setVisualStage('complete');
+                        if (lastLoggedStageRef.current['complete'] !== 'done') {
+                            lastLoggedStageRef.current['complete'] = 'done';
+                            addLog('System', 'Pipeline completed successfully.', 'success', 'complete');
+                        }
+                    }
+                }
+            } catch { /* silent — WS is primary */ }
+        }, 3000);
+        return () => clearInterval(interval);
+    }, [runId, isReplaying]);
 
     // Playback Effect
     useEffect(() => {
@@ -94,14 +166,65 @@ export default function RunDetailsPage() {
         if (event.type === 'STAGE_PROGRESS') {
             const payload = event.data as any;
             setActiveStage(payload.stage);
-            setVisualStage(payload.stage); // Sync visual
-            setSelectedStep(payload.stage); // Auto-focus active
+            setVisualStage(payload.stage);
+            setSelectedStep(payload.stage);
+            if (payload.message) setLiveMessage(payload.message);
 
             const agent = AGENTS[payload.stage as keyof typeof AGENTS] || AGENTS.complete;
+            const fmt = (n: number) => n > 0 ? n.toLocaleString() : null;
+
             if (payload.status === 'running') {
-                addLog(agent.name, payload.message || agent.message, 'info', payload.stage);
+                const d = payload.data || {};
+
+                // Mark stage start time the first time it enters running state
+                if (!stageStartRef.current[payload.stage]) {
+                    stageStartRef.current[payload.stage] = Date.now();
+                }
+                // Compute ETA for the score stage from progress_pct + elapsed_sec
+                if (payload.stage === 'score' && d.progress_pct > 0 && d.elapsed_sec > 0) {
+                    const remainSec = Math.round(d.elapsed_sec * (100 - d.progress_pct) / d.progress_pct);
+                    setScoreEta(remainSec > 60 ? `~${Math.ceil(remainSec / 60)}m` : `~${remainSec}s`);
+                }
+
+                if (payload.stage === 'score') {
+                    // Always log every score heartbeat — it's the longest stage
+                    // and management needs to see it's making progress
+                    if (d.em_iteration > 0) {
+                        const emLine = `EM iteration ${d.em_iteration}/${d.em_max} — ${d.sub_step || payload.message} [${d.progress_pct ?? 0}%]`;
+                        addLog(agent.name, emLine, 'info', payload.stage);
+                    } else {
+                        // Sub-stage change or initial
+                        const prev = lastLoggedStageRef.current[payload.stage + ':sub'];
+                        const label = d.sub_step || payload.message;
+                        if (label && label !== prev) {
+                            lastLoggedStageRef.current[payload.stage + ':sub'] = label;
+                            addLog(agent.name, label, 'info', payload.stage);
+                        }
+                    }
+                } else {
+                    // For all other stages, log first time only
+                    const prev = lastLoggedStageRef.current[payload.stage];
+                    if (prev !== 'running' && prev !== 'complete') {
+                        lastLoggedStageRef.current[payload.stage] = 'running';
+                        addLog(agent.name, payload.message || agent.message, 'info', payload.stage);
+                    }
+                }
             } else if (payload.status === 'complete') {
-                addLog(agent.name, `${agent.role} task finished.`, 'success', payload.stage);
+                lastLoggedStageRef.current[payload.stage] = 'complete';
+                // Track actual stage duration for timeline display
+                if (payload.duration_ms > 0) stageDurRef.current[payload.stage] = payload.duration_ms;
+                // Capture cluster stats for "Unique Identities" metric card
+                if (payload.stage === 'cluster') {
+                    const cs = payload.data?.cluster_stats;
+                    if (cs?.clusters_created > 0) setClustersCreated(cs.clusters_created);
+                }
+                // Build a rich completion line with record counts and timing
+                const parts: string[] = [payload.message || `${agent.role} complete`];
+                if (fmt(payload.records_in))  parts.push(`in: ${fmt(payload.records_in)}`);
+                if (fmt(payload.records_out)) parts.push(`out: ${fmt(payload.records_out)}`);
+                if (payload.reduction_pct > 0) parts.push(`reduced ${payload.reduction_pct.toFixed(1)}%`);
+                if (payload.duration_ms > 0)   parts.push(`${(payload.duration_ms / 1000).toFixed(2)}s`);
+                addLog(agent.name, parts.join('  |  '), 'success', payload.stage);
             }
 
             // Update run counters for real-time metrics
@@ -151,6 +274,12 @@ export default function RunDetailsPage() {
         }
     }, [lastEvent, runId, isReplaying]);
 
+    // 1-second tick so elapsed-time displays in stage nodes update in real time
+    useEffect(() => {
+        const t = setInterval(() => setTick(n => n + 1), 1000);
+        return () => clearInterval(t);
+    }, []);
+
     // Cleanup logs scrolling - use auto scroll instead of smooth to prevent jumping
     useEffect(() => {
         if (logsEndRef.current) {
@@ -162,28 +291,48 @@ export default function RunDetailsPage() {
         try {
             const data = await api.getRun(runId);
             setRun(data);
+            // Restore cluster count from persisted counters (survives page reload)
+            if (data.counters?.clusters_created > 0) {
+                setClustersCreated(data.counters.clusters_created);
+            }
 
-            // If run is already done when we load, trigger cinematic replay once
             if (data.status === 'COMPLETED' && !isReplaying) {
-                // Check if we haven't played it yet (could use ref or local state)
-                // For now, always replay on fresh load if completed, it's cool.
                 setIsReplaying(true);
             } else if (data.current_stage) {
                 setActiveStage(data.current_stage);
                 setVisualStage(data.current_stage);
             }
 
-            // Populate initial logs if empty
+            // On first load: generate catch-up log entries for every stage
+            // that has already started/completed so the log isn't empty mid-run.
             if (agentLogs.length === 0 && data.status !== 'PENDING') {
-                addLog("System", "Initializing pipeline...", "info", 'ingest');
+                const currentIdx = pipelineStages.indexOf(data.current_stage || 'ingest');
+                pipelineStages.forEach((stageKey, idx) => {
+                    const ag = AGENTS[stageKey as keyof typeof AGENTS];
+                    if (!ag) return;
+                    if (idx < currentIdx) {
+                        // Already completed stages
+                        lastLoggedStageRef.current[stageKey] = 'complete';
+                        addLog(ag.name, `${ag.role} stage completed`, 'success', stageKey);
+                    } else if (idx === currentIdx && data.status === 'RUNNING') {
+                        // Current running stage
+                        lastLoggedStageRef.current[stageKey] = 'running';
+                        addLog(ag.name, `${ag.role} stage in progress...`, 'info', stageKey);
+                    }
+                });
+                if (data.status === 'COMPLETED') {
+                    addLog('System', 'Pipeline completed successfully.', 'success', 'complete');
+                } else if (data.status === 'FAILED') {
+                    addLog('System', `Pipeline failed: ${data.error_message || 'Unknown error'}`, 'warn', data.current_stage || 'ingest');
+                }
             }
         } catch (err) {
-            console.error("Failed to load run", err);
+            console.error('Failed to load run', err);
         }
     };
 
     const addLog = (agent: string, msg: string, type: 'info' | 'success' | 'warn' = 'info', stage: string = 'ingest') => {
-        setAgentLogs(prev => [...prev.slice(-40), {
+        setAgentLogs(prev => [...prev.slice(-100), {
             time: new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
             agent,
             msg,
@@ -192,10 +341,28 @@ export default function RunDetailsPage() {
         }]);
     };
 
+    // Stage timing helper — returns formatted duration (completed) or elapsed/ETA (active)
+    const getStageTime = (stageKey: string, isActive: boolean): string | null => {
+        void tick; // bind to 1s heartbeat so elapsed display updates each second
+        const dur = stageDurRef.current[stageKey];
+        if (dur != null) {
+            if (dur < 60000) return `${(dur / 1000).toFixed(1)}s`;
+            return `${Math.floor(dur / 60000)}m${Math.round((dur % 60000) / 1000)}s`;
+        }
+        if (isActive && stageStartRef.current[stageKey]) {
+            if (stageKey === 'score' && scoreEta) return `ETA ${scoreEta}`;
+            const elapsed = Math.round((Date.now() - stageStartRef.current[stageKey]) / 1000);
+            if (elapsed < 60) return `${elapsed}s`;
+            return `${Math.floor(elapsed / 60)}m${elapsed % 60}s`;
+        }
+        return null;
+    };
+
     // calculate simulated metrics based on progress if replaying; else usage real metrics
     const getDisplayMetrics = () => {
-        if (!run) return { records_in: 0, candidates_generated: 0, auto_links: 0, review_items: 0 };
-        if (!isReplaying) return run.counters;
+        const clust = Math.max(run?.counters?.clusters_created || 0, clustersCreated);
+        if (!run) return { records_in: 0, candidates_generated: 0, auto_links: 0, review_items: 0, clusters_created: 0 };
+        if (!isReplaying) return { ...run.counters, clusters_created: clust };
 
         // Gradual Reveal Math
         const progress = activeStageIndex / (pipelineStages.length - 1);
@@ -204,6 +371,7 @@ export default function RunDetailsPage() {
             candidates_generated: activeStageIndex >= 3 ? Math.floor(run.counters.candidates_generated * Math.min((progress - 0.3) * 2, 1)) : 0,
             auto_links: activeStageIndex >= 6 ? run.counters.auto_links : 0,
             review_items: activeStageIndex >= 5 ? Math.floor(run.counters.review_items * progress) : 0,
+            clusters_created: activeStageIndex >= 7 ? clust : 0,
         };
     };
 
@@ -282,6 +450,16 @@ export default function RunDetailsPage() {
                                     }`}>
                                     {agent.name.split(' ')[0]}
                                 </div>
+                                {/* Stage timing: actual duration for completed, elapsed/ETA for active */}
+                                {(() => {
+                                    const t = getStageTime(stageKey, isActive);
+                                    return t ? (
+                                        <div className={`text-[9px] font-mono tabular-nums -mt-0.5 transition-colors duration-300
+                                            ${isPast ? 'text-emerald-600 dark:text-emerald-400' : 'text-blue-500 dark:text-blue-400 animate-pulse'}`}>
+                                            {t}
+                                        </div>
+                                    ) : null;
+                                })()}
                                 {isSelected && (
                                     <div className="absolute -bottom-8 bg-blue-600 text-white text-[10px] px-2 py-1 rounded shadow-lg animate-bounce">
                                         Viewing Logs
@@ -319,7 +497,7 @@ export default function RunDetailsPage() {
 
                             <div className="bg-white/90 dark:bg-black/30 backdrop-blur rounded-lg p-4 border-l-4 border-blue-500">
                                 <p className="text-xl font-mono text-blue-800 dark:text-blue-200 animate-pulse">
-                                    {`> ${currentAgent.message}`}
+                                    {`> ${liveMessage || currentAgent.message}`}
                                 </p>
                             </div>
                         </div>
@@ -331,7 +509,7 @@ export default function RunDetailsPage() {
                     </div>
 
                     {/* Processing Log */}
-                    <div className="bg-white dark:bg-black border border-gray-200 dark:border-gray-800 rounded-xl p-4 font-mono text-sm h-[350px] max-h-[350px] flex flex-col shadow-inner relative overflow-hidden">
+                    <div className="bg-white dark:bg-black border border-gray-200 dark:border-gray-800 rounded-xl p-4 font-mono text-sm h-[450px] max-h-[450px] flex flex-col shadow-inner relative overflow-hidden">
                         <div className="flex items-center justify-between text-gray-500 border-b border-gray-200 dark:border-gray-800 pb-2 mb-2">
                             <div className="flex items-center gap-2">
                                 <Terminal size={14} />
@@ -343,20 +521,36 @@ export default function RunDetailsPage() {
                                 </button>
                             )}
                         </div>
-                        <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
+                        <div className="flex-1 overflow-y-auto space-y-1.5 pr-2 custom-scrollbar">
                             {displayedLogs.length === 0 ? (
                                 <div className="text-gray-500 dark:text-gray-600 italic p-4 text-center">No logs recorded for this stage yet...</div>
                             ) : (
                                 displayedLogs.map((log, i) => (
-                                    <div key={i} className={`flex gap-3 group animate-in fade-in slide-in-from-left-2 duration-300 ${log.type === 'warn' ? 'text-red-700 dark:text-red-400' :
-                                        log.type === 'success' ? 'text-green-700 dark:text-green-400' : 'text-blue-800 dark:text-blue-200'
-                                        }`}>
-                                        <span className="text-gray-400 dark:text-gray-600 shrink-0 text-[10px] mt-1">[{log.time}]</span>
-                                        <span className={`font-bold shrink-0 w-24 border-r border-gray-200 dark:border-gray-800 mr-2 opacity-70 ${log.stage === selectedStep ? 'text-yellow-700 dark:text-yellow-300' : ''
-                                            }`}>
+                                    <div key={i} className={`flex gap-2 items-start group animate-in fade-in slide-in-from-left-2 duration-200 rounded px-1 py-0.5
+                                        ${log.type === 'warn'    ? 'bg-red-50 dark:bg-red-900/10' :
+                                          log.type === 'success' ? 'bg-green-50 dark:bg-emerald-900/10' :
+                                                                   'hover:bg-gray-50 dark:hover:bg-gray-900/30'}`}>
+                                        {/* Timestamp */}
+                                        <span className="text-gray-400 dark:text-gray-600 shrink-0 text-[10px] mt-0.5 font-mono tabular-nums">[{log.time}]</span>
+                                        {/* Badge */}
+                                        <span className={`shrink-0 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded mt-0.5
+                                            ${log.type === 'warn'    ? 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400' :
+                                              log.type === 'success' ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400' :
+                                                                       'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'}`}>
+                                            {log.type === 'success' ? '✓ OK' : log.type === 'warn' ? '⚠ ERR' : '● INFO'}
+                                        </span>
+                                        {/* Agent */}
+                                        <span className={`shrink-0 text-[10px] font-bold w-28 truncate mt-0.5
+                                            ${log.stage === selectedStep ? 'text-yellow-600 dark:text-yellow-300' : 'text-gray-500 dark:text-gray-500'}`}>
                                             {log.agent}
                                         </span>
-                                        <span className="break-words w-full">{log.msg}</span>
+                                        {/* Message */}
+                                        <span className={`break-all text-xs leading-tight mt-0.5
+                                            ${log.type === 'warn'    ? 'text-red-700 dark:text-red-300' :
+                                              log.type === 'success' ? 'text-emerald-700 dark:text-emerald-300' :
+                                                                       'text-gray-800 dark:text-blue-100'}`}>
+                                            {log.msg}
+                                        </span>
                                     </div>
                                 ))
                             )}
@@ -379,6 +573,7 @@ export default function RunDetailsPage() {
                             <MetricCard label="Candidates Found" value={metrics.candidates_generated} icon={Search} highlight={activeStageIndex >= 3} />
                             <MetricCard label="Auto-Linked" value={metrics.auto_links} icon={Zap} highlight={activeStageIndex >= 6} />
                             <MetricCard label="Manual Review" value={metrics.review_items} icon={FileText} highlight={activeStageIndex >= 5} />
+                            <MetricCard label="Unique Identities" value={metrics.clusters_created} icon={Users} highlight={activeStageIndex >= 7} />
                         </div>
                     </div>
 

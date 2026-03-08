@@ -24,7 +24,10 @@ Usage:
 
 import os
 import sys
-from typing import Dict, List, Tuple, Any
+import re
+import queue
+import logging
+from typing import Dict, List, Tuple, Any, Optional
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -72,6 +75,114 @@ CACHE_FORMAT = os.getenv("CACHE_FORMAT", "parquet")
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Real-time progress interception
+# ──────────────────────────────────────────────────────────────────────────────
+
+class SpLinkProgressHandler(logging.Handler):
+    """
+    Attaches to Splink's internal Python loggers and converts log messages into
+    structured progress events that are placed on a thread-safe Queue.
+
+    The async heartbeat loop in SparkPipelineOrchestrator drains this queue
+    each tick so the frontend receives genuine sub-stage updates rather than
+    time-based guesses.
+
+    Progress events have the shape:
+      {
+        "sub_step":        str,   # Human-readable label
+        "progress_pct":    int,   # 0-100 through the score stage
+        "em_iteration":    int,   # Current EM iteration (0 if N/A)
+        "em_max":          int,   # Max EM iterations configured
+        "detail":          str,   # Raw log fragment for debugging
+      }
+    """
+
+    _EM_ITER_RE = re.compile(r"Iteration\s+(\d+):")
+    _EM_CONV_RE = re.compile(r"EM converged after\s+(\d+)")
+
+    # Ordered sub-stages with their approximate % progress through the SCORE stage
+    _SUB_STAGE_MAP = {
+        "Estimating u probabilities":           ("Estimating u-probabilities (random sampling)",   12),
+        "Estimated u probabilities":             ("u-probabilities complete",                        20),
+        "Starting EM training":                  ("Starting EM model training...",                   25),
+        "EM converged":                          ("EM converged — model trained",                    80),
+        "Generating predictions":                ("Generating match predictions...",                 82),
+        "Collecting predictions":                ("Collecting predictions from Spark executors",     90),
+        "All paths were ignored":                None,   # suppress noisy Spark warning
+    }
+
+    def __init__(self, progress_queue: "queue.Queue", em_max: int = 10):
+        super().__init__()
+        self._q = progress_queue
+        self._em_max = em_max
+
+    def emit(self, record: logging.LogRecord) -> None:
+        msg = record.getMessage()
+
+        # EM iteration — most granular signal
+        m = self._EM_ITER_RE.search(msg)
+        if m:
+            iteration = int(m.group(1))
+            pct = 25 + int((iteration / self._em_max) * 55)   # 25 → 80 %
+            self._q.put_nowait({
+                "sub_step":     f"EM training: iteration {iteration}/{self._em_max}",
+                "progress_pct": min(pct, 79),
+                "em_iteration": iteration,
+                "em_max":       self._em_max,
+                "detail":       msg[:120],
+            })
+            return
+
+        # EM converged
+        m = self._EM_CONV_RE.search(msg)
+        if m:
+            iters = int(m.group(1))
+            self._q.put_nowait({
+                "sub_step":     f"EM converged after {iters} iterations",
+                "progress_pct": 80,
+                "em_iteration": iters,
+                "em_max":       self._em_max,
+                "detail":       msg[:120],
+            })
+            return
+
+        # Named sub-stages
+        for keyword, result in self._SUB_STAGE_MAP.items():
+            if keyword in msg:
+                if result is None:
+                    return  # suppress
+                label, pct = result
+                self._q.put_nowait({
+                    "sub_step":     label,
+                    "progress_pct": pct,
+                    "em_iteration": 0,
+                    "em_max":       self._em_max,
+                    "detail":       msg[:120],
+                })
+                return
+
+
+def _attach_progress_handler(handler: SpLinkProgressHandler) -> List[logging.Logger]:
+    """Register handler on all relevant Splink loggers. Returns loggers for cleanup."""
+    names = [
+        "splink.estimate_u",
+        "splink.em_training_session",
+        "splink.expectation_maximisation",
+        "splink.settings",
+        "splink.m_u_records_to_parameters",
+    ]
+    loggers = [logging.getLogger(n) for n in names]
+    for lg in loggers:
+        lg.addHandler(handler)
+    return loggers
+
+
+def _detach_progress_handler(handler: SpLinkProgressHandler, loggers: List[logging.Logger]) -> None:
+    for lg in loggers:
+        lg.removeHandler(handler)
 
 
 def get_cache_file_path() -> str:
@@ -188,35 +299,49 @@ def load_data_from_cache(spark: SparkSession):
 
 def run_splink_clustering(
     spark: SparkSession = None,
-    match_threshold: float = 0.95
+    match_threshold: float = 0.95,
+    progress_queue: Optional["queue.Queue"] = None,
 ) -> Tuple[List[Dict], List[Dict]]:
     """
     Run Splink entity resolution clustering on cached data.
-    
-    All operations (blocking, scoring, clustering) are performed using PySpark
-    with parallel execution across all available CPU cores.
-    
-    Progress is reported step-by-step as each operation completes.
-    
+
     Args:
-        spark: Optional SparkSession (will create one if not provided)
-        match_threshold: Minimum probability threshold for matches (0.0-1.0)
-        
-    Returns:
-        Tuple of (clusters, matches) where:
-        - clusters: List of cluster dictionaries with cluster_id and member_indices
-        - matches: List of match dictionaries with record indices and probabilities
+        spark:            Optional SparkSession (created if not provided)
+        match_threshold:  Minimum probability threshold (0.0-1.0)
+        progress_queue:   Optional thread-safe Queue; structured progress dicts
+                          are put here as Splink runs so callers can relay them
+                          to the async event loop for real-time UI updates.
     """
+    # Attach real-time progress handler to Splink's loggers so we can relay
+    # genuine sub-stage signals back to the async event loop.
+    _prog_handler = None
+    _prog_loggers: List[logging.Logger] = []
+    if progress_queue is not None:
+        _prog_handler = SpLinkProgressHandler(progress_queue, em_max=10)
+        _prog_loggers = _attach_progress_handler(_prog_handler)
+
+    try:
+        return _run_splink_clustering_inner(spark, match_threshold)
+    finally:
+        if _prog_handler:
+            _detach_progress_handler(_prog_handler, _prog_loggers)
+
+
+def _run_splink_clustering_inner(
+    spark: SparkSession,
+    match_threshold: float,
+) -> Tuple[List[Dict], List[Dict]]:
+    """Internal implementation — called by run_splink_clustering."""
     print("=" * 70)
     print("SPLINK ENTITY RESOLUTION CLUSTERING (PARALLELIZED)")
     print("=" * 70)
     print()
-    
+
     # Step 1: Create or use provided Spark session
     if spark is None:
         import multiprocessing
         cpu_cores = multiprocessing.cpu_count()
-        
+
         print("=" * 70)
         print("STEP 1: Initializing Spark Session")
         print("=" * 70)
@@ -226,12 +351,19 @@ def run_splink_clustering(
         spark = SparkSession.builder \
             .appName("Splink Entity Resolution - Parallel") \
             .master(f"local[{cpu_cores}]") \
-            .config("spark.driver.memory", "4g") \
-            .config("spark.executor.memory", "4g") \
+            .config("spark.driver.memory", "8g") \
+            .config("spark.executor.memory", "8g") \
+            .config("spark.driver.maxResultSize", "4g") \
             .config("spark.default.parallelism", str(cpu_cores * 2)) \
             .config("spark.sql.shuffle.partitions", str(cpu_cores * 2)) \
             .config("spark.sql.adaptive.enabled", "true") \
             .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
+            .config("spark.sql.adaptive.skewJoin.enabled", "true") \
+            .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
+            .config("spark.sql.parquet.filterPushdown", "true") \
+            .config("spark.sql.parquet.mergeSchema", "false") \
+            .config("spark.sql.parquet.compression.codec", "snappy") \
+            .config("spark.hadoop.mapreduce.fileoutputcommitter.algorithm.version", "2") \
             .getOrCreate()
         
         # Set log level to reduce verbosity

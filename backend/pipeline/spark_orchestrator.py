@@ -60,14 +60,19 @@ class SparkPipelineOrchestrator:
 
     def _load_parquet_row_count(self) -> int:
         """
-        Fast parquet row count WITHOUT loading all data into memory.
-        Returns number of rows in the parquet file or directory.
+        Fast parquet row count WITHOUT loading data into memory.
+        Reads footer metadata only — near-instant regardless of file size.
         """
         try:
             import pyarrow.parquet as pq
             if os.path.isdir(PARQUET_PATH):
-                dataset = pq.ParquetDataset(PARQUET_PATH, use_legacy_dataset=False)
-                n = dataset.metadata.num_rows if hasattr(dataset, 'metadata') else sum(f.metadata.num_rows for f in dataset.fragments)
+                # Directory of part files (Spark output) — sum each part's metadata
+                total = 0
+                for fname in os.listdir(PARQUET_PATH):
+                    if fname.endswith(".parquet") and not fname.startswith("."):
+                        pf = pq.ParquetFile(os.path.join(PARQUET_PATH, fname))
+                        total += pf.metadata.num_rows
+                n = total
             else:
                 pf = pq.ParquetFile(PARQUET_PATH)
                 n = pf.metadata.num_rows
@@ -75,13 +80,7 @@ class SparkPipelineOrchestrator:
             return n
         except Exception as e:
             logger.error(f"Failed to read parquet row count: {e}")
-            # Fallback to pandas if pyarrow metadata fails
-            try:
-                import pandas as pd
-                df = pd.read_parquet(PARQUET_PATH, columns=[])
-                return len(df)
-            except:
-                return 0
+            return 0
     
     def _load_records_for_cluster_members(self, customer_codes: set) -> Dict[str, dict]:
         """
@@ -258,61 +257,99 @@ class SparkPipelineOrchestrator:
         ))
 
     async def _stage_score_and_decide(self) -> tuple:
-        """Run Splink in a background thread, emitting progress heartbeats every 30s."""
+        """Run Splink in a background thread, emitting granular real-time progress."""
         import concurrent.futures
-        
+        import queue as _queue
+
         start = datetime.utcnow()
+
+        # Progress queue — Splink's logging handler writes here from the worker thread;
+        # the heartbeat loop drains it each tick and forwards to the WS.
+        prog_q: _queue.Queue = _queue.Queue()
+
         await self._emit_progress(StageProgress(
             stage=PipelineStage.SCORE,
             status="running",
-            message=f"Running Splink EM (threshold={MATCH_THRESHOLD})..."
+            message="Initializing Spark session...",
+            data={"sub_step": "Initializing Spark session...", "progress_pct": 5,
+                  "em_iteration": 0, "em_max": 10}
         ))
-        
+
         result_holder: Dict[str, Any] = {}
-        
+
         def run_spark_blocking():
             try:
-                clusters, matches = run_splink_clustering(spark=None, match_threshold=MATCH_THRESHOLD)
+                clusters, matches = run_splink_clustering(
+                    spark=None,
+                    match_threshold=MATCH_THRESHOLD,
+                    progress_queue=prog_q,
+                )
                 result_holder["clusters"] = clusters
                 result_holder["matches"] = matches
             except Exception as e:
                 result_holder["error"] = str(e)
-        
-        # Run Spark in a separate thread pool
+
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         future = executor.submit(run_spark_blocking)
-        
-        # Keep emitting heartbeat progress while Spark runs
+
         loop = asyncio.get_event_loop()
         wrapped = asyncio.wrap_future(future, loop=loop)
-        
-        heartbeat_n = 0
+
+        # Last known sub-stage — used as fallback when queue is empty
+        last_sub: Dict[str, Any] = {
+            "sub_step": "Loading parquet partitions into Spark...",
+            "progress_pct": 8,
+            "em_iteration": 0,
+            "em_max": 10,
+        }
+
         while not wrapped.done():
             try:
-                await asyncio.wait_for(asyncio.shield(wrapped), timeout=30.0)
+                await asyncio.wait_for(asyncio.shield(wrapped), timeout=5.0)
             except asyncio.TimeoutError:
-                heartbeat_n += 1
-                elapsed_min = int((datetime.utcnow() - start).total_seconds() // 60)
-                elapsed_sec = int((datetime.utcnow() - start).total_seconds() % 60)
+                # Drain all enqueued events and emit the latest one
+                latest: Dict[str, Any] | None = None
+                try:
+                    while True:
+                        latest = prog_q.get_nowait()
+                except Exception:
+                    pass
+
+                if latest:
+                    last_sub = latest
+
+                elapsed = int((datetime.utcnow() - start).total_seconds())
+                em_iter = last_sub.get("em_iteration", 0)
+                em_max  = last_sub.get("em_max", 10)
+                pct     = last_sub.get("progress_pct", 5)
+                label   = last_sub.get("sub_step", "Processing...")
+
+                # Build a rich elapsed-time suffix
+                elapsed_str = f"{elapsed // 60}m{elapsed % 60:02d}s"
+
                 await self._emit_progress(StageProgress(
                     stage=PipelineStage.SCORE,
                     status="running",
-                    message=f"Splink processing... {elapsed_min}m{elapsed_sec}s elapsed"
+                    message=f"{label} ({elapsed_str} elapsed)",
+                    data={
+                        "sub_step":     label,
+                        "progress_pct": pct,
+                        "em_iteration": em_iter,
+                        "em_max":       em_max,
+                        "elapsed_sec":  elapsed,
+                    }
                 ))
-        
+
         executor.shutdown(wait=False)
-        
+
         if "error" in result_holder:
             raise RuntimeError(f"Spark clustering failed: {result_holder['error']}")
-        
+
         clusters = result_holder.get("clusters", [])
-        matches = result_holder.get("matches", [])
-        
+        matches  = result_holder.get("matches", [])
         duration = int((datetime.utcnow() - start).total_seconds() * 1000)
-        
-        # Emit complete with sample matches for UI visualization
         sample_matches = matches[:50] if matches else []
-        
+
         await self._emit_progress(StageProgress(
             stage=PipelineStage.SCORE,
             status="complete",
@@ -321,9 +358,13 @@ class SparkPipelineOrchestrator:
             reduction_pct=0,
             duration_ms=duration,
             message=f"Splink found {len(matches):,} high-confidence pairs",
-            data={"sample_matches": sample_matches}
+            data={
+                "sub_step": "Complete", "progress_pct": 100,
+                "em_iteration": 0, "em_max": 10,
+                "sample_matches": sample_matches,
+            }
         ))
-        
+
         # Emit DECIDE stage
         await self._emit_progress(StageProgress(
             stage=PipelineStage.DECIDE,
@@ -340,7 +381,7 @@ class SparkPipelineOrchestrator:
             duration_ms=400,
             message=f"Auto-linked: {len(matches):,} pairs → {len(clusters):,} clusters"
         ))
-        
+
         return clusters, matches
 
     async def _stage_cluster(self, clusters, matches):

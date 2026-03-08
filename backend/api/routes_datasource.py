@@ -19,6 +19,7 @@ async def start_datasource_demo(
     """
     Trigger the Spark-based realtime ingestion and clustering pipeline.
     Reads from backend/data_source/oracle_data.parquet.
+    Returns the full Run object so the frontend can track it by run_id.
     """
     run_service = get_run_service()
     
@@ -31,8 +32,26 @@ async def start_datasource_demo(
         
         async def execute_spark_pipeline():
             try:
-                # Progress callback to emit WS events
+                # Progress callback to emit WS events AND persist current_stage to the run
                 async def progress_callback(progress):
+                    # Persist current_stage (and live counters) so API polling always reflects reality
+                    live_run = run_service.get_run(run.run_id)
+                    if live_run:
+                        live_run.current_stage = progress.stage.value
+                        if progress.stage.value == 'ingest' and progress.records_out:
+                            live_run.counters.records_in = progress.records_out
+                        if progress.stage.value == 'candidates' and progress.records_out:
+                            live_run.counters.candidates_generated = progress.records_out
+                        if progress.stage.value == 'score' and progress.records_out:
+                            live_run.counters.auto_links = progress.records_out
+                        if progress.stage.value == 'decide' and progress.records_out:
+                            live_run.counters.auto_links = progress.records_out
+                        if progress.stage.value == 'cluster' and progress.status == 'complete':
+                            cc = (progress.data or {}).get('cluster_stats', {}).get('clusters_created', 0)
+                            if cc:
+                                live_run.counters.clusters_created = cc
+                        run_service._save_runs()
+
                     await ws_manager.broadcast_stage_progress(
                         run_id=run.run_id,
                         stage=progress.stage.value,
@@ -89,7 +108,8 @@ async def start_datasource_demo(
                             'records_in': result.records_in,
                             'auto_links': result.auto_links,
                             'review_items': result.review_items,
-                            'candidates_generated': result.candidates_generated
+                            'candidates_generated': result.candidates_generated,
+                            'clusters_created': run_obj.counters.clusters_created,
                         }
                     )
                 else:
@@ -114,10 +134,8 @@ async def start_datasource_demo(
 
         background_tasks.add_task(execute_spark_pipeline)
         
-        return {
-            "message": "Spark Pipeline started successfully",
-            "run_id": run.run_id
-        }
+        # Return the full run dict so the frontend can track it by run_id
+        return run.to_dict()
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to start pipeline: {str(e)}")

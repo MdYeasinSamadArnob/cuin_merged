@@ -38,6 +38,14 @@ const useCounter = (end: number, duration: number = 1000) => {
     return count;
 };
 
+interface SubProgress {
+    sub_step: string;
+    progress_pct: number;  // 0-100
+    em_iteration: number;
+    em_max: number;
+    elapsed_sec: number;
+}
+
 interface StageInfo {
     id: string;
     name: string;
@@ -48,6 +56,7 @@ interface StageInfo {
     reductionPct: number;
     durationMs: number;
     message: string;
+    subProgress?: SubProgress;
 }
 
 interface RunInfo {
@@ -120,6 +129,13 @@ export default function PipelinePage() {
                             reductionPct: payload.reduction_pct || stage.reductionPct,
                             durationMs: payload.duration_ms || stage.durationMs,
                             message: payload.message || stage.message,
+                            subProgress: payload.data?.sub_step ? {
+                                sub_step:     payload.data.sub_step,
+                                progress_pct: payload.data.progress_pct ?? stage.subProgress?.progress_pct ?? 0,
+                                em_iteration: payload.data.em_iteration ?? 0,
+                                em_max:       payload.data.em_max ?? 10,
+                                elapsed_sec:  payload.data.elapsed_sec ?? 0,
+                            } : stage.subProgress,
                         }
                         : stage
                 )
@@ -233,7 +249,7 @@ export default function PipelinePage() {
         setShowLiveInsight(false);
 
         try {
-            const run = await api.startRun('FULL', 'Manual run from UI');
+            const run = await api.startDatasourcePipeline('FULL');
             setActiveRun(run);
         } catch (err) {
             setError('Failed to start pipeline run');
@@ -369,9 +385,42 @@ export default function PipelinePage() {
 
                                 <div className="flex flex-col items-center text-center gap-3">
                                     <span className="text-4xl filter drop-shadow-lg">{stage.icon}</span>
-                                    <div>
+                                    <div className="w-full">
                                         <div className="font-bold text-white text-lg tracking-wide">{stage.name}</div>
-                                        {stage.message && (
+
+                                        {/* Live sub-progress for Score stage */}
+                                        {stage.id === 'score' && stage.status === 'running' && stage.subProgress && (
+                                            <div className="mt-3 w-full space-y-2">
+                                                {/* Progress bar */}
+                                                <div className="relative h-2 bg-black/40 rounded-full overflow-hidden">
+                                                    <div
+                                                        className="absolute inset-y-0 left-0 bg-gradient-to-r from-blue-500 via-cyan-400 to-indigo-500 rounded-full transition-all duration-700 ease-out"
+                                                        style={{ width: `${stage.subProgress.progress_pct}%` }}
+                                                    />
+                                                    {/* Shimmer */}
+                                                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-[shimmer_1.5s_infinite]" />
+                                                </div>
+                                                {/* Percentage + EM iteration */}
+                                                <div className="flex items-center justify-between text-[10px] font-mono px-1">
+                                                    <span className="text-cyan-400 font-bold">{stage.subProgress.progress_pct}%</span>
+                                                    {stage.subProgress.em_iteration > 0 && (
+                                                        <span className="text-purple-300">
+                                                            EM {stage.subProgress.em_iteration}/{stage.subProgress.em_max}
+                                                        </span>
+                                                    )}
+                                                    <span className="text-gray-500">
+                                                        {Math.floor(stage.subProgress.elapsed_sec / 60)}m{String(stage.subProgress.elapsed_sec % 60).padStart(2,'0')}s
+                                                    </span>
+                                                </div>
+                                                {/* Sub-step label */}
+                                                <p className="text-[10px] text-blue-200 bg-black/30 px-2 py-1 rounded-full leading-tight">
+                                                    {stage.subProgress.sub_step}
+                                                </p>
+                                            </div>
+                                        )}
+
+                                        {/* Default message for other stages or completed state */}
+                                        {!(stage.id === 'score' && stage.status === 'running' && stage.subProgress) && stage.message && (
                                             <p className="text-xs text-blue-200 mt-2 font-medium bg-black/20 px-2 py-1 rounded-full">{stage.message}</p>
                                         )}
                                         {stage.durationMs > 0 && (
