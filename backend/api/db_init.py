@@ -1,9 +1,17 @@
 import logging
 import os
 import time
-import psycopg2
 from pathlib import Path
-from neo4j import GraphDatabase
+
+try:
+    import psycopg2
+except ImportError:
+    psycopg2 = None
+
+try:
+    from neo4j import GraphDatabase
+except ImportError:
+    GraphDatabase = None
 
 from api.config import settings
 
