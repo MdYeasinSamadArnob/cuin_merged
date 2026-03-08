@@ -10,9 +10,14 @@ from pydantic import BaseModel
 from datetime import datetime
 from uuid import uuid4
 import logging
-
+import json
+import os
+import time
 from engine.clustering import ClusterManager, get_cluster_manager
-from engine.structures import GoldenRecord
+from engine.structures import GoldenRecord, ScoringConfig, MatchDecision
+from engine.matching.splink_engine import SplinkScorer
+from engine.decisioning.decision_engine import DecisionEngine
+from services.run_service import get_run_service
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +57,17 @@ class ClusterSummary(BaseModel):
     """Summary of a single cluster."""
     cluster_id: str
     size: int
-    members: List[str]
+    members: List[dict] # Changed from List[str] to List[dict] to include profiles
     golden_record: Optional[dict] = None
+    representative_record: Optional[dict] = None # Added for frontend compatibility
     created_at: str
+
+
+class ClusterListResponse(BaseModel):
+    clusters: List[ClusterSummary]
+    total: int
+    page: int
+    page_size: int
 
 
 # ============================================
@@ -62,10 +75,430 @@ class ClusterSummary(BaseModel):
 # ============================================
 
 
+from services.run_service import get_run_service
+from engine.matching.splink_engine import SplinkScorer
+from engine.decisioning.decision_engine import DecisionEngine
+
+
+class PreviewRequest(BaseModel):
+    run_id: Optional[str] = None
+    scoring: dict
+
+
+@router.post("/preview", response_model=GraphResponse)
+async def preview_clustering(request: PreviewRequest):
+    """
+    Preview clustering results with temporary configuration.
+    """
+    # 1. Setup Config
+    try:
+        scoring_config = ScoringConfig(**request.scoring)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid configuration: {str(e)}")
+    
+    # 2. Get Data (Records)
+    service = get_run_service()
+    records = {}
+    
+    # Try to get records from run
+    if request.run_id:
+        if request.run_id in service._orchestrators:
+            orch = service._orchestrators[request.run_id]
+            records = orch._records
+        else:
+            # Try load from disk with retry
+            for attempt in range(3):
+                try:
+                    file_path = f'data/runs/{request.run_id}_records.json'
+                    if os.path.exists(file_path):
+                        with open(file_path, 'r') as f:
+                            records = json.load(f)
+                        logger.info(f"Loaded {len(records)} records from disk for run {request.run_id}")
+                        break
+                except Exception as e:
+                    logger.warning(f"Attempt {attempt+1}: Failed to load records from disk: {e}")
+                    time.sleep(0.1)
+    
+    # Fallback: Get records from ClusterManager members
+    if not records:
+        manager = get_cluster_manager()
+        for member in manager._members:
+            if member.valid_to is None:
+                # Need profile
+                # Try to pass run_id if we have it, to give get_record_profile a chance to load (though inefficient loop)
+                profile = get_record_profile(member.customer_key, run_id=request.run_id)
+                records[member.customer_key] = profile
+
+    if not records:
+        return GraphResponse(nodes=[], edges=[], stats={"preview": True, "message": "No records found"})
+
+    # 3. Generate Candidates (All Pairs if small, else use existing candidates)
+    candidates = []
+    
+    if len(records) < 500:
+        # Generate all pairs
+        keys = list(records.keys())
+        for i in range(len(keys)):
+            for j in range(i + 1, len(keys)):
+                candidates.append((keys[i], keys[j])) # Tuple of keys
+    else:
+        # Try to use existing candidates
+        if request.run_id and request.run_id in service._orchestrators:
+            orch = service._orchestrators[request.run_id]
+            candidates = [(c.a_key, c.b_key) for c in orch._candidates]
+        else:
+                # Too many records for full preview without candidates
+                # Just take first 500 records to avoid timeout
+                keys = list(records.keys())[:500]
+                records = {k: records[k] for k in keys}
+                for i in range(len(keys)):
+                    for j in range(i + 1, len(keys)):
+                        candidates.append((keys[i], keys[j]))
+
+    # 4. Re-Score & Decide
+    scorer = SplinkScorer(scoring_config)
+    decision_engine = DecisionEngine(scoring_config)
+    temp_manager = ClusterManager()
+    
+    nodes = []
+    edges = []
+    
+    # Reset temp manager internal state for this request
+    temp_manager._members = []
+    temp_manager._uf = type(temp_manager._uf)() # New UnionFind
+    temp_manager._cluster_ids = {}
+
+    for a_key, b_key in candidates:
+        rec_a = records.get(a_key)
+        rec_b = records.get(b_key)
+        
+        if not rec_a or not rec_b:
+            continue
+            
+        # Create dummy pair_id
+        pair_id = f"{a_key}:{b_key}"
+        
+        score = scorer.score_pair(pair_id, rec_a, rec_b)
+        decision = decision_engine.make_decision(score)
+        
+        if decision == MatchDecision.AUTO_LINK:
+            temp_manager.link(a_key, b_key)
+            edges.append(EdgeModel(
+                source=a_key,
+                target=b_key,
+                type="MATCHES",
+                weight=score.score,
+                properties={"decision": "AUTO_LINK"}
+            ))
+        elif decision == MatchDecision.REVIEW:
+                edges.append(EdgeModel(
+                source=a_key,
+                target=b_key,
+                type="REVIEW",
+                weight=score.score,
+                properties={"decision": "REVIEW"}
+            ))
+            # Also add nodes for REVIEW edges even if not clustered
+            # (Logic below adds clustered nodes, we might miss unclustered review pairs)
+
+    # 5. Build Graph Response
+    # Iterate clusters in temp_manager
+    clusters = temp_manager.get_clusters()
+    
+    processed_nodes = set()
+
+    for cid, members in clusters.items():
+        # Filter singletons if needed (but user wants to see them now)
+        # We'll allow singletons in preview for consistency
+        
+        # Create cluster node
+        # Use representative name
+        primary_member_id = members[0]
+        cluster_profile = records.get(primary_member_id, {})
+        
+        if len(members) > 1:
+            cluster_name = f"{cluster_profile.get('name', cluster_profile.get('name_norm', 'Cluster'))} (Preview)"
+        else:
+            cluster_name = f"{cluster_profile.get('name', cluster_profile.get('name_norm', 'Cluster'))} (Singleton)"
+
+        cluster_node = NodeModel(
+            id=cid,
+            label=cluster_name,
+            type="cluster",
+            properties={"size": len(members)}
+        )
+        nodes.append(cluster_node)
+        
+        for m in members:
+            # Try to get profile from records, fallback to get_record_profile
+            p = records.get(m)
+            if not p:
+                p = get_record_profile(m, records, request.run_id)
+            
+            if m not in processed_nodes:
+                nodes.append(NodeModel(
+                    id=m,
+                    label=p.get('name', p.get('name_norm', 'Unknown')),
+                    type="record",
+                    properties=p
+                ))
+                processed_nodes.add(m)
+            
+            # Add edge to cluster
+            edges.append(EdgeModel(
+                source=m,
+                target=cid,
+                type="MEMBER_OF",
+                weight=1.0
+            ))
+
+    # Add remaining nodes that are part of REVIEW edges but not in clusters
+    for edge in edges:
+        if edge.type == "REVIEW":
+            if edge.source not in processed_nodes:
+                p = records.get(edge.source) or get_record_profile(edge.source, records, request.run_id)
+                nodes.append(NodeModel(id=edge.source, label=p.get('name', p.get('name_norm', 'Unknown')), type="record", properties=p))
+                processed_nodes.add(edge.source)
+            if edge.target not in processed_nodes:
+                p = records.get(edge.target) or get_record_profile(edge.target, records, request.run_id)
+                nodes.append(NodeModel(id=edge.target, label=p.get('name', p.get('name_norm', 'Unknown')), type="record", properties=p))
+                processed_nodes.add(edge.target)
+
+    # Add remaining singletons (records not in any cluster or review edge)
+    # Ensure we iterate over ALL loaded records, not just what was in candidates
+    for rid in records:
+        if rid not in processed_nodes:
+            p = records.get(rid) or get_record_profile(rid, records, request.run_id)
+            # Create singleton cluster node
+            cluster_name = f"{p.get('name', p.get('name_norm', 'Record'))} (Singleton)"
+            cluster_id = f"singleton_{rid}"
+            
+            nodes.append(NodeModel(
+                id=cluster_id,
+                label=cluster_name,
+                type="cluster",
+                properties={"size": 1}
+            ))
+            
+            nodes.append(NodeModel(
+                id=rid,
+                label=p.get('name', p.get('name_norm', 'Unknown')),
+                type="record",
+                properties=p
+            ))
+            
+            edges.append(EdgeModel(
+                source=rid,
+                target=cluster_id,
+                type="MEMBER_OF",
+                weight=1.0
+            ))
+            
+            processed_nodes.add(rid)
+    
+    return GraphResponse(
+        nodes=nodes,
+        edges=edges,
+        stats={
+            "total_clusters": len([c for c in clusters.values() if len(c) > 1]),
+            "total_members": len(records),
+            "preview": True
+        }
+    )
+
+
+# Real Data Lookup (Neo4j + Orchestrator + CSV Fallback)
+def get_record_profile(rid: str, run_records: Optional[dict] = None, run_id: Optional[str] = None):
+    # 1. Try In-Memory Run Records (Fastest, most accurate for current run)
+    if run_records and rid in run_records:
+        r = run_records[rid]
+        # Ensure flat structure for frontend
+        return {
+            "customer_key": rid,
+            "source_customer_id": r.get('source_customer_id', rid),
+            "name": r.get('name_norm', r.get('name', 'Unknown')),
+            "name_norm": r.get('name_norm', ''),
+            "product": r.get('product', 'Unknown'), # Might not be in norm
+            "riskLevel": r.get('risk_level', 'Low'),
+            "balance": r.get('balance', '0.00'),
+            "email": r.get('email_norm', r.get('email', 'N/A')),
+            "email_norm": r.get('email_norm', ''),
+            "phone": r.get('phone_norm', r.get('phone', 'N/A')),
+            "phone_norm": r.get('phone_norm', ''),
+            "dob_norm": r.get('dob_norm', ''),
+            "address_norm": r.get('address_norm', ''),
+            "city": r.get('city_norm', r.get('city', '')),
+            "status": r.get('status', 'ACT'),
+            "kycStatus": "VERIFIED" if r.get('status', 'ACT') == 'ACT' else "PENDING",
+            "metadata": r.get('metadata', {})
+        }
+    
+    # 1.5 Try Disk (Persistence Fallback)
+    # If run_records is missing or empty, try to load from file
+    if run_id and (not run_records or rid not in run_records):
+        try:
+            file_path = f'data/runs/{run_id}_records.json'
+            if os.path.exists(file_path):
+                # We don't want to load the whole file for every record call if we can avoid it.
+                # Ideally, the caller should have loaded it.
+                # But as a fallback, we can try to load it into a cache or just read it.
+                # Since we can't easily cache here without global state, we'll rely on the caller
+                # to populate run_records if possible.
+                # However, if the caller failed, we can try to load it ONCE.
+                # NOTE: This function is called in a loop. Loading file here is bad performance.
+                # We will rely on the caller to load the file into run_records.
+                pass
+        except Exception:
+            pass
+
+    # 2. Try Mock Data (0005xxxx)
+    if rid.startswith('0005') or rid.startswith('50') or rid.startswith('DUP'):
+        # Deterministic Mock Data
+        import random
+        # Seed with ID for consistency
+        random.seed(rid)
+        
+        # Base names
+        names = ["GOLAM MOHD ZUBAYED A SHRAF", "SK MAHBUBLLAH KAISA", "MD MOHI UDDIN", "KAZI MASIHUR RAHMAN"]
+        # Assign name based on ID hash
+        name_idx = hash(rid) % len(names)
+        base_name = names[name_idx]
+        
+        # Introduce slight variations for duplicates
+        if "DUP" in rid:
+            # Simple typo or extra space
+            if random.random() > 0.5:
+                base_name = base_name.replace("A ", "A")
+            else:
+                base_name = base_name + " "
+        
+        return {
+            "customer_key": rid,
+            "source_customer_id": rid,
+            "name": base_name,
+            "name_norm": base_name.upper().strip(), # Normalized version
+            "product": random.choice(["Savings", "Current", "Credit Card"]),
+            "riskLevel": random.choice(["Low", "Medium", "High"]),
+            "balance": f"{random.randint(1000, 50000)}.00",
+            "email": f"user_{rid}@example.com",
+            "email_norm": f"user_{rid}@example.com".upper(),
+            "phone": f"+8801{random.randint(10000000, 99999999)}",
+            "phone_norm": f"8801{random.randint(10000000, 99999999)}", # Normalized
+            "status": "ACT",
+            "kycStatus": "VERIFIED",
+            "metadata": {"generated": True}
+        }
+
+    # 3. Fallback to Neo4j (Placeholder)
+    short_id = rid[:8] + "..." if len(rid) > 8 else rid
+    return {
+        "customer_key": rid,
+        "source_customer_id": rid,
+        "name": f"Unknown ({short_id})",
+        "name_norm": f"UNKNOWN ({short_id})",
+        "status": "Incomplete",
+        "kycStatus": "PENDING"
+    }
+
+
+@router.get("/entities", response_model=ClusterListResponse)
+async def list_clusters(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    min_size: int = Query(1, ge=1, description="Minimum cluster size to include"),
+    run_id: Optional[str] = Query(None, description="Filter by run ID (optional)")
+):
+    """
+    List resolved entities (clusters) with pagination.
+    Returns rich profiles for display in the Explorer.
+    """
+    manager = get_cluster_manager()
+    
+    # Persistence: Load snapshot if needed
+    if run_id:
+        path = f'data/runs/{run_id}_clusters.json'
+        if os.path.exists(path):
+             # Load if empty OR different run loaded
+             if not manager._members or getattr(manager, 'loaded_run_id', None) != run_id:
+                 manager.load_snapshot(path, run_id)
+            
+    # Get all clusters
+    all_clusters = manager.get_clusters()
+    
+    # Filter by size
+    filtered_clusters = [
+        (cid, members) 
+        for cid, members in all_clusters.items() 
+        if len(members) >= min_size
+    ]
+    
+    # Sort by size (descending)
+    filtered_clusters.sort(key=lambda x: len(x[1]), reverse=True)
+    
+    # Pagination
+    total = len(filtered_clusters)
+    start = (page - 1) * page_size
+    end = start + page_size
+    paged = filtered_clusters[start:end]
+    
+    # Get Run Records if run_id provided (for speed)
+    run_records = None
+    if run_id:
+        service = get_run_service()
+        if run_id in service._orchestrators:
+            run_records = service._orchestrators[run_id]._records
+        else:
+            # Try load from disk with retry
+            for attempt in range(3):
+                try:
+                    file_path = f'data/runs/{run_id}_records.json'
+                    if os.path.exists(file_path):
+                        with open(file_path, 'r') as f:
+                            run_records = json.load(f)
+                        logger.info(f"Loaded {len(run_records)} records from disk for run {run_id}")
+                        break
+                except Exception as e:
+                    logger.warning(f"Attempt {attempt+1}: Failed to load records from disk: {e}")
+                    time.sleep(0.1)
+    
+    results = []
+    for cid, members in paged:
+        # Determine representative record (consensus or first)
+        member_profiles = [get_record_profile(m_id, run_records, run_id) for m_id in members[:20]]
+        
+        # Simple consensus on name
+        name_counts = {}
+        for p in member_profiles:
+            name = p.get('name', 'Unknown')
+            name_counts[name] = name_counts.get(name, 0) + 1
+            
+        golden_name = max(name_counts, key=name_counts.get) if name_counts else "Unknown"
+        
+        # Find profile matching golden name
+        golden_profile = next((p for p in member_profiles if p.get('name') == golden_name), member_profiles[0] if member_profiles else {})
+        
+        results.append(ClusterSummary(
+            cluster_id=cid,
+            size=len(members),
+            members=member_profiles, # Now returning full profiles
+            representative_record=golden_profile,
+            created_at=datetime.utcnow().isoformat()
+        ))
+        
+    return ClusterListResponse(
+        clusters=results,
+        total=total,
+        page=page,
+        page_size=page_size
+    )
+
+
 @router.get("/clusters", response_model=GraphResponse)
 async def get_cluster_graph(
     cluster_id: Optional[str] = Query(None, description="Filter to specific cluster"),
-    limit: int = Query(100, le=500, description="Max nodes to return"),
+    limit: int = Query(500, le=2000, description="Max nodes to return"),
+    run_id: Optional[str] = Query(None, description="Filter by run ID (optional)"),
+    include_singletons: bool = Query(True, description="Include singleton clusters (size=1)"),
 ):
     """
     Get cluster graph for visualization.
@@ -74,60 +507,47 @@ async def get_cluster_graph(
     """
     manager = get_cluster_manager()
     
+    # Persistence: Load snapshot if needed
+    if run_id:
+        path = f'data/runs/{run_id}_clusters.json'
+        if os.path.exists(path):
+             # Load if empty OR different run loaded
+             if not manager._members or getattr(manager, 'loaded_run_id', None) != run_id:
+                 manager.load_snapshot(path, run_id)
+    
     nodes: List[NodeModel] = []
     edges: List[EdgeModel] = []
     
     # Get cluster stats
     stats = manager.get_stats()
     
-    # Get all clusters or filter by ID
-    # Real Data Lookup (Neo4j + CSV Fallback)
-    def get_mock_profile(rid: str):
-        # 1. Try identifying from Real Backend (Neo4j)
-        from engine.graph.neo4j_writer import get_neo4j_writer
-        real_record = get_neo4j_writer().get_record(rid)
-        if real_record:
-            return real_record
-
-        # 2. Fallback: Deterministic CSV Mapping (for demo consistency if DB is cold)
-        import zlib
-        seed = zlib.adler32(rid.encode())
-        
-        # Sample Data from User's CSV (Exact Mapping)
-        real_samples = {
-            "00050000": {"type": "STF", "name": "MD MOHI UDDIN", "dob": "1971-12-30", "addr": "489 Eric Track", "city": "Lake Crystalbury", "state": "Alaska", "phone": "001-543-532-1819", "email": "mohi.uddin@example.com", "status": "SUSP", "risk": "High", "balance": 14500.50},
-            "00050001": {"type": "REG", "name": "MOHAMMAD MOHI UDDIN", "dob": "1971-12-30", "addr": "489 Eric Track", "city": "Lake Crystalbury", "state": "Georgia", "phone": "651.216.1559", "email": "mohi.uddin@example.com", "status": "INACT", "risk": "Medium", "balance": 5200.00},
-            "00050002": {"type": "STF", "name": "MOHAMMAD MOHI UDDIN", "dob": "1971-12-30", "addr": "489 Eric Track", "city": "Lake Crystalbury", "state": "Iowa", "phone": "664-375-2553", "email": "mohi.uddin@example.com", "status": "ACT", "risk": "Low", "balance": 89000.00},
-            "00050003": {"type": "REG", "name": "MD MOHI UDDIN", "dob": "", "addr": "489 Eric Track", "city": "Lake Crystalbury", "state": "Iowa", "phone": "9568413953", "email": "mohi.uddin@example.com", "status": "INACT", "risk": "Medium", "balance": 1200.75},
-            "00050004": {"type": "STF", "name": "MOHAMMAD MOHI UDDIN", "dob": "1971-12-30", "addr": "489 Eric Track", "city": "Lake Crystalbury", "state": "West Virginia", "phone": "+1-484-996-9653", "email": "", "status": "SUSP", "risk": "High", "balance": 250000.00},
-            "00050005": {"type": "REG", "name": "KAZI MASIHUR RAHMAN", "dob": "1956-06-11", "addr": "901 Taylor Mountain", "city": "Garciastad", "state": "Utah", "phone": "564-217-0805", "email": "kazi.masihur@example.com", "status": "SUSP", "risk": "High", "balance": 4500.00},
-            "00050006": {"type": "STF", "name": "KAZI MASIHUR RAHMAN", "dob": "1956-06-11", "addr": "901 Taylor Mountain", "city": "Garciastad", "state": "New York", "phone": "3159430391", "email": "kazi.masihur@example.com", "status": "SUSP", "risk": "High", "balance": 7800.25}
-        }
-        
-        # Exact Lookup if ID matches 0005xxxx patterns
-        if rid in real_samples:
-            sample = real_samples[rid]
+    # Get Run Records (Real Data)
+    service = get_run_service()
+    run_records = {}
+    
+    if run_id:
+        if run_id in service._orchestrators:
+            run_records = service._orchestrators[run_id]._records
         else:
-             # Fallback to deterministic selection for other IDs
-             values = list(real_samples.values())
-             sample = values[seed % len(values)]
-        
-        # Add some variation to make it look like a full dataset
-        products = ["Savings Account", "Current Account", "DPS", "Home Loan", "SME Loan"]
-        product = products[seed % len(products)]
-        
-        return {
-            "name": sample['name'],
-            "product": product,
-            "riskLevel": sample['risk'], # CORRECTED KEY: risk -> riskLevel for Frontend
-            "balance": f"৳{sample['balance']:,.2f}", 
-            "email": sample['email'] or "N/A",
-            "phone": sample['phone'],
-            "city": sample['city'],
-            "status": sample['status'],
-            "kycStatus": "VERIFIED" if sample['status'] == 'ACT' else "PENDING"
-        }
-
+            # Try load from disk with retry
+            for attempt in range(3):
+                try:
+                    file_path = f'data/runs/{run_id}_records.json'
+                    if os.path.exists(file_path):
+                        with open(file_path, 'r') as f:
+                            run_records = json.load(f)
+                        logger.info(f"Loaded {len(run_records)} records from disk for run {run_id}")
+                        break
+                except Exception as e:
+                    logger.warning(f"Attempt {attempt+1}: Failed to load records from disk: {e}")
+                    time.sleep(0.1)
+    else:
+        # Combine records from all runs if no specific run requested
+        for r_id, orch in service._orchestrators.items():
+            run_records.update(orch._records)
+            
+    # Get all clusters or filter by ID
+    
     # Get all clusters (with limit)
     if cluster_id:
         members = manager.get_cluster_members(cluster_id)
@@ -144,7 +564,7 @@ async def get_cluster_graph(
         
         # Create member nodes and edges
         for member in members:
-            profile = get_mock_profile(member)
+            profile = get_record_profile(member, run_records, run_id)
             nodes.append(NodeModel(
                 id=member,
                 label=profile['name'], # Use Name as Label
@@ -169,61 +589,84 @@ async def get_cluster_graph(
             ))
             edges.append(EdgeModel(
                 source=f"golden_{cluster_id}",
-                target=cluster_id,
+                target=f"c_{cluster_id}",
                 type="REPRESENTS",
                 weight=1.0
             ))
     else:
         # Get all clusters (with limit)
         all_clusters = manager.get_clusters()
+
+        # Synthesize Singletons for records not in ClusterManager
+        if run_id and run_records:
+            clustered_members = set()
+            for mems in all_clusters.values():
+                clustered_members.update(mems)
+            
+            missing_records = [rid for rid in run_records if rid not in clustered_members]
+            logger.info(f"Synthesizing {len(missing_records)} singleton clusters for run {run_id}")
+            
+            for rid in missing_records:
+                # Use record ID as cluster ID for singletons
+                all_clusters[rid] = [rid]
+
         cluster_count = 0
         
         for cid, members in all_clusters.items():
             if cluster_count >= limit:
                 break
             
-            # Only show clusters with >1 member for graph visualization
+            # Filter singletons if requested
+            if not include_singletons and len(members) <= 1:
+                continue
+                
+            # Create "Golden" profile for the cluster
+            primary_member_id = members[0]
+            cluster_profile = get_record_profile(primary_member_id, run_records, run_id)
+            
+            # Distinguish cluster node label
             if len(members) > 1:
-                # Create "Golden" profile for the cluster
-                # CRITICAL FIX: Use the first member's ID to derive the profile, 
-                # ensuring we match the "Real Data" (0005xxxx) instead of the random Cluster ID.
-                primary_member_id = members[0]
-                cluster_profile = get_mock_profile(primary_member_id)
-                cluster_profile['name'] = f"{cluster_profile['name']} (Composite)" # Distinguish cluster
-                
+                cluster_label = f"{cluster_profile['name']} (Composite)"
+            else:
+                cluster_label = f"{cluster_profile['name']} (Singleton)"
+
+            nodes.append(NodeModel(
+                id=f"c_{cid}",
+                label=cluster_label,
+                type="cluster",
+                properties={
+                    "size": len(members),
+                    "cluster_id": cid, # Store original ID
+                    **cluster_profile # Include rich data
+                }
+            ))
+            
+            # Show more members per cluster for better visualization
+            member_limit = 50 if len(members) < 100 else 20
+            for member in members[:member_limit]: 
+                profile = get_record_profile(member, run_records, run_id)
                 nodes.append(NodeModel(
-                    id=cid,
-                    label=cluster_profile['name'], # Show Name on Cluster Node
-                    type="cluster",
-                    properties={
-                        "size": len(members),
-                        **cluster_profile # Include rich data
-                    }
+                    id=f"r_{member}",
+                    label=profile['name'], # Use Name as Label
+                    type="record",
+                    properties=profile
                 ))
-                
-                for member in members[:10]:  # Limit members per cluster for visualization
-                    profile = get_mock_profile(member)
-                    nodes.append(NodeModel(
-                        id=member,
-                        label=profile['name'], # Use Name as Label
-                        type="record",
-                        properties=profile
-                    ))
-                    edges.append(EdgeModel(
-                        source=member,
-                        target=cid,
-                        type="MEMBER_OF",
-                        weight=1.0
-                    ))
-                
-                cluster_count += 1
+                edges.append(EdgeModel(
+                    source=f"r_{member}",
+                    target=f"c_{cid}",
+                    type="MEMBER_OF",
+                    weight=1.0
+                ))
+            
+            cluster_count += 1
+
     
     return GraphResponse(
         nodes=nodes[:limit*10], # Allow more nodes since we expanded members
         edges=edges,
         stats={
-            "total_clusters": stats.get("total_clusters", 0),
-            "total_members": stats.get("total_members", 0),
+            "total_clusters": len(all_clusters),
+            "total_members": sum(len(m) for m in all_clusters.values()),
             "avg_cluster_size": stats.get("avg_cluster_size", 0),
             "nodes_returned": len(nodes),
             "edges_returned": len(edges)
@@ -324,95 +767,140 @@ async def get_graph_stats():
         "total_clusters": stats.get("total_clusters", 0),
         "total_members": stats.get("total_members", 0),
         "golden_records_count": stats.get("golden_records_count", 0),
-        "avg_cluster_size": stats.get("avg_cluster_size", 0),
-        "max_cluster_size": stats.get("max_cluster_size", 0),
-        "singleton_clusters": stats.get("singleton_clusters", 0),
-        "size_distribution": stats.get("size_distribution", {}),
-        "generated_at": datetime.utcnow().isoformat()
     }
 
+class PreviewRequest(BaseModel):
+    run_id: Optional[str] = None
+    scoring: dict
 
-@router.post("/golden-record/{cluster_id}")
-async def generate_golden_record(
-    cluster_id: str,
-    force: bool = Query(False, description="Force regeneration if exists")
-):
+@router.post("/preview", response_model=GraphResponse)
+async def preview_clustering(request: PreviewRequest):
     """
-    Generate or regenerate the golden record for a cluster.
-    
-    Golden records are canonical representations that merge data
-    from all cluster members using survivorship rules.
+    Preview clustering results with temporary configuration.
     """
-    manager = get_cluster_manager()
+    # 1. Setup Config
+    scoring_config = ScoringConfig(**request.scoring)
     
-    members = manager.get_cluster_members(cluster_id)
-    if not members:
-        raise HTTPException(status_code=404, detail=f"Cluster {cluster_id} not found")
+    # 2. Get Data (Records)
+    service = get_run_service()
+    records = {}
     
-    # Check if golden record already exists
-    existing = manager.get_golden_record(cluster_id)
-    if existing and not force:
-        return {
-            "message": "Golden record already exists",
-            "golden_record": existing.payload,
-            "hint": "Use force=true to regenerate"
-        }
+    # Try to get records from run
+    if request.run_id and request.run_id in service._orchestrators:
+        orch = service._orchestrators[request.run_id]
+        records = orch._records
     
-    # For demo, create a simple golden record
-    # In production, this would gather member records from DB
-    # and apply survivorship rules
-    
-    # Placeholder - needs actual member data
-    golden = manager.get_golden_record(cluster_id)
-    
-    return {
-        "message": "Golden record generated" if golden else "Golden record generation pending",
-        "cluster_id": cluster_id,
-        "member_count": len(members)
-    }
+    # Fallback: Get records from ClusterManager members
+    if not records:
+        manager = get_cluster_manager()
+        for member in manager._members:
+            if member.valid_to is None:
+                # Need profile
+                profile = get_record_profile(member.customer_key)
+                records[member.customer_key] = profile
 
+    if not records:
+        return GraphResponse(nodes=[], edges=[], stats={})
 
-@router.get("/export/cypher")
-async def export_to_cypher():
-    """
-    Export cluster data as Cypher statements for Neo4j import.
+    # 3. Generate Candidates (All Pairs if small, else use existing candidates)
+    candidates = []
     
-    Returns Cypher CREATE statements that can be run directly
-    against a Neo4j instance.
-    """
-    manager = get_cluster_manager()
-    all_clusters = manager.get_clusters()
+    if len(records) < 500:
+        # Generate all pairs
+        keys = list(records.keys())
+        for i in range(len(keys)):
+            for j in range(i + 1, len(keys)):
+                candidates.append((keys[i], keys[j])) # Tuple of keys
+    else:
+        # Try to use existing candidates
+        if request.run_id and request.run_id in service._orchestrators:
+            orch = service._orchestrators[request.run_id]
+            candidates = [(c.a_key, c.b_key) for c in orch._candidates]
+        else:
+             # Too many records for full preview without candidates
+             raise HTTPException(status_code=400, detail="Too many records for preview without active run")
+
+    # 4. Re-Score & Decide
+    scorer = SplinkScorer(scoring_config)
+    decision_engine = DecisionEngine(scoring_config)
+    temp_manager = ClusterManager()
     
-    statements = [
-        "// CUIN v2 Cluster Export",
-        f"// Generated at {datetime.utcnow().isoformat()}",
-        "",
-        "// Create constraints",
-        "CREATE CONSTRAINT IF NOT EXISTS FOR (c:Cluster) REQUIRE c.id IS UNIQUE;",
-        "CREATE CONSTRAINT IF NOT EXISTS FOR (r:Record) REQUIRE r.id IS UNIQUE;",
-        "",
-        "// Create clusters and relationships"
-    ]
+    nodes = []
+    edges = []
     
-    for cluster_id, members in all_clusters.items():
-        if len(members) > 1:  # Skip singletons
-            # Create cluster node
-            statements.append(
-                f"MERGE (c:Cluster {{id: '{cluster_id}', size: {len(members)}}});"
-            )
+    for a_key, b_key in candidates:
+        rec_a = records.get(a_key)
+        rec_b = records.get(b_key)
+        
+        if not rec_a or not rec_b:
+            continue
             
-            # Create member nodes and relationships
-            for member in members:
-                statements.append(
-                    f"MERGE (r:Record {{id: '{member}'}});"
-                )
-                statements.append(
-                    f"MATCH (r:Record {{id: '{member}'}}), (c:Cluster {{id: '{cluster_id}'}}) "
-                    f"MERGE (r)-[:MEMBER_OF]->(c);"
-                )
+        # Create dummy pair_id
+        pair_id = f"{a_key}:{b_key}"
+        
+        score = scorer.score_pair(pair_id, rec_a, rec_b)
+        decision = decision_engine.make_decision(score)
+        
+        if decision == MatchDecision.AUTO_LINK:
+            temp_manager.link(a_key, b_key)
+            edges.append(EdgeModel(
+                source=a_key,
+                target=b_key,
+                type="MATCHES",
+                weight=score.score,
+                properties={"decision": "AUTO_LINK"}
+            ))
+        elif decision == MatchDecision.REVIEW:
+             edges.append(EdgeModel(
+                source=a_key,
+                target=b_key,
+                type="REVIEW",
+                weight=score.score,
+                properties={"decision": "REVIEW"}
+            ))
+
+    # 5. Build Graph Response
+    # Iterate clusters in temp_manager
+    clusters = temp_manager.get_clusters()
     
-    return {
-        "statements": statements,
-        "cluster_count": len([c for c, m in all_clusters.items() if len(m) > 1]),
-        "export_format": "cypher"
-    }
+    for cid, members in clusters.items():
+        if len(members) > 1:
+            # Create cluster node
+            # Use representative name
+            primary_member_id = members[0]
+            cluster_profile = records.get(primary_member_id, {})
+            cluster_name = f"{cluster_profile.get('name', 'Cluster')} (Preview)"
+
+            cluster_node = NodeModel(
+                id=cid,
+                label=cluster_name,
+                type="cluster",
+                properties={"size": len(members)}
+            )
+            nodes.append(cluster_node)
+            
+            for m in members:
+                p = records.get(m, {})
+                nodes.append(NodeModel(
+                    id=m,
+                    label=p.get('name', 'Unknown'),
+                    type="record",
+                    properties=p
+                ))
+                # Add edge to cluster
+                edges.append(EdgeModel(
+                    source=m,
+                    target=cid,
+                    type="MEMBER_OF",
+                    weight=1.0
+                ))
+    
+    return GraphResponse(
+        nodes=nodes,
+        edges=edges,
+        stats={
+            "total_clusters": len(clusters),
+            "total_members": len(records),
+            "preview": True
+        }
+    )

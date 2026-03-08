@@ -225,14 +225,14 @@ export default function PipelinePage() {
     const progressPct = (completedStages / stages.length) * 100;
 
     return (
-        <div className="p-8 space-y-8 min-h-screen bg-gray-950/50">
+        <div className="p-8 space-y-8 min-h-screen bg-gray-50 dark:bg-gray-950/50 transition-colors duration-300">
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div>
-                    <h1 className="text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">
+                    <h1 className="text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600 dark:from-blue-400 dark:to-indigo-400">
                         Pipeline Visualizer
                     </h1>
-                    <p className="text-gray-400 mt-2 text-lg">
+                    <p className="text-gray-600 dark:text-gray-400 mt-2 text-lg">
                         Real-time entity resolution & matching engine
                     </p>
                 </div>
@@ -259,7 +259,7 @@ export default function PipelinePage() {
             </div>
 
             {/* Global Progress Bar */}
-            <div className="relative h-2 bg-gray-800 rounded-full overflow-hidden">
+            <div className="relative h-2 bg-gray-200 dark:bg-gray-800 rounded-full overflow-hidden">
                 <div
                     className="absolute top-0 left-0 h-full bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 transition-all duration-500 ease-out"
                     style={{ width: `${progressPct}%` }}
@@ -275,28 +275,28 @@ export default function PipelinePage() {
 
             {/* Run Info Card */}
             {activeRun && (
-                <div className="bg-gray-900/50 border border-gray-800 rounded-2xl p-6 shadow-xl backdrop-blur-sm">
+                <div className="bg-white/50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-800 rounded-2xl p-6 shadow-xl dark:shadow-none backdrop-blur-sm">
                     <div className="flex items-center justify-between">
                         <div>
                             <div className="flex items-center gap-3 mb-2">
-                                <h2 className="text-lg font-semibold text-white">
-                                    Run ID: <span className="font-mono text-blue-400">{activeRun.run_id.slice(0, 8)}</span>
+                                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                                    Run ID: <span className="font-mono text-blue-600 dark:text-blue-400">{activeRun.run_id.slice(0, 8)}</span>
                                 </h2>
-                                <span className={`px-3 py-1 rounded-full text-xs font-bold tracking-wider ${activeRun.status === 'COMPLETED' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
-                                    activeRun.status === 'RUNNING' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20 animate-pulse' :
-                                        'bg-gray-700 text-gray-400'
+                                <span className={`px-3 py-1 rounded-full text-xs font-bold tracking-wider ${activeRun.status === 'COMPLETED' ? 'bg-emerald-100 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20' :
+                                    activeRun.status === 'RUNNING' ? 'bg-blue-100 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-500/20 animate-pulse' :
+                                        'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
                                     }`}>
                                     {activeRun.status}
                                 </span>
                             </div>
-                            <p className="text-gray-400 text-sm">
+                            <p className="text-gray-500 dark:text-gray-400 text-sm">
                                 {activeRun.description || 'No description provided'}
                             </p>
                         </div>
                         {activeRun.duration_seconds && (
                             <div className="text-right">
                                 <p className="text-xs text-gray-500 mb-1">Duration</p>
-                                <span className="text-2xl font-mono text-white">
+                                <span className="text-2xl font-mono text-gray-900 dark:text-white">
                                     {(activeRun.duration_seconds).toFixed(2)}<span className="text-sm text-gray-500">s</span>
                                 </span>
                             </div>

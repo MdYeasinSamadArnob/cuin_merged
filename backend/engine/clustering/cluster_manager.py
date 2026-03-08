@@ -7,10 +7,16 @@ Manages identity clusters with versioning and golden record generation.
 from typing import Dict, List, Set, Optional, Tuple
 from datetime import datetime
 from uuid import uuid4
+import json
+import os
+import logging
+from dataclasses import asdict
 
 from engine.clustering.union_find import UnionFind
 from engine.golden.golden_builder import GoldenBuilder
 from engine.structures import ClusterMember, GoldenRecord
+
+logger = logging.getLogger(__name__)
 
 class ClusterManager:
     """
@@ -21,6 +27,7 @@ class ClusterManager:
     - Merging clusters based on review decisions
     - Generating golden records
     - Temporal queries on cluster membership
+    - Persistence (save/load snapshot)
     """
     
     def __init__(self):
@@ -30,6 +37,56 @@ class ClusterManager:
         self._golden_records: Dict[str, List[GoldenRecord]] = {}
         self._current_version = 0
         self._golden_builder = GoldenBuilder()
+        self.loaded_run_id: Optional[str] = None
+    
+    def save_snapshot(self, path: str = 'data/cluster_snapshot.json'):
+        """Persist state to disk."""
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            state = {
+                "uf": self._uf.to_dict(),
+                "cluster_ids": self._cluster_ids,
+                "members": [asdict(m) for m in self._members],
+                "current_version": self._current_version
+            }
+            # Custom encoder for datetime
+            def default(o):
+                if isinstance(o, (datetime,)):
+                    return o.isoformat()
+                return str(o)
+                
+            with open(path, 'w') as f:
+                json.dump(state, f, default=default)
+            logger.info(f"Saved cluster snapshot to {path}")
+        except Exception as e:
+            logger.error(f"Failed to save cluster snapshot: {e}")
+
+    def load_snapshot(self, path: str = 'data/cluster_snapshot.json', run_id: Optional[str] = None):
+        """Load state from disk."""
+        try:
+            if not os.path.exists(path):
+                return
+            
+            with open(path, 'r') as f:
+                state = json.load(f)
+            
+            self._uf.from_dict(state["uf"])
+            self._cluster_ids = state["cluster_ids"]
+            self._current_version = state.get("current_version", 0)
+            
+            # Reconstruct members
+            self._members = []
+            for m_data in state["members"]:
+                if 'valid_from' in m_data and isinstance(m_data['valid_from'], str):
+                     m_data['valid_from'] = datetime.fromisoformat(m_data['valid_from'])
+                if 'valid_to' in m_data and m_data['valid_to'] and isinstance(m_data['valid_to'], str):
+                     m_data['valid_to'] = datetime.fromisoformat(m_data['valid_to'])
+                self._members.append(ClusterMember(**m_data))
+            
+            self.loaded_run_id = run_id
+            logger.info(f"Loaded cluster snapshot from {path} (run_id={run_id})")
+        except Exception as e:
+            logger.error(f"Failed to load cluster snapshot: {e}")
     
     def _get_or_create_cluster_id(self, root: str) -> str:
         """Get or create a cluster ID for a root element."""

@@ -31,9 +31,9 @@ except ImportError:
 @dataclass
 class BlockingConfig:
     """Configuration for blocking operations."""
-    max_block_size: int = 200
+    max_block_size: int = 1000
     max_keys_per_record: int = 50
-    suppress_frequency_pct: float = 50.0  # Default to 50% - only suppress very common keys
+    suppress_frequency_pct: float = 90.0  # Increased to 90% to avoid aggressive suppression
     min_token_length: int = 2
     lsh_num_perm: int = 128
     lsh_threshold: float = 0.5

@@ -1,9 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
-import { Search, CheckCircle, XCircle } from 'lucide-react';
+import { Search, CheckCircle, XCircle, LayoutGrid, List, FileText, Download, TrendingUp, Users, UserCheck, AlertCircle, Building2 } from 'lucide-react';
+import { TuningPanel } from '@/components/explorer/TuningPanel';
+import { ClusterGraph } from '@/components/explorer/ClusterGraph';
 
 interface MatchScore {
     pair_id: string;
@@ -31,22 +33,38 @@ const formatFieldValue = (value: any) => {
     return String(value);
 };
 
+const getDisplayName = (record: any) => {
+    if (!record) return 'Unknown';
+    const name = record.name_norm;
+    // Check if name is valid (not null, not "—", not starting with "UNKNOWN")
+    if (name && name !== '—' && !String(name).toUpperCase().startsWith('UNKNOWN')) {
+        return name;
+    }
+
+    // Fallback chain
+    if (record.email_norm && record.email_norm !== '—') return record.email_norm;
+    if (record.phone_norm && record.phone_norm !== '—') return record.phone_norm;
+    if (record.source_customer_id && record.source_customer_id !== '—') return record.source_customer_id;
+
+    return 'Unknown Entity';
+};
+
 const RecordCard = ({ title, data, color }: { title: string, data: any, color: string }) => (
-    <div className={`p-4 rounded-xl border ${color === 'blue' ? 'bg-blue-900/10 border-blue-800' : 'bg-purple-900/10 border-purple-800'}`}>
+    <div className={`p-4 rounded-xl border ${color === 'blue' ? 'bg-blue-50 dark:bg-blue-900/10 border-blue-200 dark:border-blue-800' : 'bg-purple-50 dark:bg-purple-900/10 border-purple-200 dark:border-purple-800'}`}>
         <div className="flex items-center gap-2 mb-3">
-            <div className={`w-2 h-2 rounded-full ${color === 'blue' ? 'bg-blue-400' : 'bg-purple-400'}`} />
-            <h3 className="font-medium text-white">{title}</h3>
+            <div className={`w-2 h-2 rounded-full ${color === 'blue' ? 'bg-blue-500 dark:bg-blue-400' : 'bg-purple-500 dark:bg-purple-400'}`} />
+            <h3 className="font-medium text-gray-900 dark:text-white">{title}</h3>
             {/* Rich Metadata Badges */}
             {data.metadata?.status && (
-                <span className={`text-[10px] px-1.5 py-0.5 rounded border uppercase ${data.metadata.status === 'ACT' ? 'bg-green-900/30 border-green-800 text-green-400' :
-                    data.metadata.status === 'SUSP' ? 'bg-red-900/30 border-red-800 text-red-400' :
-                        'bg-gray-800 border-gray-700 text-gray-400'
+                <span className={`text-[10px] px-1.5 py-0.5 rounded border uppercase ${data.metadata.status === 'ACT' ? 'bg-green-100 dark:bg-green-900/30 border-green-200 dark:border-green-800 text-green-600 dark:text-green-400' :
+                    data.metadata.status === 'SUSP' ? 'bg-red-100 dark:bg-red-900/30 border-red-200 dark:border-red-800 text-red-600 dark:text-red-400' :
+                        'bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400'
                     }`}>
                     {data.metadata.status}
                 </span>
             )}
             {data.metadata?.cust_type && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded border border-gray-700 bg-gray-800 text-gray-300">
+                <span className="text-[10px] px-1.5 py-0.5 rounded border border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300">
                     {data.metadata.cust_type}
                 </span>
             )}
@@ -54,51 +72,51 @@ const RecordCard = ({ title, data, color }: { title: string, data: any, color: s
 
         <div className="space-y-2 text-sm">
             <div className="flex justify-between">
-                <span className="text-gray-500">ID</span>
-                <span className="text-gray-300 font-mono">{formatFieldValue(data.source_customer_id || '—')}</span>
+                <span className="text-gray-500 dark:text-gray-400">ID</span>
+                <span className="text-gray-700 dark:text-gray-300 font-mono">{formatFieldValue(data.source_customer_id || '—')}</span>
             </div>
             <div className="flex justify-between">
-                <span className="text-gray-500">Name</span>
-                <span className="text-white font-medium">{formatFieldValue(data.name_norm)}</span>
+                <span className="text-gray-500 dark:text-gray-400">Name</span>
+                <span className="text-gray-900 dark:text-white font-medium">{getDisplayName(data)}</span>
             </div>
             <div className="flex justify-between">
-                <span className="text-gray-500">Phone</span>
-                <span className="text-gray-300">{formatFieldValue(data.phone_norm)}</span>
+                <span className="text-gray-500 dark:text-gray-400">Phone</span>
+                <span className="text-gray-700 dark:text-gray-300">{formatFieldValue(data.phone_norm)}</span>
             </div>
             <div className="flex justify-between">
-                <span className="text-gray-500">Email</span>
-                <span className="text-gray-300 truncate max-w-[150px]" title={data.email_norm}>
+                <span className="text-gray-500 dark:text-gray-400">Email</span>
+                <span className="text-gray-700 dark:text-gray-300 truncate max-w-[150px]" title={data.email_norm}>
                     {formatFieldValue(data.email_norm)}
                 </span>
             </div>
             <div className="flex justify-between">
-                <span className="text-gray-500">DOB</span>
-                <span className="text-gray-300">{formatFieldValue(data.dob_norm)}</span>
+                <span className="text-gray-500 dark:text-gray-400">DOB</span>
+                <span className="text-gray-700 dark:text-gray-300">{formatFieldValue(data.dob_norm)}</span>
             </div>
-            <div className="col-span-2 pt-2 border-t border-gray-800/50 mt-2">
-                <div className="text-xs text-gray-500 mb-1 uppercase tracking-wider">Address</div>
-                <div className="text-gray-400 text-xs leading-relaxed">{formatFieldValue(data.address_norm)}</div>
+            <div className="col-span-2 pt-2 border-t border-gray-200 dark:border-gray-800/50 mt-2">
+                <div className="text-xs text-gray-500 dark:text-gray-400 mb-1 uppercase tracking-wider">Address</div>
+                <div className="text-gray-600 dark:text-gray-400 text-xs leading-relaxed">{formatFieldValue(data.address_norm)}</div>
             </div>
 
             {/* Extra Metadata Grid */}
             {data.metadata && Object.keys(data.metadata).length > 0 && (
-                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-gray-800/50 mt-2">
+                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-gray-200 dark:border-gray-800/50 mt-2">
                     {data.metadata.gender && (
                         <div className="flex flex-col">
-                            <span className="text-[10px] text-gray-500">Gender</span>
-                            <span className="text-xs text-gray-300">{data.metadata.gender}</span>
+                            <span className="text-[10px] text-gray-500 dark:text-gray-400">Gender</span>
+                            <span className="text-xs text-gray-700 dark:text-gray-300">{data.metadata.gender}</span>
                         </div>
                     )}
                     {data.metadata.branch && (
                         <div className="flex flex-col">
-                            <span className="text-[10px] text-gray-500">Branch</span>
-                            <span className="text-xs text-gray-300">{data.metadata.branch}</span>
+                            <span className="text-[10px] text-gray-500 dark:text-gray-400">Branch</span>
+                            <span className="text-xs text-gray-700 dark:text-gray-300">{data.metadata.branch}</span>
                         </div>
                     )}
                     {data.metadata.sponsor && (
                         <div className="flex flex-col col-span-2">
-                            <span className="text-[10px] text-gray-500">Sponsor</span>
-                            <span className="text-xs text-gray-300">{data.metadata.sponsor}</span>
+                            <span className="text-[10px] text-gray-500 dark:text-gray-400">Sponsor</span>
+                            <span className="text-xs text-gray-700 dark:text-gray-300">{data.metadata.sponsor}</span>
                         </div>
                     )}
                 </div>
@@ -107,7 +125,7 @@ const RecordCard = ({ title, data, color }: { title: string, data: any, color: s
     </div>
 );
 
-export default function ExplorerPage() {
+function ExplorerPageContent() {
     const [runs, setRuns] = useState<RunInfo[]>([]);
     const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
     const [scores, setScores] = useState<MatchScore[]>([]);
@@ -117,13 +135,70 @@ export default function ExplorerPage() {
     const [isExplaining, setIsExplaining] = useState(false);
     const [explanation, setExplanation] = useState<any | null>(null);
 
-    const [filter, setFilter] = useState<'all' | 'auto_link' | 'review' | 'reject' | 'unique' | 'entities'>('all');
+    const [filter, setFilter] = useState<'all' | 'auto_link' | 'review' | 'reject' | 'unique' | 'entities'>('entities');
     const [minScore, setMinScore] = useState(0);
 
     // Pagination state
     const [currentPage, setCurrentPage] = useState(1);
     const [pageSize] = useState(50);
     const [totalScores, setTotalScores] = useState(0);
+
+    // Graph / Tuning View State
+    const [viewMode, setViewMode] = useState<'list' | 'graph'>('list');
+    const [previewData, setPreviewData] = useState<any>(null);
+    const [previewLoading, setPreviewLoading] = useState(false);
+    const [loadingMessage, setLoadingMessage] = useState("Running Clustering Algorithm...");
+    const [isTuningOpen, setIsTuningOpen] = useState(false);
+
+    // Report Modal State
+    const [isReportOpen, setIsReportOpen] = useState(false);
+    const [reportData, setReportData] = useState<any>(null);
+    const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+
+    useEffect(() => {
+        if (viewMode === 'graph' && !previewData && selectedRunId) {
+            setPreviewLoading(true);
+            setLoadingMessage("Loading Graph Data...");
+            (api as any).getGraphData(selectedRunId)
+                .then((data: any) => setPreviewData(data))
+                .catch((err: any) => console.error('Failed to load graph:', err))
+                .finally(() => setPreviewLoading(false));
+        }
+    }, [viewMode, selectedRunId]);
+
+    const handlePreview = async (config: any) => {
+        setPreviewLoading(true);
+        setLoadingMessage("Running Clustering Algorithm...");
+        try {
+            const data = await (api as any).previewClustering(selectedRunId, config);
+            setPreviewData(data);
+        } catch (err) {
+            console.error('Preview failed:', err);
+            // Optionally set error state to show in UI
+        } finally {
+            setPreviewLoading(false);
+        }
+    };
+
+    const handleSaveConfig = async (config: any) => {
+        try {
+            // Map to UpdateConfigRequest format
+            const updatePayload = {
+                match_name_weight: config.name_weight,
+                match_phone_weight: config.phone_weight,
+                match_email_weight: config.email_weight,
+                match_dob_weight: config.dob_weight,
+                match_natid_weight: config.natid_weight,
+                match_address_weight: config.address_weight,
+                auto_link_threshold: config.auto_link_threshold,
+                review_threshold: config.review_threshold
+            };
+            await api.updateConfig(updatePayload);
+            console.log('Config saved');
+        } catch (err) {
+            console.error('Failed to save config:', err);
+        }
+    };
 
     const searchParams = useSearchParams();
     const urlRunId = searchParams.get('runId');
@@ -184,7 +259,8 @@ export default function ExplorerPage() {
 
     const fetchClusters = async (runId: string, page: number) => {
         try {
-            const data = await (api as any).getClusters(runId, page, pageSize);
+            // Use getClusterEntities with min_size=2 to exclude singletons
+            const data = await api.getClusterEntities(page, pageSize, 2, runId);
             setScores(data.clusters?.map((c: any) => ({
                 pair_id: c.cluster_id,
                 a_key: c.representative_record.customer_key || c.representative_record.source_customer_id,
@@ -258,6 +334,72 @@ export default function ExplorerPage() {
         setExplanation(null);
     }, [selectedRunId, filter]);
 
+    // Generate Executive Report
+    const generateReport = async () => {
+        if (!selectedRunId) return;
+        setIsGeneratingReport(true);
+        try {
+            // Fetch all the data we need for the report using proper API calls
+            const [clustersData, uniquesData, scoresData] = await Promise.all([
+                api.getClusters(selectedRunId, 1, 1000),
+                api.getUniques(selectedRunId, 1, 1000),
+                api.getMatchScores(selectedRunId, 1, 1000)
+            ]);
+
+            const clusters = clustersData?.clusters || [];
+            const uniques = uniquesData?.records || [];
+            const allScores = scoresData?.scores || [];
+
+            // Calculate statistics
+            const totalEntities = clusters.length;
+            const totalUniques = uniques.length;
+            const multiRecordClusters = clusters.filter((c: any) => c.size > 1);
+
+            // Calculate decision counts from actual score thresholds
+            const autoLinks = allScores.filter((s: any) => s.score >= 0.85).length;
+            const reviewItems = allScores.filter((s: any) => s.score >= 0.6 && s.score < 0.85).length;
+            const rejectItems = allScores.filter((s: any) => s.score < 0.6).length;
+
+            // Calculate total records and deduplication rate
+            const totalRecords = multiRecordClusters.reduce((sum: number, c: any) => sum + c.size, 0) + totalUniques;
+            const dedupRate = totalRecords > 0
+                ? ((totalRecords - multiRecordClusters.length - totalUniques) / totalRecords * 100).toFixed(1)
+                : '0';
+
+            setReportData({
+                runId: selectedRunId,
+                generatedAt: new Date().toLocaleString(),
+                summary: {
+                    totalRecords,
+                    totalEntities: totalEntities + totalUniques,
+                    totalUniques,
+                    deduplicationRate: dedupRate,
+                },
+                matching: {
+                    autoLinks,
+                    reviewItems,
+                    rejectItems,
+                    totalPairs: allScores.length
+                },
+                topClusters: multiRecordClusters.slice(0, 5).map((c: any) => ({
+                    name: c.representative_record?.name_norm || c.representative_name || c.cluster_id?.slice(0, 12) || 'Entity',
+                    size: c.size,
+                    id: c.cluster_id
+                })),
+                uniqueRecords: uniques.slice(0, 10).map((r: any) => ({
+                    name: r.name_norm || r.email_norm || r.source_customer_id || 'Unknown',
+                    id: r.source_customer_id || r.customer_key || 'N/A'
+                }))
+            });
+            setIsReportOpen(true);
+        } catch (err) {
+            console.error('Failed to generate report:', err);
+            alert('Failed to generate report. Make sure a run has been executed.');
+        } finally {
+            setIsGeneratingReport(false);
+        }
+    };
+
     // Helper to find related matches (transitivity)
     const getRelatedMatches = (currentPairId: string, recordA: any, recordB: any) => {
         if (!recordA || !recordB) return [];
@@ -284,17 +426,17 @@ export default function ExplorerPage() {
     };
 
     const getScoreColor = (score: number) => {
-        if (score >= 0.85) return 'text-emerald-400';
-        if (score >= 0.6) return 'text-yellow-400';
-        if (score >= 0.4) return 'text-orange-400';
-        return 'text-red-400';
+        if (score >= 0.85) return 'text-emerald-600 dark:text-emerald-400';
+        if (score >= 0.6) return 'text-yellow-600 dark:text-yellow-400';
+        if (score >= 0.4) return 'text-orange-600 dark:text-orange-400';
+        return 'text-red-600 dark:text-red-400';
     };
 
     const getScoreBg = (score: number) => {
-        if (score >= 0.85) return 'bg-emerald-900/30 border-emerald-700';
-        if (score >= 0.6) return 'bg-yellow-900/30 border-yellow-700';
-        if (score >= 0.4) return 'bg-orange-900/30 border-orange-700';
-        return 'bg-red-900/30 border-red-700';
+        if (score >= 0.85) return 'bg-emerald-50 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-700';
+        if (score >= 0.6) return 'bg-yellow-50 dark:bg-yellow-900/30 border-yellow-200 dark:border-yellow-700';
+        if (score >= 0.4) return 'bg-orange-50 dark:bg-orange-900/30 border-orange-200 dark:border-orange-700';
+        return 'bg-red-50 dark:bg-red-900/30 border-red-200 dark:border-red-700';
     };
 
     // formatFieldValue moved to top scope
@@ -308,479 +450,745 @@ export default function ExplorerPage() {
     }
 
     return (
-        <div className="p-8 space-y-6">
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold text-white">Match Explorer</h1>
-                    <p className="text-gray-400 mt-1">
-                        Explore and compare match pairs side by side
-                    </p>
-                </div>
-            </div>
-
-            {/* Filters */}
-            <div className="flex flex-wrap items-center gap-4 bg-gray-800/50 border border-gray-700 rounded-xl p-4">
-                <div>
-                    <label className="block text-sm text-gray-400 mb-1">Select Run</label>
-                    <select
-                        value={selectedRunId || ''}
-                        onChange={(e) => setSelectedRunId(e.target.value)}
-                        className="px-4 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white focus:border-blue-500 focus:outline-none"
+        <>
+            <div className="p-8 space-y-6">
+                {/* Header */}
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Match Explorer</h1>
+                        <p className="text-gray-500 dark:text-gray-400 mt-1">
+                            Explore and compare match pairs side by side
+                        </p>
+                    </div>
+                    <button
+                        onClick={generateReport}
+                        disabled={isGeneratingReport || !selectedRunId}
+                        className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-all shadow-lg shadow-indigo-500/25 hover:shadow-indigo-500/40"
                     >
-                        {runs.map((run) => (
-                            <option key={run.run_id} value={run.run_id}>
-                                {run.run_id.slice(0, 8)}... ({run.counters.pairs_scored} pairs)
-                            </option>
-                        ))}
-                    </select>
+                        {isGeneratingReport ? (
+                            <>
+                                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                Generating...
+                            </>
+                        ) : (
+                            <>
+                                <FileText size={20} />
+                                Generate Report
+                            </>
+                        )}
+                    </button>
                 </div>
 
-                <div>
-                    <label className="block text-sm text-gray-400 mb-1">Min Score</label>
-                    <input
-                        type="range"
-                        value={minScore}
-                        onChange={(e) => setMinScore(Number(e.target.value))}
-                        min={0}
-                        max={100}
-                        step={5}
-                        className="w-32"
-                    />
-                    <span className="ml-2 text-gray-400">{minScore}%</span>
-                </div>
+                {/* Filters */}
+                <div className="flex flex-wrap items-center gap-4 bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-4 shadow-sm">
+                    <div>
+                        <label className="block text-sm text-gray-500 dark:text-gray-400 mb-1">Select Run</label>
+                        <select
+                            value={selectedRunId || ''}
+                            onChange={(e) => setSelectedRunId(e.target.value)}
+                            className="px-4 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white focus:border-blue-500 focus:outline-none"
+                        >
+                            {runs.map((run) => (
+                                <option key={run.run_id} value={run.run_id}>
+                                    {run.run_id.slice(0, 8)}... ({run.counters.pairs_scored} pairs)
+                                </option>
+                            ))}
+                        </select>
+                    </div>
 
-                <div>
-                    <label className="block text-sm text-gray-400 mb-1">Filter</label>
-                    <div className="flex gap-2">
-                        {['all', 'auto_link', 'review', 'reject', 'unique', 'entities'].map((f) => (
+                    <div>
+                        <label className="block text-sm text-gray-500 dark:text-gray-400 mb-1">Min Score</label>
+                        <input
+                            type="range"
+                            value={minScore}
+                            onChange={(e) => setMinScore(Number(e.target.value))}
+                            min={0}
+                            max={100}
+                            step={5}
+                            className="w-32 accent-blue-600"
+                        />
+                        <span className="ml-2 text-gray-500 dark:text-gray-400">{minScore}%</span>
+                    </div>
+
+                    <div>
+                        <label className="block text-sm text-gray-500 dark:text-gray-400 mb-1">View</label>
+                        <div className="flex gap-2 bg-gray-100 dark:bg-gray-900 rounded-lg p-1 border border-gray-200 dark:border-gray-700">
                             <button
-                                key={f}
-                                onClick={() => setFilter(f as any)}
-                                className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${filter === f
-                                    ? 'bg-blue-600 text-white'
-                                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                                    }`}
+                                onClick={() => setViewMode('list')}
+                                className={`p-1.5 rounded ${viewMode === 'list' ? 'bg-white dark:bg-gray-700 text-blue-600 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}
+                                title="List View"
                             >
-                                {f === 'all' ? 'All' : f.replace('_', ' ').toUpperCase()}
+                                <List size={18} />
                             </button>
-                        ))}
+                            <button
+                                onClick={() => setViewMode('graph')}
+                                className={`p-1.5 rounded ${viewMode === 'graph' ? 'bg-white dark:bg-gray-700 text-blue-600 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}`}
+                                title="Graph View"
+                            >
+                                <LayoutGrid size={18} />
+                            </button>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label className="block text-sm text-gray-500 dark:text-gray-400 mb-1">Filter</label>
+                        <div className="flex gap-2">
+                            {['all', 'auto_link', 'review', 'reject', 'unique', 'entities'].map((f) => (
+                                <button
+                                    key={f}
+                                    onClick={() => setFilter(f as any)}
+                                    className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${filter === f
+                                        ? 'bg-blue-600 text-white shadow-sm'
+                                        : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                                        }`}
+                                >
+                                    {f === 'all' ? 'All' : f.replace('_', ' ').toUpperCase()}
+                                </button>
+                            ))}
+                        </div>
                     </div>
                 </div>
-            </div>
 
-            {/* Main Content: 3 Column Layout */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Scores List */}
-                <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4 flex flex-col h-[700px]">
-                    <h2 className="text-lg font-semibold text-white mb-4 flex justify-between items-center">
-                        <span>Match Pairs ({totalScores})</span>
-                        <span className="text-xs text-gray-500 font-normal">Page {currentPage}</span>
-                    </h2>
-
-                    {scores.length === 0 ? (
-                        <div className="text-center py-8 text-gray-400">
-                            No matches found
+                {/* Main Content */}
+                {viewMode === 'graph' ? (
+                    <div className="relative h-[700px] bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden group shadow-sm">
+                        <div className={`absolute top-4 left-4 z-50 transition-opacity duration-300 ${!isTuningOpen ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'}`}>
+                            <TuningPanel
+                                onPreview={handlePreview}
+                                onSave={handleSaveConfig}
+                                loading={previewLoading}
+                                isOpen={isTuningOpen}
+                                setIsOpen={setIsTuningOpen}
+                            />
                         </div>
-                    ) : (
-                        <div className="space-y-2 overflow-y-auto flex-1 pr-2">
-                            {scores.map((score: any) => (
-                                score._is_cluster ? (
-                                    <div
-                                        key={score.pair_id}
-                                        onClick={() => setSelectedMatch({ record_a: score._cluster.representative_record, record_b: null, _is_cluster: true, _cluster: score._cluster })}
-                                        className={`p-3 rounded-lg border cursor-pointer transition-all ${selectedMatch?._cluster?.cluster_id === score.pair_id
-                                            ? 'border-blue-500 bg-blue-900/20'
-                                            : 'border-gray-700 bg-gray-900/50 hover:border-gray-600'
-                                            }`}
-                                    >
-                                        <div className="flex items-center justify-between">
-                                            <span className={`px-2 py-0.5 rounded border text-sm font-medium ${score._cluster.size > 1 ? 'bg-purple-900/30 border-purple-700 text-purple-300' : 'bg-gray-800 border-gray-600 text-gray-300'}`}>
-                                                {score._cluster.size > 1 ? `Entity (${score._cluster.size})` : 'Singleton'}
-                                            </span>
-                                        </div>
-                                        <div className="mt-2 text-sm text-white font-medium">
-                                            {formatFieldValue(score._cluster.representative_record.name_norm)}
-                                        </div>
-                                        <div className="text-xs font-mono text-gray-500 truncate">
-                                            ID: {formatFieldValue(score._cluster.representative_record.source_customer_id)}
-                                        </div>
-                                    </div>
-                                ) : score._is_unique ? (
-                                    <div
-                                        key={score.pair_id}
-                                        onClick={() => setSelectedMatch({ record_a: score._record, record_b: null, _is_unique: true })}
-                                        className={`p-3 rounded-lg border cursor-pointer transition-all ${selectedMatch?.record_a?.customer_key === score.pair_id
-                                            ? 'border-blue-500 bg-blue-900/20'
-                                            : 'border-gray-700 bg-gray-900/50 hover:border-gray-600'
-                                            }`}
-                                    >
-                                        <div className="flex items-center justify-between">
-                                            <span className="px-2 py-0.5 rounded border text-sm font-medium bg-gray-800 border-gray-600 text-gray-300">
-                                                Singleton
-                                            </span>
-                                        </div>
-                                        <div className="mt-2 text-sm text-white font-medium">
-                                            {formatFieldValue(score._record.name_norm)}
-                                        </div>
-                                        <div className="text-xs font-mono text-gray-500 truncate">
-                                            ID: {formatFieldValue(score._record.source_customer_id)}
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <div
-                                        key={score.pair_id}
-                                        onClick={() => fetchMatchDetails(score.pair_id)}
-                                        className={`p-3 rounded-lg border cursor-pointer transition-all ${selectedMatch?.pair_id === score.pair_id
-                                            ? 'border-blue-500 bg-blue-900/20'
-                                            : 'border-gray-700 bg-gray-900/50 hover:border-gray-600'
-                                            }`}
-                                    >
-                                        <div className="flex items-center justify-between">
-                                            <div className="flex items-center gap-2">
-                                                <span className={`px-2 py-0.5 rounded border text-sm font-medium ${getScoreBg(score.score)} ${getScoreColor(score.score)}`}>
-                                                    {(score.score * 100).toFixed(0)}%
-                                                </span>
+                        <div className="w-full h-full">
+                            <ClusterGraph
+                                data={previewData}
+                                loading={previewLoading}
+                                loadingMessage={loadingMessage}
+                            />
+                        </div>
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        {/* Scores List */}
+                        <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-4 flex flex-col h-[700px] shadow-sm">
+                            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex justify-between items-center">
+                                <span>Match Pairs ({totalScores})</span>
+                                <span className="text-xs text-gray-500 font-normal">Page {currentPage}</span>
+                            </h2>
+
+                            {scores.length === 0 ? (
+                                <div className="text-center py-8 text-gray-400">
+                                    No matches found
+                                </div>
+                            ) : (
+                                <div className="space-y-2 overflow-y-auto flex-1 pr-2">
+                                    {scores.map((score: any) => (
+                                        score._is_cluster ? (
+                                            <div
+                                                key={score.pair_id}
+                                                onClick={() => setSelectedMatch({ record_a: score._cluster.representative_record, record_b: null, _is_cluster: true, _cluster: score._cluster })}
+                                                className={`p-3 rounded-lg border cursor-pointer transition-all ${selectedMatch?._cluster?.cluster_id === score.pair_id
+                                                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                                                    : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 hover:border-gray-300 dark:hover:border-gray-600'
+                                                    }`}
+                                            >
+                                                <div className="flex items-center justify-between">
+                                                    <span className={`px-2 py-0.5 rounded border text-sm font-medium ${score._cluster.size > 1 ? 'bg-purple-100 dark:bg-purple-900/30 border-purple-200 dark:border-purple-700 text-purple-700 dark:text-purple-300' : 'bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300'}`}>
+                                                        {score._cluster.size > 1 ? `Entity (${score._cluster.size})` : 'Singleton'}
+                                                    </span>
+                                                </div>
+                                                <div className="mt-2 text-sm text-gray-900 dark:text-white font-medium">
+                                                    {getDisplayName(score._cluster.representative_record)}
+                                                </div>
+                                                <div className="text-xs font-mono text-gray-500 truncate">
+                                                    ID: {formatFieldValue(score._cluster.representative_record.source_customer_id)}
+                                                </div>
                                             </div>
-                                            {score.signals_hit.length > 0 && (
-                                                <span className="text-xs text-gray-500">
-                                                    {score.signals_hit.length} signals
-                                                </span>
-                                            )}
+                                        ) : score._is_unique ? (
+                                            <div
+                                                key={score.pair_id}
+                                                onClick={() => setSelectedMatch({ record_a: score._record, record_b: null, _is_unique: true })}
+                                                className={`p-3 rounded-lg border cursor-pointer transition-all ${selectedMatch?.record_a?.customer_key === score.pair_id
+                                                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                                                    : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 hover:border-gray-300 dark:hover:border-gray-600'
+                                                    }`}
+                                            >
+                                                <div className="flex items-center justify-between">
+                                                    <span className="px-2 py-0.5 rounded border text-sm font-medium bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300">
+                                                        Singleton
+                                                    </span>
+                                                </div>
+                                                <div className="mt-2 text-sm text-gray-900 dark:text-white font-medium">
+                                                    {getDisplayName(score._record)}
+                                                </div>
+                                                <div className="text-xs font-mono text-gray-500 truncate">
+                                                    ID: {formatFieldValue(score._record.source_customer_id)}
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div
+                                                key={score.pair_id}
+                                                onClick={() => fetchMatchDetails(score.pair_id)}
+                                                className={`p-3 rounded-lg border cursor-pointer transition-all ${selectedMatch?.pair_id === score.pair_id
+                                                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                                                    : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 hover:border-gray-300 dark:hover:border-gray-600'
+                                                    }`}
+                                            >
+                                                <div className="flex items-center justify-between">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`px-2 py-0.5 rounded border text-sm font-medium ${getScoreBg(score.score)} ${getScoreColor(score.score)}`}>
+                                                            {(score.score * 100).toFixed(0)}%
+                                                        </span>
+                                                    </div>
+                                                    {score.signals_hit.length > 0 && (
+                                                        <span className="text-xs text-gray-500">
+                                                            {score.signals_hit.length} signals
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="mt-2 text-xs font-mono text-gray-500">
+                                                    {score.a_key.slice(0, 8)}... ↔ {score.b_key.slice(0, 8)}...
+                                                </div>
+                                                {score.hard_conflicts.length > 0 && (
+                                                    <div className="mt-1 text-xs text-red-500 dark:text-red-400">
+                                                        ⚠️ {score.hard_conflicts.length} conflict(s)
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* Pagination Controls */}
+                            <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between">
+                                <button
+                                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                                    disabled={currentPage === 1}
+                                    className="px-3 py-1.5 text-sm rounded bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 disabled:opacity-50 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                                >
+                                    Previous
+                                </button>
+                                <span className="text-xs text-gray-500">
+                                    {((currentPage - 1) * pageSize) + 1} - {Math.min(currentPage * pageSize, totalScores)} of {totalScores}
+                                </span>
+                                <button
+                                    onClick={() => setCurrentPage(prev => (prev * pageSize < totalScores) ? prev + 1 : prev)}
+                                    disabled={currentPage * pageSize >= totalScores}
+                                    className="px-3 py-1.5 text-sm rounded bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 disabled:opacity-50 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                                >
+                                    Next
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Right Column: Match Details */}
+                        <div className="lg:col-span-2 space-y-6">
+                            {!selectedMatch ? (
+                                <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-12 text-center text-gray-500 dark:text-gray-400 shadow-sm">
+                                    Select a record to view details
+                                </div>
+                            ) : isLoadingDetails ? (
+                                <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-12 text-center text-gray-500 dark:text-gray-400 shadow-sm">
+                                    Loading details...
+                                </div>
+                            ) : selectedMatch._is_unique ? (
+                                <div className="space-y-6">
+                                    <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-6 shadow-sm">
+                                        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Singleton Entity</h2>
+                                        <p className="text-gray-500 dark:text-gray-400 mb-6">This record has no high-confidence matches in the current run.</p>
+                                        <div className="max-w-xl">
+                                            <RecordCard title="Single Record" data={selectedMatch.record_a} color="blue" />
                                         </div>
-                                        <div className="mt-2 text-xs font-mono text-gray-500">
-                                            {score.a_key.slice(0, 8)}... ↔ {score.b_key.slice(0, 8)}...
+                                    </div>
+                                </div>
+                            ) : selectedMatch._is_cluster ? (
+                                <div className="space-y-6">
+                                    <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-6 shadow-sm">
+                                        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">Resolved Entity</h2>
+                                        <div className="flex gap-2 mb-6">
+                                            <span className="px-2 py-1 bg-purple-100 dark:bg-purple-900/40 border border-purple-200 dark:border-purple-700 text-purple-700 dark:text-purple-300 rounded text-xs">
+                                                Cluster ID: {selectedMatch._cluster.cluster_id.slice(0, 8)}...
+                                            </span>
+                                            <span className="px-2 py-1 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded text-xs">
+                                                Size: {selectedMatch._cluster.size}
+                                            </span>
                                         </div>
-                                        {score.hard_conflicts.length > 0 && (
-                                            <div className="mt-1 text-xs text-red-400">
-                                                ⚠️ {score.hard_conflicts.length} conflict(s)
+
+                                        <div className="mb-8">
+                                            <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-3 uppercase tracking-wider">Representative / Golden Record</h3>
+                                            <div className="max-w-xl">
+                                                <RecordCard title="Representative Record" data={selectedMatch.record_a} color="blue" />
+                                            </div>
+                                        </div>
+
+                                        {selectedMatch._cluster.members && selectedMatch._cluster.members.length > 0 && (
+                                            <div>
+                                                <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-3 uppercase tracking-wider">
+                                                    Member Records ({selectedMatch._cluster.members.length})
+                                                </h3>
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                    {selectedMatch._cluster.members.map((member: any, idx: number) => (
+                                                        <div key={idx} className="scale-90 origin-top-left opacity-90 hover:scale-100 hover:opacity-100 transition-all">
+                                                            <RecordCard
+                                                                title={`Member ${idx + 1}`}
+                                                                data={member}
+                                                                color="purple"
+                                                            />
+                                                        </div>
+                                                    ))}
+                                                </div>
                                             </div>
                                         )}
                                     </div>
-                                )
-                            ))}
+                                </div>
+                            ) : (
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <RecordCard title="Record A" data={selectedMatch.record_a} color="blue" />
+                                    <RecordCard title="Record B" data={selectedMatch.record_b} color="purple" />
+                                </div>
+                            )}
                         </div>
-                    )}
-
-                    {/* Pagination Controls */}
-                    <div className="mt-4 pt-4 border-t border-gray-700 flex items-center justify-between">
-                        <button
-                            onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                            disabled={currentPage === 1}
-                            className="px-3 py-1.5 text-sm rounded bg-gray-800 border border-gray-600 text-gray-300 disabled:opacity-50 hover:bg-gray-700 transition-colors"
-                        >
-                            Previous
-                        </button>
-                        <span className="text-xs text-gray-500">
-                            {((currentPage - 1) * pageSize) + 1} - {Math.min(currentPage * pageSize, totalScores)} of {totalScores}
-                        </span>
-                        <button
-                            onClick={() => setCurrentPage(prev => (prev * pageSize < totalScores) ? prev + 1 : prev)}
-                            disabled={currentPage * pageSize >= totalScores}
-                            className="px-3 py-1.5 text-sm rounded bg-gray-800 border border-gray-600 text-gray-300 disabled:opacity-50 hover:bg-gray-700 transition-colors"
-                        >
-                            Next
-                        </button>
                     </div>
-                </div>
+                )}
 
-                {/* Right Column: Match Details */}
-                <div className="lg:col-span-2 space-y-6">
-                    {!selectedMatch ? (
-                        <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-12 text-center text-gray-400">
-                            Select a record to view details
+                {/* Evidence Detail (Hide for unique/cluster) */}
+                {selectedMatch && !selectedMatch._is_unique && !selectedMatch._is_cluster && (
+                    <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-6 shadow-sm">
+                        <div className="flex items-center justify-between mb-4">
+                            <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Match Evidence</h2>
+                            <button
+                                onClick={handleAskReferee}
+                                disabled={isExplaining}
+                                className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors shadow-lg shadow-indigo-900/20"
+                            >
+                                {isExplaining ? (
+                                    <>
+                                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                        Analyzing...
+                                    </>
+                                ) : (
+                                    <>
+                                        ✨ Ask Referee
+                                    </>
+                                )}
+                            </button>
                         </div>
-                    ) : isLoadingDetails ? (
-                        <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-12 text-center text-gray-400">
-                            Loading details...
-                        </div>
-                    ) : selectedMatch._is_unique ? (
-                        <div className="space-y-6">
-                            <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-6">
-                                <h2 className="text-xl font-semibold text-white mb-4">Singleton Entity</h2>
-                                <p className="text-gray-400 mb-6">This record has no high-confidence matches in the current run.</p>
-                                <div className="max-w-xl">
-                                    <RecordCard title="Single Record" data={selectedMatch.record_a} color="blue" />
+
+                        {explanation && (
+                            <div className="mb-6 animate-in fade-in slide-in-from-top-4 duration-500">
+                                <div className={`p-4 rounded-xl border ${explanation.judgement === 'MATCH' ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800' :
+                                    explanation.judgement === 'NO_MATCH' ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800' :
+                                        'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800'
+                                    }`}>
+                                    <div className="flex items-center gap-3 mb-2">
+                                        <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wider ${explanation.judgement === 'MATCH' ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-700' :
+                                            explanation.judgement === 'NO_MATCH' ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-700' :
+                                                'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-300 border border-yellow-200 dark:border-yellow-700'
+                                            }`}>
+                                            {explanation.judgement.replace('_', ' ')}
+                                        </span>
+                                        <span className="text-xs text-gray-500 font-mono">
+                                            Model: {explanation.meta?.model}
+                                        </span>
+                                    </div>
+                                    <p className="text-gray-700 dark:text-gray-300 text-sm leading-relaxed">
+                                        {explanation.explanation}
+                                    </p>
                                 </div>
                             </div>
-                        </div>
-                    ) : selectedMatch._is_cluster ? (
-                        <div className="space-y-6">
-                            <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-6">
-                                <h2 className="text-xl font-semibold text-white mb-2">Resolved Entity</h2>
-                                <div className="flex gap-2 mb-6">
-                                    <span className="px-2 py-1 bg-purple-900/40 border border-purple-700 text-purple-300 rounded text-xs">
-                                        Cluster ID: {selectedMatch._cluster.cluster_id.slice(0, 8)}...
-                                    </span>
-                                    <span className="px-2 py-1 bg-gray-800 border border-gray-700 text-gray-300 rounded text-xs">
-                                        Size: {selectedMatch._cluster.size}
+                        )}
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            {/* Score Gauge */}
+                            <div className="flex items-center justify-center">
+                                <div className={`w-32 h-32 rounded-full border-8 flex items-center justify-center ${getScoreBg(selectedMatch.score)}`}>
+                                    <div className="text-center">
+                                        <span className={`text-3xl font-bold ${getScoreColor(selectedMatch.score)}`}>
+                                            {(selectedMatch.score * 100).toFixed(0)}%
+                                        </span>
+                                        <p className="text-sm text-gray-500 dark:text-gray-400">Score</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Signals & Conflicts */}
+                            <div className="space-y-4">
+                                <div>
+                                    <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Decision</h3>
+                                    <span className={`px-3 py-1.5 rounded-lg text-sm ${selectedMatch.decision === 'AUTO_LINK' ? 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-400' :
+                                        selectedMatch.decision === 'REVIEW' ? 'bg-yellow-100 dark:bg-yellow-900/50 text-yellow-700 dark:text-yellow-400' :
+                                            selectedMatch.decision === 'REJECT' ? 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-400' :
+                                                'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
+                                        }`}>
+                                        {selectedMatch.decision || 'Pending'}
                                     </span>
                                 </div>
 
-                                <div className="mb-8">
-                                    <h3 className="text-sm font-medium text-gray-400 mb-3 uppercase tracking-wider">Representative / Golden Record</h3>
-                                    <div className="max-w-xl">
-                                        <RecordCard title="Representative Record" data={selectedMatch.record_a} color="blue" />
+                                <div>
+                                    <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Signals Hit</h3>
+                                    <div className="flex flex-wrap gap-2">
+                                        {selectedMatch.signals_hit?.map((signal: string) => (
+                                            <span key={signal} className="px-2 py-1 bg-purple-100 dark:bg-purple-900/30 border border-purple-200 dark:border-purple-700 text-purple-700 dark:text-purple-400 rounded text-xs">
+                                                {signal}
+                                            </span>
+                                        ))}
+                                        {(!selectedMatch.signals_hit || selectedMatch.signals_hit.length === 0) && (
+                                            <span className="text-gray-500 text-sm">No signals</span>
+                                        )}
                                     </div>
                                 </div>
 
-                                {selectedMatch._cluster.members && selectedMatch._cluster.members.length > 0 && (
+                                {selectedMatch.hard_conflicts?.length > 0 && (
                                     <div>
-                                        <h3 className="text-sm font-medium text-gray-400 mb-3 uppercase tracking-wider">
-                                            Member Records ({selectedMatch._cluster.members.length})
-                                        </h3>
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                            {selectedMatch._cluster.members.map((member: any, idx: number) => (
-                                                <div key={idx} className="scale-90 origin-top-left opacity-90 hover:scale-100 hover:opacity-100 transition-all">
-                                                    <RecordCard
-                                                        title={`Member ${idx + 1}`}
-                                                        data={member}
-                                                        color="purple"
-                                                    />
-                                                </div>
+                                        <h3 className="text-sm font-medium text-red-500 dark:text-red-400 mb-2">⚠️ Hard Conflicts</h3>
+                                        <div className="flex flex-wrap gap-2">
+                                            {selectedMatch.hard_conflicts.map((conflict: string) => (
+                                                <span key={conflict} className="px-2 py-1 bg-red-100 dark:bg-red-900/30 border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 rounded text-xs">
+                                                    {conflict}
+                                                </span>
                                             ))}
                                         </div>
                                     </div>
                                 )}
-                            </div>
-                        </div>
-                    ) : (
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <RecordCard title="Record A" data={selectedMatch.record_a} color="blue" />
-                            <RecordCard title="Record B" data={selectedMatch.record_b} color="purple" />
-                        </div>
-                    )}
-                </div>
-            </div >
 
-            {/* Evidence Detail (Hide for unique/cluster) */}
-            {selectedMatch && !selectedMatch._is_unique && !selectedMatch._is_cluster && (
-                <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-6">
-                    <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-xl font-semibold text-white">Match Evidence</h2>
-                        <button
-                            onClick={handleAskReferee}
-                            disabled={isExplaining}
-                            className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors shadow-lg shadow-indigo-900/20"
-                        >
-                            {isExplaining ? (
-                                <>
-                                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                    Analyzing...
-                                </>
-                            ) : (
-                                <>
-                                    ✨ Ask Referee
-                                </>
-                            )}
-                        </button>
-                    </div>
-
-                    {explanation && (
-                        <div className="mb-6 animate-in fade-in slide-in-from-top-4 duration-500">
-                            <div className={`p-4 rounded-xl border ${explanation.judgement === 'MATCH' ? 'bg-green-900/20 border-green-800' :
-                                explanation.judgement === 'NO_MATCH' ? 'bg-red-900/20 border-red-800' :
-                                    'bg-yellow-900/20 border-yellow-800'
-                                }`}>
-                                <div className="flex items-center gap-3 mb-2">
-                                    <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wider ${explanation.judgement === 'MATCH' ? 'bg-green-900/40 text-green-300 border border-green-700' :
-                                        explanation.judgement === 'NO_MATCH' ? 'bg-red-900/40 text-red-300 border border-red-700' :
-                                            'bg-yellow-900/40 text-yellow-300 border border-yellow-700'
-                                        }`}>
-                                        {explanation.judgement.replace('_', ' ')}
-                                    </span>
-                                    <span className="text-xs text-gray-500 font-mono">
-                                        Model: {explanation.meta?.model}
-                                    </span>
-                                </div>
-                                <p className="text-gray-300 text-sm leading-relaxed">
-                                    {explanation.explanation}
-                                </p>
-                            </div>
-                        </div>
-                    )}
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {/* Score Gauge */}
-                        <div className="flex items-center justify-center">
-                            <div className={`w-32 h-32 rounded-full border-8 flex items-center justify-center ${getScoreBg(selectedMatch.score)}`}>
-                                <div className="text-center">
-                                    <span className={`text-3xl font-bold ${getScoreColor(selectedMatch.score)}`}>
-                                        {(selectedMatch.score * 100).toFixed(0)}%
-                                    </span>
-                                    <p className="text-sm text-gray-400">Score</p>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Signals & Conflicts */}
-                        <div className="space-y-4">
-                            <div>
-                                <h3 className="text-sm font-medium text-gray-400 mb-2">Decision</h3>
-                                <span className={`px-3 py-1.5 rounded-lg text-sm ${selectedMatch.decision === 'AUTO_LINK' ? 'bg-emerald-900/50 text-emerald-400' :
-                                    selectedMatch.decision === 'REVIEW' ? 'bg-yellow-900/50 text-yellow-400' :
-                                        selectedMatch.decision === 'REJECT' ? 'bg-red-900/50 text-red-400' :
-                                            'bg-gray-700 text-gray-400'
-                                    }`}>
-                                    {selectedMatch.decision || 'Pending'}
-                                </span>
-                            </div>
-
-                            <div>
-                                <h3 className="text-sm font-medium text-gray-400 mb-2">Signals Hit</h3>
-                                <div className="flex flex-wrap gap-2">
-                                    {selectedMatch.signals_hit?.map((signal: string) => (
-                                        <span key={signal} className="px-2 py-1 bg-purple-900/30 border border-purple-700 text-purple-400 rounded text-xs">
-                                            {signal}
-                                        </span>
-                                    ))}
-                                    {(!selectedMatch.signals_hit || selectedMatch.signals_hit.length === 0) && (
-                                        <span className="text-gray-500 text-sm">No signals</span>
-                                    )}
-                                </div>
-                            </div>
-
-                            {selectedMatch.hard_conflicts?.length > 0 && (
-                                <div>
-                                    <h3 className="text-sm font-medium text-red-400 mb-2">⚠️ Hard Conflicts</h3>
-                                    <div className="flex flex-wrap gap-2">
-                                        {selectedMatch.hard_conflicts.map((conflict: string) => (
-                                            <span key={conflict} className="px-2 py-1 bg-red-900/30 border border-red-700 text-red-400 rounded text-xs">
-                                                {conflict}
-                                            </span>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Related Matches (Transitivity) */}
-                            {selectedMatch && !selectedMatch._is_unique && !selectedMatch._is_cluster && (
-                                <div className="pt-4 border-t border-gray-700">
-                                    <h3 className="text-sm font-medium text-gray-400 mb-2">🔗 Network Context</h3>
-                                    {getRelatedMatches(selectedMatch.pair_id, selectedMatch.record_a, selectedMatch.record_b).length > 0 ? (
-                                        <div className="space-y-2">
-                                            {getRelatedMatches(selectedMatch.pair_id, selectedMatch.record_a, selectedMatch.record_b).slice(0, 3).map((rel: any) => (
-                                                <div key={rel.pair_id}
-                                                    className="p-2 bg-gray-900/40 rounded border border-gray-700 text-xs flex justify-between items-center cursor-pointer hover:border-gray-500 transition-colors"
-                                                    onClick={() => fetchMatchDetails(rel.pair_id)}
-                                                >
-                                                    <span className="text-gray-300 font-mono">{rel.pair_id.slice(0, 8)}...</span>
-                                                    <span className={`font-bold ${getScoreColor(rel.score)}`}>{(rel.score * 100).toFixed(0)}%</span>
-                                                </div>
-                                            ))}
-                                            <p className="text-xs text-gray-500 mt-1">
-                                                + {getRelatedMatches(selectedMatch.pair_id, selectedMatch.record_a, selectedMatch.record_b).length - 3 > 0 ?
-                                                    `${getRelatedMatches(selectedMatch.pair_id, selectedMatch.record_a, selectedMatch.record_b).length - 3} more links` :
-                                                    'Transitive links found'}
-                                            </p>
-                                        </div>
-                                    ) : (
-                                        <p className="text-xs text-gray-500">No direct transitive matches found in this view.</p>
-                                    )}
-                                </div>
-                            )}
-                        </div>
-                    </div>
-
-                    {/* Evidence Table */}
-                    {selectedMatch.evidence && selectedMatch.evidence.length > 0 && (
-                        <div className="mt-6 pt-6 border-t border-gray-700">
-                            <h3 className="text-lg font-medium text-white mb-3">Field Comparison</h3>
-                            <div className="overflow-x-auto">
-                                <table className="w-full">
-                                    <thead>
-                                        <tr className="text-left text-gray-400 text-sm border-b border-gray-700">
-                                            <th className="pb-2 pl-4">Field</th>
-                                            <th className="pb-2">Value A</th>
-                                            <th className="pb-2">Value B</th>
-                                            <th className="pb-2">Similarity</th>
-                                            <th className="pb-2">Type</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="text-sm">
-                                        {selectedMatch.evidence.map((ev: any, idx: number) => (
-                                            <tr key={idx} className="border-b border-gray-800 hover:bg-gray-800/30 transition-colors">
-                                                <td className="py-3 pl-4 font-medium text-white capitalize">{ev.field.replace('_norm', '').replace('_', ' ')}</td>
-                                                <td className="py-3 text-blue-300 font-mono text-xs">
-                                                    {formatFieldValue(ev.value_a)}
-                                                </td>
-                                                <td className="py-3 text-purple-300 font-mono text-xs">
-                                                    {formatFieldValue(ev.value_b)}
-                                                </td>
-                                                <td className="py-3">
-                                                    <div className="flex items-center gap-2">
-                                                        <div className="w-16 h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                                                            <div
-                                                                className={`h-full rounded-full ${ev.similarity >= 0.99 ? 'bg-emerald-500' :
-                                                                    ev.similarity >= 0.8 ? 'bg-emerald-400' :
-                                                                        ev.similarity >= 0.6 ? 'bg-yellow-400' : 'bg-red-400'
-                                                                    }`}
-                                                                style={{ width: `${(ev.similarity || 0) * 100}%` }}
-                                                            />
-                                                        </div>
-                                                        <span className={`text-xs font-medium ${ev.similarity >= 0.8 ? 'text-emerald-400' :
-                                                            ev.similarity >= 0.5 ? 'text-yellow-400' : 'text-red-400'
-                                                            }`}>
-                                                            {((ev.similarity || 0) * 100).toFixed(0)}%
-                                                        </span>
+                                {/* Related Matches (Transitivity) */}
+                                {selectedMatch && !selectedMatch._is_unique && !selectedMatch._is_cluster && (
+                                    <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+                                        <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">🔗 Network Context</h3>
+                                        {getRelatedMatches(selectedMatch.pair_id, selectedMatch.record_a, selectedMatch.record_b).length > 0 ? (
+                                            <div className="space-y-2">
+                                                {getRelatedMatches(selectedMatch.pair_id, selectedMatch.record_a, selectedMatch.record_b).slice(0, 3).map((rel: any) => (
+                                                    <div key={rel.pair_id}
+                                                        className="p-2 bg-gray-50 dark:bg-gray-900/40 rounded border border-gray-200 dark:border-gray-700 text-xs flex justify-between items-center cursor-pointer hover:border-gray-300 dark:hover:border-gray-500 transition-colors"
+                                                        onClick={() => fetchMatchDetails(rel.pair_id)}
+                                                    >
+                                                        <span className="text-gray-600 dark:text-gray-300 font-mono">{rel.pair_id.slice(0, 8)}...</span>
+                                                        <span className={`font-bold ${getScoreColor(rel.score)}`}>{(rel.score * 100).toFixed(0)}%</span>
                                                     </div>
-                                                </td>
-                                                <td className="py-3">
-                                                    <span className={`inline-flex items-center px-2 py-1 rounded text-xs border ${ev.comparison_type === 'exact_match' ? 'bg-emerald-900/30 border-emerald-800 text-emerald-400' :
-                                                        ev.comparison_type === 'fuzzy_match' ? 'bg-blue-900/30 border-blue-800 text-blue-400' :
-                                                            ev.comparison_type === 'low_similarity' ? 'bg-yellow-900/30 border-yellow-800 text-yellow-400' :
-                                                                ev.comparison_type === 'mismatch' ? 'bg-red-900/30 border-red-800 text-red-400' :
-                                                                    'bg-gray-800 border-gray-700 text-gray-400'
-                                                        }`}>
-                                                        {ev.comparison_type === 'exact_match' && <CheckCircle size={12} className="mr-1" />}
-                                                        {ev.comparison_type === 'fuzzy_match' && <Search size={12} className="mr-1" />}
-                                                        {ev.comparison_type === 'mismatch' && <XCircle size={12} className="mr-1" />}
-                                                        {ev.comparison_type?.replace('_', ' ') || '—'}
-                                                    </span>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
+                                                ))}
+                                                <p className="text-xs text-gray-500 mt-1">
+                                                    + {getRelatedMatches(selectedMatch.pair_id, selectedMatch.record_a, selectedMatch.record_b).length - 3 > 0 ?
+                                                        `${getRelatedMatches(selectedMatch.pair_id, selectedMatch.record_a, selectedMatch.record_b).length - 3} more links` :
+                                                        'Transitive links found'}
+                                                </p>
+                                            </div>
+                                        ) : (
+                                            <p className="text-xs text-gray-500">No direct transitive matches found in this view.</p>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         </div>
-                    )}
 
-                    {/* Related Matches (Cluster Context) */}
-                    <div className="mt-8 pt-6 border-t border-gray-700">
-                        <h3 className="text-lg font-medium text-white mb-3">Related Matches (Cluster Context)</h3>
-
-                        {getRelatedMatches(selectedMatch.pair_id, selectedMatch.record_a, selectedMatch.record_b).length === 0 ? (
-                            <div className="text-gray-500 text-sm italic">No other related records found in this run.</div>
-                        ) : (
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                {getRelatedMatches(selectedMatch.pair_id, selectedMatch.record_a, selectedMatch.record_b).map(related => (
-                                    <div
-                                        key={related.pair_id}
-                                        onClick={() => fetchMatchDetails(related.pair_id)}
-                                        className="p-3 bg-gray-900 border border-gray-700 rounded-lg cursor-pointer hover:border-gray-500 transition-colors"
-                                    >
-                                        <div className="flex justify-between items-center mb-2">
-                                            <span className={`px-2 py-0.5 rounded text-xs font-medium ${getScoreBg(related.score)} ${getScoreColor(related.score)}`}>
-                                                {(related.score * 100).toFixed(0)}%
-                                            </span>
-                                            <span className="text-xs text-blue-400 hover:underline">
-                                                View Pair
-                                            </span>
-                                        </div>
-                                        <div className="text-xs font-mono text-gray-400 truncate mb-1" title={related.a_key}>
-                                            A: {related.a_key.slice(0, 15)}...
-                                        </div>
-                                        <div className="text-xs font-mono text-gray-400 truncate" title={related.b_key}>
-                                            B: {related.b_key.slice(0, 15)}...
-                                        </div>
-                                    </div>
-                                ))}
+                        {/* Evidence Table */}
+                        {selectedMatch.evidence && selectedMatch.evidence.length > 0 && (
+                            <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
+                                <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-3">Field Comparison</h3>
+                                <div className="overflow-x-auto">
+                                    <table className="w-full">
+                                        <thead>
+                                            <tr className="text-left text-gray-500 dark:text-gray-400 text-sm border-b border-gray-200 dark:border-gray-700">
+                                                <th className="pb-2 pl-4">Field</th>
+                                                <th className="pb-2">Value A</th>
+                                                <th className="pb-2">Value B</th>
+                                                <th className="pb-2">Similarity</th>
+                                                <th className="pb-2">Type</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="text-sm">
+                                            {selectedMatch.evidence.map((ev: any, idx: number) => (
+                                                <tr key={idx} className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors">
+                                                    <td className="py-3 pl-4 font-medium text-gray-900 dark:text-white capitalize">{ev.field.replace('_norm', '').replace('_', ' ')}</td>
+                                                    <td className="py-3 text-blue-600 dark:text-blue-300 font-mono text-xs">
+                                                        {formatFieldValue(ev.value_a)}
+                                                    </td>
+                                                    <td className="py-3 text-purple-600 dark:text-purple-300 font-mono text-xs">
+                                                        {formatFieldValue(ev.value_b)}
+                                                    </td>
+                                                    <td className="py-3">
+                                                        <div className="flex items-center gap-2">
+                                                            <div className="w-16 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                                                                <div
+                                                                    className={`h-full rounded-full ${ev.similarity >= 0.99 ? 'bg-emerald-500' :
+                                                                        ev.similarity >= 0.8 ? 'bg-emerald-400' :
+                                                                            ev.similarity >= 0.6 ? 'bg-yellow-400' : 'bg-red-400'
+                                                                        }`}
+                                                                    style={{ width: `${(ev.similarity || 0) * 100}%` }}
+                                                                />
+                                                            </div>
+                                                            <span className={`text-xs font-medium ${ev.similarity >= 0.8 ? 'text-emerald-600 dark:text-emerald-400' :
+                                                                ev.similarity >= 0.5 ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-600 dark:text-red-400'
+                                                                }`}>
+                                                                {((ev.similarity || 0) * 100).toFixed(0)}%
+                                                            </span>
+                                                        </div>
+                                                    </td>
+                                                    <td className="py-3">
+                                                        <span className={`inline-flex items-center px-2 py-1 rounded text-xs border ${ev.comparison_type === 'exact_match' ? 'bg-emerald-100 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400' :
+                                                            ev.comparison_type === 'fuzzy_match' ? 'bg-blue-100 dark:bg-blue-900/30 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-400' :
+                                                                ev.comparison_type === 'low_similarity' ? 'bg-yellow-100 dark:bg-yellow-900/30 border-yellow-200 dark:border-yellow-800 text-yellow-700 dark:text-yellow-400' :
+                                                                    ev.comparison_type === 'mismatch' ? 'bg-red-100 dark:bg-red-900/30 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400' :
+                                                                        'bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400'
+                                                            }`}>
+                                                            {ev.comparison_type === 'exact_match' && <CheckCircle size={12} className="mr-1" />}
+                                                            {ev.comparison_type === 'fuzzy_match' && <Search size={12} className="mr-1" />}
+                                                            {ev.comparison_type === 'mismatch' && <XCircle size={12} className="mr-1" />}
+                                                            {ev.comparison_type?.replace('_', ' ') || '—'}
+                                                        </span>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
                         )}
+
+                        {/* Related Matches (Cluster Context) */}
+                        <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
+                            <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-3">Related Matches (Cluster Context)</h3>
+
+                            {getRelatedMatches(selectedMatch.pair_id, selectedMatch.record_a, selectedMatch.record_b).length === 0 ? (
+                                <div className="text-gray-500 dark:text-gray-400 text-sm italic">No other related records found in this run.</div>
+                            ) : (
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                    {getRelatedMatches(selectedMatch.pair_id, selectedMatch.record_a, selectedMatch.record_b).map(related => (
+                                        <div
+                                            key={related.pair_id}
+                                            onClick={() => fetchMatchDetails(related.pair_id)}
+                                            className="p-3 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg cursor-pointer hover:border-gray-300 dark:hover:border-gray-500 transition-colors"
+                                        >
+                                            <div className="flex justify-between items-center mb-2">
+                                                <span className={`px-2 py-0.5 rounded text-xs font-medium ${getScoreBg(related.score)} ${getScoreColor(related.score)}`}>
+                                                    {(related.score * 100).toFixed(0)}%
+                                                </span>
+                                                <span className="text-xs text-blue-600 dark:text-blue-400 hover:underline">
+                                                    View Pair
+                                                </span>
+                                            </div>
+                                            <div className="text-xs font-mono text-gray-500 dark:text-gray-400 truncate mb-1" title={related.a_key}>
+                                                A: {related.a_key.slice(0, 15)}...
+                                            </div>
+                                            <div className="text-xs font-mono text-gray-500 dark:text-gray-400 truncate" title={related.b_key}>
+                                                B: {related.b_key.slice(0, 15)}...
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
                     </div>
+                )}
+            </div >
+
+            {/* Executive Report Modal */}
+            {
+                isReportOpen && reportData && (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setIsReportOpen(false)}>
+                        <div
+                            className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            {/* Modal Header */}
+                            <div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-6 text-white">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <h2 className="text-2xl font-bold flex items-center gap-3">
+                                            <FileText size={28} />
+                                            Identity Resolution Report
+                                        </h2>
+                                        <p className="text-indigo-200 mt-1 text-sm">
+                                            Executive Summary • Generated {reportData.generatedAt}
+                                        </p>
+                                    </div>
+                                    <button
+                                        onClick={() => setIsReportOpen(false)}
+                                        className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+                                    >
+                                        <XCircle size={24} />
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Modal Content */}
+                            <div className="p-6 overflow-y-auto max-h-[calc(90vh-180px)]">
+                                {/* KPI Cards */}
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+                                    <div className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/30 dark:to-blue-800/30 p-4 rounded-xl border border-blue-200 dark:border-blue-700">
+                                        <div className="flex items-center gap-2 text-blue-600 dark:text-blue-400 mb-2">
+                                            <Users size={18} />
+                                            <span className="text-xs font-semibold uppercase tracking-wide">Total Records</span>
+                                        </div>
+                                        <div className="text-3xl font-bold text-blue-700 dark:text-blue-300">{reportData.summary.totalRecords.toLocaleString()}</div>
+                                    </div>
+
+                                    <div className="bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900/30 dark:to-purple-800/30 p-4 rounded-xl border border-purple-200 dark:border-purple-700">
+                                        <div className="flex items-center gap-2 text-purple-600 dark:text-purple-400 mb-2">
+                                            <Building2 size={18} />
+                                            <span className="text-xs font-semibold uppercase tracking-wide">Entities Found</span>
+                                        </div>
+                                        <div className="text-3xl font-bold text-purple-700 dark:text-purple-300">{reportData.summary.totalEntities.toLocaleString()}</div>
+                                    </div>
+
+                                    <div className="bg-gradient-to-br from-amber-50 to-amber-100 dark:from-amber-900/30 dark:to-amber-800/30 p-4 rounded-xl border border-amber-200 dark:border-amber-700">
+                                        <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 mb-2">
+                                            <UserCheck size={18} />
+                                            <span className="text-xs font-semibold uppercase tracking-wide">Unique (Singleton)</span>
+                                        </div>
+                                        <div className="text-3xl font-bold text-amber-700 dark:text-amber-300">{reportData.summary.totalUniques.toLocaleString()}</div>
+                                    </div>
+
+                                    <div className="bg-gradient-to-br from-emerald-50 to-emerald-100 dark:from-emerald-900/30 dark:to-emerald-800/30 p-4 rounded-xl border border-emerald-200 dark:border-emerald-700">
+                                        <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 mb-2">
+                                            <TrendingUp size={18} />
+                                            <span className="text-xs font-semibold uppercase tracking-wide">Dedup Rate</span>
+                                        </div>
+                                        <div className="text-3xl font-bold text-emerald-700 dark:text-emerald-300">{reportData.summary.deduplicationRate}%</div>
+                                    </div>
+                                </div>
+
+                                {/* Top Entities & Unique Records */}
+                                <div className="grid md:grid-cols-2 gap-6">
+                                    {/* Top Merged Entities */}
+                                    <div>
+                                        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+                                            <Building2 size={18} className="text-purple-500" />
+                                            Top Merged Entities
+                                        </h3>
+                                        <div className="space-y-2">
+                                            {reportData.topClusters.map((cluster: any, idx: number) => (
+                                                <div key={idx} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+                                                    <div className="flex items-center gap-3">
+                                                        <span className="w-6 h-6 rounded-full bg-purple-100 dark:bg-purple-900/50 text-purple-600 dark:text-purple-400 text-xs flex items-center justify-center font-bold">
+                                                            {idx + 1}
+                                                        </span>
+                                                        <span className="text-gray-900 dark:text-white font-medium truncate max-w-[180px]">{cluster.name}</span>
+                                                    </div>
+                                                    <span className="px-2 py-1 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 rounded text-xs font-semibold">
+                                                        {cluster.size} records
+                                                    </span>
+                                                </div>
+                                            ))}
+                                            {reportData.topClusters.length === 0 && (
+                                                <div className="text-gray-500 text-sm italic">No merged entities found</div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* Unique Records Sample */}
+                                    <div>
+                                        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+                                            <UserCheck size={18} className="text-amber-500" />
+                                            Unique Records (Singletons)
+                                        </h3>
+                                        <div className="space-y-2 max-h-[200px] overflow-y-auto">
+                                            {reportData.uniqueRecords.map((record: any, idx: number) => (
+                                                <div key={idx} className="flex items-center justify-between p-2 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+                                                    <span className="text-gray-700 dark:text-gray-300 text-sm truncate max-w-[200px]">{record.name}</span>
+                                                    <span className="text-xs font-mono text-gray-500 truncate max-w-[100px]">{record.id}</span>
+                                                </div>
+                                            ))}
+                                            {reportData.uniqueRecords.length === 0 && (
+                                                <div className="text-gray-500 text-sm italic">All records have matches</div>
+                                            )}
+                                        </div>
+                                        <div className="mt-2 text-xs text-gray-500">
+                                            Showing {reportData.uniqueRecords.length} of {reportData.summary.totalUniques} unique records
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Modal Footer */}
+                            <div className="border-t border-gray-200 dark:border-gray-700 p-4 bg-gray-50 dark:bg-gray-800/50 flex justify-between items-center">
+                                <div className="text-xs text-gray-500">
+                                    Run ID: {reportData.runId.slice(0, 12)}...
+                                </div>
+                                <div className="flex gap-3">
+                                    <button
+                                        onClick={() => {
+                                            // Export as Excel using xlsx library
+                                            import('xlsx').then((XLSX) => {
+                                                // Create workbook
+                                                const wb = XLSX.utils.book_new();
+
+                                                // Summary sheet
+                                                const summaryData = [
+                                                    ['Identity Resolution Report'],
+                                                    ['Generated:', reportData.generatedAt],
+                                                    ['Run ID:', reportData.runId],
+                                                    [],
+                                                    ['Summary'],
+                                                    ['Total Records', reportData.summary.totalRecords],
+                                                    ['Entities Found', reportData.summary.totalEntities],
+                                                    ['Unique (Singleton)', reportData.summary.totalUniques],
+                                                    ['Deduplication Rate', `${reportData.summary.deduplicationRate}%`],
+                                                ];
+                                                const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
+                                                XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+
+                                                // Top Merged Entities sheet
+                                                const entitiesData = [
+                                                    ['Rank', 'Entity Name', 'Number of Records'],
+                                                    ...reportData.topClusters.map((c: any, idx: number) => [
+                                                        idx + 1,
+                                                        c.name,
+                                                        c.size
+                                                    ])
+                                                ];
+                                                const wsEntities = XLSX.utils.aoa_to_sheet(entitiesData);
+                                                XLSX.utils.book_append_sheet(wb, wsEntities, 'Top Merged Entities');
+
+                                                // Unique Records sheet
+                                                const uniquesData = [
+                                                    ['Name', 'Customer ID'],
+                                                    ...reportData.uniqueRecords.map((r: any) => [
+                                                        r.name,
+                                                        r.id
+                                                    ])
+                                                ];
+                                                const wsUniques = XLSX.utils.aoa_to_sheet(uniquesData);
+                                                XLSX.utils.book_append_sheet(wb, wsUniques, 'Unique Records');
+
+                                                // Generate Excel file
+                                                XLSX.writeFile(wb, `identity-report-${reportData.runId.slice(0, 8)}.xlsx`);
+                                            });
+                                        }}
+                                        className="flex items-center gap-2 px-4 py-2 bg-emerald-600 dark:bg-emerald-700 text-white rounded-lg hover:bg-emerald-500 dark:hover:bg-emerald-600 transition-colors text-sm font-medium"
+                                    >
+                                        <Download size={16} />
+                                        Export Excel
+                                    </button>
+                                    <button
+                                        onClick={() => setIsReportOpen(false)}
+                                        className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-500 transition-colors text-sm font-medium"
+                                    >
+                                        Close Report
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+        </>
+    );
+}
+
+// Wrapper with Suspense for useSearchParams compatibility
+export default function ExplorerPage() {
+    return (
+        <Suspense fallback={
+            <div className="p-8 flex items-center justify-center min-h-screen">
+                <div className="text-center">
+                    <div className="w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                    <div className="text-gray-500 dark:text-gray-400">Loading Match Explorer...</div>
                 </div>
-            )}
-        </div >
+            </div>
+        }>
+            <ExplorerPageContent />
+        </Suspense>
     );
 }

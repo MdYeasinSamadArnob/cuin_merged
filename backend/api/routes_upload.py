@@ -52,12 +52,16 @@ async def upload_file(
         # Convert NaN to None for JSON compatibility
         records = df.where(pd.notnull(df), None).to_dict(orient='records')
         
-        # Clean keys: remove whitespace, handle special chars if needed
-        # For now, assume column headers match expectations roughly or will be mapped
-        
         # Map common headers to internal schema
-        # This is a simple heuristic mapping
-        # Map common headers to internal schema using robust heuristics
+        # This is a robust heuristic mapping with fallbacks
+        def is_empty(val):
+            """Check if a value is effectively empty."""
+            if val is None:
+                return True
+            if isinstance(val, str):
+                return val.strip() == '' or val.strip().upper() in ['N/A', 'NA', 'NULL', 'NONE', '-', '—']
+            return False
+
         mapped_records = []
         for r in records:
             new_record = {}
@@ -71,24 +75,65 @@ async def upload_file(
             lname = None
             full_name = None
             
+            # First pass: Look for exact/strong matches
             for k, v in r.items():
                 if k is None: continue
-                k_norm = str(k).lower().strip().replace('_', '')
+                k_norm = str(k).lower().strip().replace('_', '').replace(' ', '')
                 
                 # First Name
-                if k_norm in ['cusnmf', 'firstname', 'fname', 'givenname', 'mn']:
+                if k_norm in ['cusnmf', 'firstname', 'fname', 'givenname', 'mn', 'first', 'firstnm']:
                      fname = v
                 # Last Name
-                elif k_norm in ['cusnml', 'lastname', 'lname', 'surname', 'familyname']:
+                elif k_norm in ['cusnml', 'lastname', 'lname', 'surname', 'familyname', 'last', 'lastnm', 'familynm']:
                      lname = v
                 # Full Name
-                elif k_norm in ['name', 'fullname', 'cusname', 'customername']:
+                elif k_norm in ['name', 'fullname', 'cusname', 'customername', 'entity', 'company', 'organization', 'entityname', 'partyname', 'clientname', 'companyname']:
                      full_name = v
-                     
-            if fname or lname:
-                new_record['name'] = f"{fname or ''} {lname or ''}".strip()
-            elif full_name:
-                new_record['name'] = full_name
+            
+            # Second pass: Fuzzy matches if we still lack data
+            if is_empty(fname) and is_empty(lname) and is_empty(full_name):
+                for k, v in r.items():
+                    if k is None: continue
+                    k_norm = str(k).lower().strip().replace('_', '').replace(' ', '')
+                    
+                    if 'name' in k_norm and not any(x in k_norm for x in ['file', 'date', 'user', 'branch']):
+                        # Use as full name if it seems like a name field
+                        full_name = v
+                        break
+
+            # Smart name handling: Check if fname contains a full name (has spaces) and lname is empty
+            if not is_empty(fname) and is_empty(lname):
+                fname_str = str(fname).strip()
+                # If fname contains spaces, it's likely a full name
+                if ' ' in fname_str:
+                    new_record['name'] = fname_str
+                elif fname_str:
+                    new_record['name'] = fname_str
+            elif not is_empty(fname) or not is_empty(lname):
+                # Combine first and last name
+                f_part = str(fname).strip() if not is_empty(fname) else ""
+                l_part = str(lname).strip() if not is_empty(lname) else ""
+                combined = f"{f_part} {l_part}".strip()
+                if combined:
+                    new_record['name'] = combined
+            
+            # Use full_name if we still don't have a name
+            if not new_record.get('name') and not is_empty(full_name):
+                new_record['name'] = str(full_name).strip()
+                
+            # Fallback: If still no name, try to use a "Description" or "Label" field
+            if not new_record.get('name'):
+                 for k, v in r.items():
+                    if k is None or is_empty(v): continue
+                    k_norm = str(k).lower().strip().replace('_', '').replace(' ', '')
+                    if k_norm in ['description', 'desc', 'label', 'title', 'remarks', 'notes']:
+                        new_record['name'] = str(v).strip()
+                        break
+            
+            # Final Fallback: Log warning but don't crash
+            if not new_record.get('name'):
+                # Try to use Email or Phone as name proxy if available (better than nothing)
+                pass
                 
             # 2. Iterate for other fields
             for k, v in r.items():
@@ -97,7 +142,7 @@ async def upload_file(
                 k_norm = k_clean.replace('_', '') # For stricter matching
                 
                 # Skip if we already handled name and this is a name field
-                if k_norm in ['cusnmf', 'cusnml', 'firstname', 'lastname', 'fname', 'lname']:
+                if k_norm in ['cusnmf', 'cusnml', 'firstname', 'lastname', 'fname', 'lname', 'givenname', 'surname', 'name', 'fullname']:
                     continue
 
                 # Phone/Mobile
@@ -154,7 +199,28 @@ async def upload_file(
                 
                 else:
                     new_record[k_clean] = v
-                    
+            
+            # 3. Post-Processing Fallbacks
+            if not new_record.get('name'):
+                if new_record.get('email'):
+                    new_record['name'] = new_record['email'].split('@')[0]
+                elif new_record.get('phone'):
+                    new_record['name'] = f"Phone: {new_record['phone']}"
+                elif new_record.get('source_customer_id'):
+                    new_record['name'] = f"ID: {new_record['source_customer_id']}"
+                elif new_record.get('natid'):
+                    new_record['name'] = f"NID: {new_record['natid']}"
+                else:
+                    # Last resort: try to find ANY string value
+                    for val in new_record.values():
+                        if isinstance(val, str) and len(val) > 2:
+                            new_record['name'] = val
+                            break
+                            
+            if not new_record.get('name'):
+                 print(f"Warning: Record dropped due to missing name and no fallback found: {new_record}")
+                 continue # Skip this record if we absolutely can't identify it
+
             mapped_records.append(new_record)
             
         # Trigger Pipeline
