@@ -50,8 +50,8 @@ async def lifespan(app: FastAPI):
     logger.info(f"   API URL: http://{settings.API_HOST}:{settings.API_PORT}")
     
     # Initialize Databases
-    # db_init.init_db()
-    # db_init.init_graph()
+    db_init.init_db()
+    # db_init.init_graph()  # Skip Neo4j — not needed for Supabase demo
     
     yield
     
