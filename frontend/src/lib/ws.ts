@@ -9,18 +9,28 @@ type WebSocketEventPayload = {
     [key: string]: unknown;
 };
 
+function toWsUrl(httpUrl: string, path = '/ws'): string {
+    const parsed = new URL(httpUrl);
+    // Normalise http(s) → ws(s) so mis-configured env vars don't break things
+    if (parsed.protocol === 'https:' || parsed.protocol === 'wss:') {
+        parsed.protocol = 'wss:';
+    } else {
+        parsed.protocol = 'ws:';
+    }
+    parsed.pathname = path;
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString();
+}
+
 function buildWsUrl(): string {
     if (WS_URL) {
-        return WS_URL;
+        // Handle env vars that mistakenly use http(s) instead of ws(s)
+        return toWsUrl(WS_URL);
     }
 
     if (API_URL) {
-        const parsed = new URL(API_URL);
-        parsed.protocol = parsed.protocol === 'https:' ? 'wss:' : 'ws:';
-        parsed.pathname = '/ws';
-        parsed.search = '';
-        parsed.hash = '';
-        return parsed.toString();
+        return toWsUrl(API_URL);
     }
 
     if (typeof window !== 'undefined') {
@@ -41,6 +51,7 @@ export function useWebSocket() {
     const ws = useRef<WebSocket | null>(null);
     const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const reconnectAttempts = useRef(0);
+    const MAX_RETRIES = 5;
 
     useEffect(() => {
         let disposed = false;
@@ -48,6 +59,10 @@ export function useWebSocket() {
 
         const connect = () => {
             if (disposed) return;
+            if (reconnectAttempts.current >= MAX_RETRIES) {
+                console.warn(`WebSocket: giving up after ${MAX_RETRIES} failed attempts.`, { url: wsUrl });
+                return;
+            }
             const socket = new WebSocket(wsUrl);
             ws.current = socket;
 
@@ -55,6 +70,7 @@ export function useWebSocket() {
                 reconnectAttempts.current = 0;
                 setIsConnected(true);
             };
+
 
             socket.onmessage = (event) => {
                 try {
