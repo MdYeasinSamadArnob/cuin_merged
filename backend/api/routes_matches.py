@@ -279,7 +279,8 @@ async def list_unique_records(
 async def list_clusters(
     run_id: str,
     page: int = 1,
-    page_size: int = 50
+    page_size: int = 50,
+    min_size: int = 1
 ) -> dict:
     """
     List resolved clusters (merged entities) for a run.
@@ -291,6 +292,10 @@ async def list_clusters(
         raise HTTPException(status_code=404, detail="Run/Orchestrator not found")
         
     clusters = orchestrator.get_result_clusters()
+    
+    # Filter by min_size
+    if min_size > 1:
+        clusters = [c for c in clusters if c['size'] >= min_size]
     
     # Sort by size descending (interesting ones first)
     clusters.sort(key=lambda c: c['size'], reverse=True)
