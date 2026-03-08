@@ -5,8 +5,13 @@ Handles projection of Identity Graph to Neo4j.
 
 import logging
 import os
-from typing import List, Dict, Any
-from neo4j import GraphDatabase
+from typing import List, Dict, Any, Optional
+from dataclasses import asdict
+
+try:
+    from neo4j import GraphDatabase
+except ImportError:
+    GraphDatabase = None
 
 logger = logging.getLogger(__name__)
 
