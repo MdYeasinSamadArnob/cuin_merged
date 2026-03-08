@@ -103,25 +103,110 @@ class RunService:
         self._load_runs()
 
     def _save_runs(self):
-        """Persist runs to disk."""
+        """Persist runs to PostgreSQL (primary) with /tmp JSON fallback."""
+        # ── PostgreSQL (primary) ────────────────────────────────────────────
         try:
-            import os
-            import json
+            import psycopg2
+            from api.config import settings
+            conn = psycopg2.connect(settings.DATABASE_URL)
+            cur = conn.cursor()
+            for rid, r in self._runs.items():
+                cur.execute("""
+                    INSERT INTO runs (
+                        run_id, mode, policy_version, status, description,
+                        records_in, records_normalized, blocks_created,
+                        candidates_generated, pairs_scored, auto_links,
+                        review_items, rejected,
+                        started_at, ended_at, error_message
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT (run_id) DO UPDATE SET
+                        status           = EXCLUDED.status,
+                        records_in       = EXCLUDED.records_in,
+                        records_normalized = EXCLUDED.records_normalized,
+                        blocks_created   = EXCLUDED.blocks_created,
+                        candidates_generated = EXCLUDED.candidates_generated,
+                        pairs_scored     = EXCLUDED.pairs_scored,
+                        auto_links       = EXCLUDED.auto_links,
+                        review_items     = EXCLUDED.review_items,
+                        rejected         = EXCLUDED.rejected,
+                        ended_at         = EXCLUDED.ended_at,
+                        error_message    = EXCLUDED.error_message
+                """, (
+                    r.run_id, r.mode.value, r.policy_version, r.status.value,
+                    r.description,
+                    r.counters.records_in, r.counters.records_normalized,
+                    r.counters.blocks_created, r.counters.candidates_generated,
+                    r.counters.pairs_scored, r.counters.auto_links,
+                    r.counters.review_items, r.counters.rejected,
+                    r.started_at, r.ended_at, r.error_message
+                ))
+            conn.commit()
+            cur.close()
+            conn.close()
+            return  # success — skip JSON fallback
+        except Exception as e:
+            logger.warning(f"DB save failed, falling back to JSON: {e}")
+
+        # ── /tmp JSON fallback ──────────────────────────────────────────────
+        try:
+            import os, json
             from api.config import settings
             os.makedirs(settings.DATA_DIR, exist_ok=True)
-            data = {}
-            for rid, r in self._runs.items():
-                data[rid] = r.to_dict()
+            data = {rid: r.to_dict() for rid, r in self._runs.items()}
             with open(f'{settings.DATA_DIR}/runs_index.json', 'w') as f:
                 json.dump(data, f, indent=2)
         except Exception as e:
-            logger.error(f"Failed to save runs: {e}")
+            logger.error(f"Failed to save runs (both DB and file): {e}")
 
     def _load_runs(self):
-        """Load runs from disk."""
+        """Load runs from PostgreSQL (primary) with /tmp JSON fallback."""
+        # ── PostgreSQL (primary) ────────────────────────────────────────────
         try:
-            import os
-            import json
+            import psycopg2
+            from api.config import settings
+            conn = psycopg2.connect(settings.DATABASE_URL)
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT run_id, mode, policy_version, status, description,
+                       records_in, records_normalized, blocks_created,
+                       candidates_generated, pairs_scored, auto_links,
+                       review_items, rejected,
+                       started_at, ended_at, error_message
+                FROM runs ORDER BY started_at DESC
+            """)
+            rows = cur.fetchall()
+            cur.close()
+            conn.close()
+            for row in rows:
+                (run_id, mode, policy_version, status, description,
+                 ri, rn, bc, cg, ps, al, revi, rej,
+                 started_at, ended_at, error_message) = row
+                r_data = {
+                    'run_id': str(run_id),
+                    'mode': RunMode(mode),
+                    'policy_version': policy_version,
+                    'status': RunStatus(status),
+                    'description': description or '',
+                    'started_at': started_at,
+                    'ended_at': ended_at,
+                    'error_message': error_message,
+                    'current_stage': None,
+                    'counters': RunCounters(
+                        records_in=ri or 0, records_normalized=rn or 0,
+                        blocks_created=bc or 0, candidates_generated=cg or 0,
+                        pairs_scored=ps or 0, auto_links=al or 0,
+                        review_items=revi or 0, rejected=rej or 0,
+                    ),
+                }
+                self._runs[r_data['run_id']] = Run(**r_data)
+            logger.info(f"Loaded {len(rows)} runs from PostgreSQL")
+            return
+        except Exception as e:
+            logger.warning(f"DB load failed, trying JSON fallback: {e}")
+
+        # ── /tmp JSON fallback ──────────────────────────────────────────────
+        try:
+            import os, json
             from api.config import settings
             index_path = f'{settings.DATA_DIR}/runs_index.json'
             if not os.path.exists(index_path):
