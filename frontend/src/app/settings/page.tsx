@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Settings as SettingsIcon, Database, Shield, Bell, Palette, Save, RefreshCw } from "lucide-react";
-import { api } from "@/lib/api";
+import { api } from "../../lib/api";
 
 export default function SettingsPage() {
     const [loading, setLoading] = useState(true);

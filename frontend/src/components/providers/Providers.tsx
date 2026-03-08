@@ -2,7 +2,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, useEffect } from "react";
-import { useAppStore } from "@/stores/useAppStore";
+import { useAppStore } from "../../stores/useAppStore";
 
 function ThemeEffect() {
     const theme = useAppStore((state) => state.theme);

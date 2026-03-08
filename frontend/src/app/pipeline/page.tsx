@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { api } from '@/lib/api';
-import { useWebSocket } from '@/lib/ws';
+import { api } from '../../lib/api';
+import { useWebSocket } from '../../lib/ws';
 import Link from "next/link";
 import { FileSpreadsheet, ArrowRight } from "lucide-react";
 // Hook for counting animation
