@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { api } from '@/lib/api';
-import { useWebSocket } from '@/lib/ws';
+import { api } from '../../lib/api';
+import { useWebSocket } from '../../lib/ws';
 
 interface DashboardMetrics {
     total_records: number;

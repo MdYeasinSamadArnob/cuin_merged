@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { clsx } from "clsx";
-import { useAppStore } from "@/stores/useAppStore";
+import { useAppStore } from "../../stores/useAppStore";
 
 const navigation = [
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },

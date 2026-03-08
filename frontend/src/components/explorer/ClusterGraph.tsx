@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as d3 from 'd3';
 import { X, ZoomIn, ZoomOut, Maximize, RotateCcw, FileJson, Code } from 'lucide-react';
-import { useAppStore } from '@/stores/useAppStore';
+import { useAppStore } from '../../stores/useAppStore';
 
 interface ClusterGraphProps {
     data: any;

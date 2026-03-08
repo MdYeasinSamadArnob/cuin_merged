@@ -6,7 +6,7 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { Run, DashboardMetrics } from "@/lib/api";
+import { Run, DashboardMetrics } from "../lib/api";
 
 interface AppState {
     // Current run being viewed
