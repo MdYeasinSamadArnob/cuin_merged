@@ -109,7 +109,8 @@ async def preview_clustering(request: PreviewRequest):
             # Try load from disk with retry
             for attempt in range(3):
                 try:
-                    file_path = f'data/runs/{request.run_id}_records.json'
+                    from api.config import settings
+                    file_path = f'{settings.DATA_DIR}/runs/{request.run_id}_records.json'
                     if os.path.exists(file_path):
                         with open(file_path, 'r') as f:
                             records = json.load(f)
@@ -337,7 +338,8 @@ def get_record_profile(rid: str, run_records: Optional[dict] = None, run_id: Opt
     # If run_records is missing or empty, try to load from file
     if run_id and (not run_records or rid not in run_records):
         try:
-            file_path = f'data/runs/{run_id}_records.json'
+            from api.config import settings
+            file_path = f'{settings.DATA_DIR}/runs/{run_id}_records.json'
             if os.path.exists(file_path):
                 # We don't want to load the whole file for every record call if we can avoid it.
                 # Ideally, the caller should have loaded it.
@@ -416,7 +418,8 @@ async def list_clusters(
     
     # Persistence: Load snapshot if needed
     if run_id:
-        path = f'data/runs/{run_id}_clusters.json'
+        from api.config import settings
+        path = f'{settings.DATA_DIR}/runs/{run_id}_clusters.json'
         if os.path.exists(path):
              # Load if empty OR different run loaded
              if not manager._members or getattr(manager, 'loaded_run_id', None) != run_id:
@@ -451,7 +454,8 @@ async def list_clusters(
             # Try load from disk with retry
             for attempt in range(3):
                 try:
-                    file_path = f'data/runs/{run_id}_records.json'
+                    from api.config import settings
+                    file_path = f'{settings.DATA_DIR}/runs/{run_id}_records.json'
                     if os.path.exists(file_path):
                         with open(file_path, 'r') as f:
                             run_records = json.load(f)
@@ -509,7 +513,8 @@ async def get_cluster_graph(
     
     # Persistence: Load snapshot if needed
     if run_id:
-        path = f'data/runs/{run_id}_clusters.json'
+        from api.config import settings
+        path = f'{settings.DATA_DIR}/runs/{run_id}_clusters.json'
         if os.path.exists(path):
              # Load if empty OR different run loaded
              if not manager._members or getattr(manager, 'loaded_run_id', None) != run_id:
@@ -532,7 +537,8 @@ async def get_cluster_graph(
             # Try load from disk with retry
             for attempt in range(3):
                 try:
-                    file_path = f'data/runs/{run_id}_records.json'
+                    from api.config import settings
+                    file_path = f'{settings.DATA_DIR}/runs/{run_id}_records.json'
                     if os.path.exists(file_path):
                         with open(file_path, 'r') as f:
                             run_records = json.load(f)

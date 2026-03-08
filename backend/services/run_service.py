@@ -107,14 +107,12 @@ class RunService:
         try:
             import os
             import json
-            os.makedirs('data', exist_ok=True)
-            # Convert datetime objects to ISO format strings for JSON serialization
+            from api.config import settings
+            os.makedirs(settings.DATA_DIR, exist_ok=True)
             data = {}
             for rid, r in self._runs.items():
-                r_dict = r.to_dict()
-                data[rid] = r_dict
-            
-            with open('data/runs_index.json', 'w') as f:
+                data[rid] = r.to_dict()
+            with open(f'{settings.DATA_DIR}/runs_index.json', 'w') as f:
                 json.dump(data, f, indent=2)
         except Exception as e:
             logger.error(f"Failed to save runs: {e}")
@@ -124,10 +122,11 @@ class RunService:
         try:
             import os
             import json
-            if not os.path.exists('data/runs_index.json'):
+            from api.config import settings
+            index_path = f'{settings.DATA_DIR}/runs_index.json'
+            if not os.path.exists(index_path):
                 return
-            
-            with open('data/runs_index.json', 'r') as f:
+            with open(index_path, 'r') as f:
                 data = json.load(f)
             
             for rid, r_data in data.items():

@@ -92,6 +92,10 @@ class Settings(BaseSettings):
     # ----------------------------------------
     SAMPLE_CSV_PATH: str = "/home/arnob/Downloads/challenging_er_200.csv"
     POLICY_DIR: str = "./policies"
+    # Writable on Vercel (/tmp) and local dev (data/).
+    # Override via DATA_DIR env var if needed.
+    DATA_DIR: str = "/tmp/cuin_data"
+
     
     # ----------------------------------------
     # Run Configuration

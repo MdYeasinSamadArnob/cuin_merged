@@ -186,8 +186,10 @@ class PipelineOrchestrator:
         # Persist records to disk for reliability
         if self.run_id:
             try:
-                os.makedirs('data/runs', exist_ok=True)
-                with open(f'data/runs/{self.run_id}_records.json', 'w') as f:
+                from api.config import settings
+                runs_dir = f'{settings.DATA_DIR}/runs'
+                os.makedirs(runs_dir, exist_ok=True)
+                with open(f'{runs_dir}/{self.run_id}_records.json', 'w') as f:
                     json.dump(self._records, f, default=str)
                 logger.info(f"Persisted {len(self._records)} records for run {self.run_id}")
             except Exception as e:
@@ -598,8 +600,9 @@ class PipelineOrchestrator:
             
             # Persist Cluster Snapshot
             if self.run_id:
+                from api.config import settings
                 cm = get_cluster_manager()
-                cm.save_snapshot(f'data/runs/{self.run_id}_clusters.json')
+                cm.save_snapshot(f'{settings.DATA_DIR}/runs/{self.run_id}_clusters.json')
             
             # Complete
             result.success = True

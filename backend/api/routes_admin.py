@@ -44,25 +44,33 @@ async def reset_all_data():
         deleted_runs = 0
         
         # 1. Delete all files in data/runs/ directory
-        runs_dir = Path("data/runs")
-        if runs_dir.exists():
-            for item in runs_dir.iterdir():
-                if item.is_file():
-                    item.unlink()
-                    deleted_files += 1
-                    logger.info(f"Deleted file: {item}")
-                elif item.is_dir():
-                    shutil.rmtree(item)
-                    deleted_files += 1
-                    logger.info(f"Deleted directory: {item}")
-        
+        try:
+            from api.config import settings
+            runs_dir = Path(f"{settings.DATA_DIR}/runs")
+            if runs_dir.exists():
+                for item in runs_dir.iterdir():
+                    if item.is_file():
+                        item.unlink()
+                        deleted_files += 1
+                        logger.info(f"Deleted file: {item}")
+                    elif item.is_dir():
+                        shutil.rmtree(item)
+                        deleted_files += 1
+                        logger.info(f"Deleted directory: {item}")
+        except Exception as e:
+            logger.warning(f"Could not delete run files: {e}")
+
         # 2. Clear runs_index.json
-        runs_index_path = Path("data/runs_index.json")
-        if runs_index_path.exists():
-            with open(runs_index_path, 'w') as f:
-                json.dump([], f)
-            logger.info("Cleared runs_index.json")
-        
+        try:
+            from api.config import settings
+            runs_index_path = Path(f"{settings.DATA_DIR}/runs_index.json")
+            if runs_index_path.exists():
+                with open(runs_index_path, 'w') as f:
+                    json.dump([], f)
+                logger.info("Cleared runs_index.json")
+        except Exception as e:
+            logger.warning(f"Could not clear runs_index.json: {e}")
+
         # 3. Clear database tables
         try:
             import psycopg2
