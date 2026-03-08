@@ -50,7 +50,10 @@ class RefereeAgent:
         self.ollama_url = ollama_url
         self._explanations: Dict[str, RefereeExplanation] = {}
         self._use_fallback = False
-        self._cache_file = "data/referee_cache.jsonl"
+        from api.config import settings
+        import os
+        os.makedirs(settings.DATA_DIR, exist_ok=True)
+        self._cache_file = f"{settings.DATA_DIR}/referee_cache.jsonl"
         self._load_cache()
 
     def _load_cache(self):
