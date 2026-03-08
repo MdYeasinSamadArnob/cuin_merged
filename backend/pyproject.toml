@@ -18,6 +18,34 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Database :: Database Engines/Servers",
 ]
+dependencies = [
+    "fastapi==0.109.2",
+    "uvicorn[standard]==0.27.1",
+    "python-multipart==0.0.9",
+    "websockets==12.0",
+    "sqlalchemy==2.0.25",
+    "psycopg2-binary==2.9.9",
+    "alembic==1.13.1",
+    "asyncpg==0.29.0",
+    "neo4j==5.17.0",
+    "pandas==2.2.0",
+    "numpy==1.26.4",
+    "polars==0.20.7",
+    "openpyxl==3.1.2",
+    "splink==3.9.14",
+    "datasketch==1.6.4",
+    "jellyfish==1.0.3",
+    "python-Levenshtein==0.25.1",
+    "pydantic==2.6.1",
+    "pydantic-settings==2.1.0",
+    "email-validator==2.1.0.post1",
+    "python-jose[cryptography]==3.3.0",
+    "passlib[bcrypt]==1.7.4",
+    "python-dotenv==1.0.1",
+    "pyyaml==6.0.1",
+    "structlog==24.1.0",
+    "rich==13.7.0",
+]
 
 [tool.ruff]
 target-version = "py311"
