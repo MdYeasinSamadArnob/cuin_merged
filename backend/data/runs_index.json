@@ -1,6 +1,6 @@
 {
-  "24343685-eaba-42fc-ada7-6b026b3372dc": {
-    "run_id": "24343685-eaba-42fc-ada7-6b026b3372dc",
+  "c2d7e495-df6b-46a5-b766-175d8c86d5e2": {
+    "run_id": "c2d7e495-df6b-46a5-b766-175d8c86d5e2",
     "mode": "AUTO",
     "policy_version": 1,
     "status": "COMPLETED",
@@ -9,15 +9,15 @@
       "records_in": 187,
       "records_normalized": 187,
       "blocks_created": 541,
-      "candidates_generated": 481,
-      "pairs_scored": 481,
-      "auto_links": 214,
-      "review_items": 14,
-      "rejected": 253
+      "candidates_generated": 510,
+      "pairs_scored": 510,
+      "auto_links": 229,
+      "review_items": 13,
+      "rejected": 268
     },
-    "started_at": "2026-03-08T14:43:19.613358",
-    "ended_at": "2026-03-08T14:43:20.014666",
-    "duration_seconds": 0.401308,
+    "started_at": "2026-03-08T15:09:46.922310",
+    "ended_at": "2026-03-08T15:09:47.339150",
+    "duration_seconds": 0.41684,
     "error_message": null,
     "current_stage": "complete"
   }
