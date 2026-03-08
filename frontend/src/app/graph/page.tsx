@@ -1,9 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { api } from '../../lib/api';
-import { ClusterGraph } from '../../components/explorer/ClusterGraph';
-import { TuningPanel } from '../../components/explorer/TuningPanel';
+import { api } from '@/lib/api';
+import { ClusterGraph } from '@/components/explorer/ClusterGraph';
+import { TuningPanel } from '@/components/explorer/TuningPanel';
 import { RefreshCw, Sliders, Play, Type } from 'lucide-react';
 
 export default function GraphPage() {

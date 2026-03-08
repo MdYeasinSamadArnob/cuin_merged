@@ -2,8 +2,8 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { api } from "../../../lib/api";
-import { useWebSocket } from "../../../lib/ws";
+import { api } from "@/lib/api";
+import { useWebSocket } from "@/lib/ws";
 import Link from "next/link";
 import {
     ArrowLeft, Terminal, Activity, Search, Network,
