@@ -262,15 +262,14 @@ class RunService:
         run.status = RunStatus.RUNNING
         self._save_runs()
         
-        # Create orchestrator with progress callback and current configs
+        # Use the standard (non-Spark) orchestrator for in-memory records (Excel/CSV uploads).
+        # Spark is reserved for large Parquet datasource runs via routes_datasource.py.
         from api.routes_config import get_current_blocking_config, get_current_scoring_config
-        from pipeline.spark_orchestrator import SparkPipelineOrchestrator
-        
-        orchestrator = SparkPipelineOrchestrator(
+
+        orchestrator = PipelineOrchestrator(
             blocking_config=get_current_blocking_config(),
             scoring_config=get_current_scoring_config(),
             progress_callback=await self._create_progress_handler(run_id),
-            run_id=run_id
         )
         self._orchestrators[run_id] = orchestrator
         
