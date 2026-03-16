@@ -4,13 +4,12 @@ CUIN v2 Control Plane - WebSocket Event Manager
 Handles real-time event broadcasting to connected clients.
 """
 
-import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Set, Optional, Any
-from dataclasses import dataclass
+from typing import Any, Dict, Optional, Set  # noqa: UP035
 
 from fastapi import WebSocket
 

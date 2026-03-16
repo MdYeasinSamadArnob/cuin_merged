@@ -7,20 +7,22 @@ from typing import List, Dict, Optional, Callable, Any
 
 from pipeline.orchestrator import PipelineStage, StageProgress, PipelineResult
 from engine.structures import MatchScore, MatchDecision
-from engine.spark_er.splink_clustering import run_splink_clustering
 
 logger = logging.getLogger(__name__)
 
-# Raise threshold significantly to get only true duplicates (~2k) not false positives (87k)
+# Match threshold for Splink (high confidence matches only)
 MATCH_THRESHOLD = 0.95
 
+# Paths
 PARQUET_PATH = "data_source/oracle_data.parquet"
+BLOCKING_CSV = "blocking_analysis.csv"
+SCORING_CSV = "scoring_results.csv"
 
 
 class SparkPipelineOrchestrator:
     """
-    Orchestrates the complete ER pipeline using the Spark business logic.
-    Emits the same progress events as the native PipelineOrchestrator for real-time UI updates.
+    Orchestrates the complete ER pipeline using REAL Spark business logic.
+    Properly integrates with splink_commands.py functions.
     """
     
     def __init__(
@@ -35,10 +37,14 @@ class SparkPipelineOrchestrator:
         self.progress_callback = progress_callback
         self.run_id = run_id
         
-        # In-memory storage equivalent to native orchestrator 
+        # In-memory storage
         self._records: Dict[str, dict] = {}
         self._scores: Dict[str, MatchScore] = {}
         self._decisions: Dict[str, MatchDecision] = {}
+        
+        # Spark session and data (initialized in run())
+        self._spark = None
+        self._df = None
         
         # Set environment variables for spark logic
         os.environ["CACHE_DIR"] = "data_source"
@@ -58,49 +64,495 @@ class SparkPipelineOrchestrator:
             except Exception as e:
                 logger.error(f"Progress callback error in {self.run_id}: {e}")
 
-    def _load_parquet_row_count(self) -> int:
-        """
-        Fast parquet row count WITHOUT loading data into memory.
-        Reads footer metadata only — near-instant regardless of file size.
-        """
-        try:
-            import pyarrow.parquet as pq
-            if os.path.isdir(PARQUET_PATH):
-                # Directory of part files (Spark output) — sum each part's metadata
-                total = 0
-                for fname in os.listdir(PARQUET_PATH):
-                    if fname.endswith(".parquet") and not fname.startswith("."):
-                        pf = pq.ParquetFile(os.path.join(PARQUET_PATH, fname))
-                        total += pf.metadata.num_rows
-                n = total
-            else:
-                pf = pq.ParquetFile(PARQUET_PATH)
-                n = pf.metadata.num_rows
-            logger.info(f"Parquet row count: {n:,}")
-            return n
-        except Exception as e:
-            logger.error(f"Failed to read parquet row count: {e}")
-            return 0
-    
-    def _load_records_for_cluster_members(self, customer_codes: set) -> Dict[str, dict]:
-        """
-        Load records ONLY for the customer codes that are in clusters (duplicates).
-        This avoids loading all 1.5M rows — we only need ~5K-10K cluster members.
-        Uses Pandas filtered read for speed.
-        """
+    async def _stage_ingest(self) -> tuple:
+        """Stage 1: Load data from Parquet into Spark DataFrame."""
+        start = datetime.utcnow()
+        await self._emit_progress(StageProgress(
+            stage=PipelineStage.INGEST,
+            status="running",
+            message="Initializing Spark and loading Oracle Parquet dataset..."
+        ))
+        
+        loop = asyncio.get_event_loop()
+        
+        def load_spark_data():
+            """Load data in background thread to avoid blocking."""
+            try:
+                # Import Spark functions
+                from engine.spark_er.splink_commands import create_spark_session, load_data
+                
+                # Create Spark session with proper configuration
+                logger.info("Creating Spark session...")
+                spark = create_spark_session()
+                
+                # Load data from parquet
+                logger.info(f"Loading data from {PARQUET_PATH}...")
+                df = load_data(spark)
+                
+                record_count = df.count()
+                logger.info(f"Loaded {record_count:,} records into Spark")
+                
+                return spark, df, record_count
+                
+            except Exception as e:
+                logger.error(f"Failed to load Spark data: {e}", exc_info=True)
+                raise
+        
+        # Run in executor to avoid blocking
+        self._spark, self._df, record_count = await loop.run_in_executor(None, load_spark_data)
+        self._record_count = record_count  # cache for reuse — avoids re-counting in later stages
+        
+        # Initialize the runs dir
+        os.makedirs("data/runs", exist_ok=True)
+        
+        duration = int((datetime.utcnow() - start).total_seconds() * 1000)
+        await self._emit_progress(StageProgress(
+            stage=PipelineStage.INGEST,
+            status="complete",
+            records_in=record_count,
+            records_out=record_count,
+            reduction_pct=0.0,
+            duration_ms=duration,
+            message=f"Loaded {record_count:,} customer records from Oracle Parquet into Spark"
+        ))
+        return record_count
+
+    async def _stage_normalize(self, record_count: int):
+        """Stage 2: Normalize data using Spark SQL transformations."""
+        start = datetime.utcnow()
+        await self._emit_progress(StageProgress(
+            stage=PipelineStage.NORMALIZE,
+            status="running",
+            message="Normalizing fields (uppercase, trim, standardize formats)..."
+        ))
+        
+        loop = asyncio.get_event_loop()
+        
+        def normalize_dataframe():
+            """Apply safe normalization in a single Spark select pass (faster DAG planning)."""
+            try:
+                from pyspark.sql import functions as F
+                from pyspark.sql.types import ArrayType
+
+                logger.info("Applying safe Spark SQL normalization (single-pass select)...")
+
+                df = self._df
+                schema = {field.name: field.dataType for field in df.schema.fields}
+                cols = set(df.columns)
+                logger.info(f"Available columns: {sorted(cols)}")
+
+                def safe_str(col_name):
+                    """Return a string expression, flattening ARRAY columns to space-separated string."""
+                    dtype = schema.get(col_name)
+                    if isinstance(dtype, ArrayType):
+                        return F.array_join(
+                            F.filter(F.col(col_name).cast('array<string>'), lambda x: x.isNotNull()),
+                            ' '
+                        )
+                    return F.col(col_name).cast('string')
+
+                phone_col = 'MOBILE' if 'MOBILE' in cols else ('TELEPHONE' if 'TELEPHONE' in cols else None)
+                dob_col   = next((c for c in ('BIRTH_DATE', 'CUSDOB') if c in cols), None)
+                doc_col   = next((c for c in ('DOCUMENT', 'ID_NUMBER') if c in cols), None)
+                addr_col  = next((c for c in ('FULL_ADDRESS', 'ADDRESS') if c in cols), None)
+
+                # Column overrides — CUSTOMER_CODE is cast to plain string for Splink
+                overrides = {}
+                if 'CUSTOMER_CODE' in cols:
+                    overrides['CUSTOMER_CODE'] = safe_str('CUSTOMER_CODE').alias('CUSTOMER_CODE')
+
+                # New _NORM columns to append
+                appended = []
+                if 'NAME' in cols:
+                    appended.append(
+                        F.trim(F.upper(F.regexp_replace(safe_str('NAME'), r'\s+', ' '))).alias('NAME_NORM')
+                    )
+                if 'EMAIL' in cols:
+                    appended.append(F.trim(F.lower(safe_str('EMAIL'))).alias('EMAIL_NORM'))
+                if phone_col:
+                    digits = F.regexp_replace(safe_str(phone_col), r'\D', '')
+                    appended.append(
+                        F.when(F.length(digits) > 10,
+                            F.expr(f"right(regexp_replace(cast(`{phone_col}` as string), '[^0-9]', ''), 10)")
+                        ).otherwise(digits).alias('PHONE_NORM')
+                    )
+                if dob_col:
+                    appended.append(F.to_date(safe_str(dob_col)).alias('DOB_NORM'))
+                if doc_col:
+                    appended.append(F.trim(F.upper(safe_str(doc_col))).alias('NATID_NORM'))
+                if addr_col:
+                    appended.append(
+                        F.trim(F.upper(F.regexp_replace(safe_str(addr_col), r'\s+', ' '))).alias('ADDRESS_NORM')
+                    )
+
+                # Single-pass select: apply overrides + append _NORM cols in one plan node
+                base_cols = [overrides.get(c, F.col(c)) for c in df.columns]
+                df = df.select(*base_cols, *appended)
+
+                df.cache()
+                normalized_count = df.count()  # Materialize cache
+
+                self._df = df
+                self._record_count = normalized_count  # keep consistent after normalization
+                logger.info(f"Normalization complete: {normalized_count:,} records")
+                return normalized_count
+
+            except Exception as e:
+                logger.error(f"Normalization failed: {e}", exc_info=True)
+                raise
+        
+        # Run normalization in executor
+        normalized_count = await loop.run_in_executor(None, normalize_dataframe)
+        
+        duration = int((datetime.utcnow() - start).total_seconds() * 1000)
+        await self._emit_progress(StageProgress(
+            stage=PipelineStage.NORMALIZE,
+            status="complete",
+            records_in=record_count,
+            records_out=normalized_count,
+            reduction_pct=0,
+            duration_ms=duration,
+            message=f"Normalized {normalized_count:,} records (uppercase names, trim spaces, standardized phone/email/dates)"
+        ))
+
+    async def _stage_block(self) -> int:
+        """Stage 3: Run distributed blocking using Spark to generate candidate pairs."""
+        start = datetime.utcnow()
+        await self._emit_progress(StageProgress(
+            stage=PipelineStage.BLOCK,
+            status="running",
+            message="Running distributed blocking analysis (multipass strategy)..."
+        ))
+        
+        loop = asyncio.get_event_loop()
+        
+        def run_blocking_phase():
+            """Run blocking in background thread."""
+            try:
+                from engine.spark_er.splink_commands import run_blocking
+                
+                logger.info("Starting Spark-native blocking phase...")
+                
+                # Run blocking - generates candidate pairs
+                settings, pandas_df, spark_df = run_blocking(
+                    spark=self._spark,
+                    df=self._df,
+                    output_csv=BLOCKING_CSV,
+                    record_count=self._record_count  # skip redundant df.count() inside
+                )
+                
+                candidate_count = len(pandas_df) if pandas_df is not None else 0
+                logger.info(f"Blocking complete: {candidate_count:,} candidate pairs generated")
+                
+                return settings, candidate_count
+                
+            except Exception as e:
+                logger.error(f"Blocking phase failed: {e}", exc_info=True)
+                raise
+        
+        settings, candidate_count = await loop.run_in_executor(None, run_blocking_phase)
+        self._blocking_settings = settings  # Store for scoring phase
+        
+        # Calculate actual reduction percentage (reuse cached record count — no extra Spark job)
+        n = self._record_count
+        max_possible_pairs = n * (n - 1) // 2
+        reduction_pct = ((max_possible_pairs - candidate_count) / max_possible_pairs * 100) if max_possible_pairs > 0 else 0
+        
+        duration = int((datetime.utcnow() - start).total_seconds() * 1000)
+        await self._emit_progress(StageProgress(
+            stage=PipelineStage.BLOCK,
+            status="complete",
+            records_in=n,
+            records_out=candidate_count,
+            reduction_pct=reduction_pct,
+            duration_ms=duration,
+            message=f"Generated {candidate_count:,} candidate pairs using distributed blocking (Exact + Phonetic + Token + LSH) - {reduction_pct:.2f}% reduction"
+        ))
+        
+        return candidate_count
+
+    async def _stage_candidates(self, candidate_count: int):
+        """Stage 4: Candidates already generated by blocking, emit progress."""
+        start = datetime.utcnow()
+        await self._emit_progress(StageProgress(
+            stage=PipelineStage.CANDIDATES,
+            status="running",
+            message="Candidate pairs ready for scoring..."
+        ))
+        
+        await asyncio.sleep(0.3)
+        
+        duration = int((datetime.utcnow() - start).total_seconds() * 1000)
+        
+        # Calculate theoretical reduction (reuse cached record count — no extra Spark job)
+        n = self._record_count
+        max_possible = n * (n - 1) // 2
+        reduction = ((max_possible - candidate_count) / max_possible * 100) if max_possible > 0 else 0
+        
+        await self._emit_progress(StageProgress(
+            stage=PipelineStage.CANDIDATES,
+            status="complete",
+            records_in=max_possible,
+            records_out=candidate_count,
+            reduction_pct=reduction,
+            duration_ms=duration,
+            message=f"Candidate pairs ready: {candidate_count:,} (reduced from {max_possible:,} possible pairs = {reduction:.2f}% reduction)"
+        ))
+
+    async def _stage_score_and_decide(self, candidate_count: int) -> tuple:
+        """Stage 5 & 6: Run Splink scoring on candidates and make decisions."""
+        start = datetime.utcnow()
+
+        await self._emit_progress(StageProgress(
+            stage=PipelineStage.SCORE,
+            status="running",
+            message="Training Splink model (EM algorithm for match probabilities)...",
+            data={"sub_step": "Initializing Splink linker...", "progress_pct": 5}
+        ))
+
+        loop = asyncio.get_event_loop()
+
+        def run_scoring_phase():
+            """Run scoring in background thread with progress updates."""
+            try:
+                from engine.spark_er.splink_commands import run_scoring
+                
+                logger.info("Starting Splink scoring phase...")
+                
+                # Run scoring - trains model and scores candidate pairs
+                linker, predictions_df = run_scoring(
+                    spark=self._spark,
+                    df=self._df,
+                    settings=self._blocking_settings,
+                    blocking_csv=BLOCKING_CSV,
+                    threshold=MATCH_THRESHOLD,
+                    output_csv=SCORING_CSV
+                )
+                
+                # Materialise predictions — run_scoring returns a PredictionsWrapper, not a pandas DF
+                if predictions_df is not None and hasattr(predictions_df, 'as_pandas_dataframe'):
+                    predictions_pd = predictions_df.as_pandas_dataframe()
+                else:
+                    predictions_pd = predictions_df  # already a pandas DF or None
+
+                # Convert predictions to match list
+                matches = []
+                if predictions_pd is not None and not predictions_pd.empty:
+                    for _, row in predictions_pd.iterrows():
+                        matches.append({
+                            'id1': row['CUSTOMER_CODE_l'],
+                            'id2': row['CUSTOMER_CODE_r'],
+                            'match_probability': row['match_probability'],
+                            'match_weight': row.get('match_weight', 0)
+                        })
+                
+                logger.info(f"Scoring complete: {len(matches):,} high-confidence matches found")
+                
+                return matches
+                
+            except Exception as e:
+                logger.error(f"Scoring phase failed: {e}", exc_info=True)
+                raise
+        
+        # Emit periodic progress during scoring
+        scoring_task = loop.run_in_executor(None, run_scoring_phase)
+        
+        # Poll until complete with progress updates
+        elapsed = 0
+        while not scoring_task.done():
+            await asyncio.sleep(2)
+            elapsed += 2
+            
+            # Emit progress heartbeat
+            await self._emit_progress(StageProgress(
+                stage=PipelineStage.SCORE,
+                status="running",
+                message=f"Training Splink model and scoring pairs ({elapsed}s elapsed)...",
+                data={
+                    "sub_step": "Running EM iterations for probability estimation...",
+                    "progress_pct": min(50 + (elapsed // 2), 90),
+                    "elapsed_sec": elapsed
+                }
+            ))
+        
+        # Get result
+        matches = await scoring_task
+        
+        duration = int((datetime.utcnow() - start).total_seconds() * 1000)
+        
+        await self._emit_progress(StageProgress(
+            stage=PipelineStage.SCORE,
+            status="complete",
+            records_in=candidate_count,
+            records_out=len(matches),
+            reduction_pct=0,
+            duration_ms=duration,
+            message=f"Splink scoring complete: {len(matches):,} high-confidence matches (probability ≥ {MATCH_THRESHOLD})",
+            data={
+                "sub_step": "Complete",
+                "progress_pct": 100,
+                "sample_matches": matches[:50] if matches else []
+            }
+        ))
+
+        # Emit DECIDE stage
+        await self._emit_progress(StageProgress(
+            stage=PipelineStage.DECIDE,
+            status="running",
+            message="Applying decision threshold (AUTO_LINK for matches)..."
+        ))
+        
+        await asyncio.sleep(0.3)
+        
+        # Calculate clusters from matches
+        clusters = self._build_clusters_from_matches(matches)
+        
+        await self._emit_progress(StageProgress(
+            stage=PipelineStage.DECIDE,
+            status="complete",
+            records_in=len(matches),
+            records_out=len(clusters),
+            reduction_pct=0,
+            duration_ms=300,
+            message=f"Decisions complete: {len(matches):,} pairs auto-linked → {len(clusters):,} identity clusters"
+        ))
+
+        return clusters, matches
+
+    def _build_clusters_from_matches(self, matches: List[dict]) -> List[dict]:
+        """Build clusters from match pairs using union-find."""
+        from engine.clustering.union_find import UnionFind
+        
+        uf = UnionFind()
+        
+        # Union all matched pairs
+        for match in matches:
+            id1 = str(match['id1'])
+            id2 = str(match['id2'])
+            uf.union(id1, id2)
+        
+        # Group by cluster
+        clusters_dict = {}
+        for match in matches:
+            id1 = str(match['id1'])
+            id2 = str(match['id2'])
+            
+            root = uf.find(id1)
+            if root not in clusters_dict:
+                clusters_dict[root] = set()
+            
+            clusters_dict[root].add(id1)
+            clusters_dict[root].add(id2)
+        
+        # Convert to list format
+        clusters = []
+        for cluster_id, members in clusters_dict.items():
+            clusters.append({
+                'cluster_id': cluster_id,
+                'members': list(members),
+                'size': len(members)
+            })
+        
+        return clusters
+
+    async def _stage_cluster(self, clusters, matches):
+        """Stage 8: Build identity graph from cluster results."""
+        start = datetime.utcnow()
+        await self._emit_progress(StageProgress(
+            stage=PipelineStage.CLUSTER,
+            status="running",
+            message="Building identity graph and updating ClusterManager..."
+        ))
+        
+        loop = asyncio.get_event_loop()
+        run_id = self.run_id
+        
+        def build_cluster_graph():
+            try:
+                from engine.clustering.cluster_manager import get_cluster_manager
+                
+                # Collect unique customer codes from matches
+                customer_codes_in_clusters = set()
+                for m in matches:
+                    customer_codes_in_clusters.add(str(m['id1']))
+                    customer_codes_in_clusters.add(str(m['id2']))
+                
+                logger.info(f"Building cluster graph for {len(customer_codes_in_clusters):,} entities")
+                
+                manager = get_cluster_manager()
+                
+                # Reset manager state
+                from engine.clustering.union_find import UnionFind
+                manager._uf = UnionFind()
+                manager._cluster_ids = {}
+                manager._members = []
+                
+                # Link matched pairs
+                linked = 0
+                for m in matches:
+                    c1 = str(m['id1'])
+                    c2 = str(m['id2'])
+                    if c1 != c2:
+                        manager.link(c1, c2)
+                        linked += 1
+                
+                logger.info(f"Linked {linked:,} pairs into cluster graph")
+                
+                # Save cluster snapshot
+                if run_id:
+                    os.makedirs("data/runs", exist_ok=True)
+                    manager.save_snapshot(f"data/runs/{run_id}_clusters.json")
+                    
+                    # Load and save cluster member records
+                    member_records = self._load_records_for_clusters(customer_codes_in_clusters)
+                    with open(f"data/runs/{run_id}_records.json", "w") as f:
+                        json.dump(member_records, f, default=str)
+                    logger.info(f"Saved {len(member_records):,} cluster-member records")
+                
+                return {
+                    'clusters_created': len(clusters),
+                    'entities_created': len(customer_codes_in_clusters),
+                    'duplicate_relationships': linked
+                }
+            except Exception as e:
+                logger.error(f"Cluster graph build failed: {e}", exc_info=True)
+                # Create empty records file on failure
+                if run_id:
+                    with open(f"data/runs/{run_id}_records.json", "w") as f:
+                        json.dump({}, f)
+                return {'clusters_created': 0}
+            
+        stats = await loop.run_in_executor(None, build_cluster_graph)
+        
+        duration = int((datetime.utcnow() - start).total_seconds() * 1000)
+        await self._emit_progress(StageProgress(
+            stage=PipelineStage.CLUSTER,
+            status="complete",
+            records_in=len(matches),
+            records_out=stats.get('clusters_created', 0),
+            duration_ms=duration,
+            message=f"Identity graph complete: {stats.get('clusters_created', 0):,} clusters with {stats.get('entities_created', 0):,} entities",
+            data={"cluster_stats": stats}
+        ))
+
+    def _load_records_for_clusters(self, customer_codes: set) -> Dict[str, dict]:
+        """Load ONLY records for customer codes in clusters (not all 1.5M rows)."""
         if not customer_codes:
             return {}
+        
         try:
             import pandas as pd
             import numpy as np
+            
             NEEDED_COLS = [
                 "CUSTOMER_CODE", "NAME", "EMAIL", "MOBILE", "TELEPHONE",
                 "FULL_ADDRESS", "BIRTH_DATE", "DOCUMENT"
             ]
-            # Read all rows but only needed columns — still fast with Pandas
+            
+            # Read only needed columns
             df = pd.read_parquet(PARQUET_PATH, columns=NEEDED_COLS, engine='pyarrow')
             
-            # Filter to just cluster members
+            # Filter to cluster members
             codes_str = {str(c) for c in customer_codes}
             df['CUSTOMER_CODE'] = df['CUSTOMER_CODE'].astype(str)
             df = df[df['CUSTOMER_CODE'].isin(codes_str)]
@@ -109,14 +561,11 @@ class SparkPipelineOrchestrator:
             for _, row in df.iterrows():
                 ckey = str(row['CUSTOMER_CODE'])
                 
-                # Helper for safe string conversion without truthiness checks that fail on arrays
                 def safe_get(col):
                     val = row.get(col)
-                    # Handle pandas/numpy NA values correctly, including arrays
                     if isinstance(val, (list, dict, bytes)):
                         return ""
                     if isinstance(val, (np.ndarray, np.generic)):
-                         # If it's an array, take the first element if it exists or return empty string
                          if hasattr(val, 'size') and val.size > 0:
                              val = val.flat[0]
                          else:
@@ -133,363 +582,27 @@ class SparkPipelineOrchestrator:
                 dob = safe_get('BIRTH_DATE')
                 doc = safe_get('DOCUMENT')
                 
-                # Normalize values for consistency
-                name_norm = name.upper() if name else ""
-                email_norm = email.lower() if email else ""
-                phone_val = mobile if mobile else phone
-                phone_norm = "".join(filter(str.isdigit, phone_val)) if phone_val else ""
-                
                 records[ckey] = {
                     "customer_key": ckey,
                     "source_customer_id": ckey,
                     "name": name,
-                    "name_norm": name_norm,
+                    "name_norm": name.upper() if name else "",
                     "email": email,
-                    "email_norm": email_norm,
-                    "phone": phone_val,
-                    "phone_norm": phone_norm,
+                    "email_norm": email.lower() if email else "",
+                    "phone": mobile or phone,
+                    "phone_norm": "".join(filter(str.isdigit, mobile or phone or "")),
                     "dob": dob,
-                    "dob_norm": dob,
                     "address": address,
-                    "address_norm": address,
                     "natid": doc,
-                    "natid_norm": doc.upper() if doc else "",
                     "status": "ACT",
-                    "kycStatus": "VERIFIED",
                 }
-            logger.info(f"Loaded {len(records):,} cluster-member records from parquet")
-            return records
-        except Exception as e:
-            logger.error(f"Failed to load cluster member records from parquet: {e}", exc_info=True)
-            return {}
-                
-    async def _stage_ingest(self) -> int:
-        """Emit ingest progress with fast parquet row count."""
-        start = datetime.utcnow()
-        await self._emit_progress(StageProgress(
-            stage=PipelineStage.INGEST,
-            status="running",
-            message="Loading Oracle Parquet dataset..."
-        ))
-        
-        # Fast row count — doesn't load data, just reads metadata
-        loop = asyncio.get_event_loop()
-        n = await loop.run_in_executor(None, self._load_parquet_row_count)
-        
-        # Initialize the runs dir
-        os.makedirs("data/runs", exist_ok=True)
-        
-        duration = int((datetime.utcnow() - start).total_seconds() * 1000)
-        await self._emit_progress(StageProgress(
-            stage=PipelineStage.INGEST,
-            status="complete",
-            records_in=n,
-            records_out=n,
-            reduction_pct=0.0,
-            duration_ms=duration,
-            message=f"Found {n:,} customer records in Oracle Parquet"
-        ))
-        return n
-        
-    async def _stage_normalize(self, record_count: int):
-        start = datetime.utcnow()
-        await self._emit_progress(StageProgress(
-            stage=PipelineStage.NORMALIZE,
-            status="running",
-            message="Standardizing field formats via Spark..."
-        ))
-        
-        await asyncio.sleep(1.0)
-        
-        duration = int((datetime.utcnow() - start).total_seconds() * 1000)
-        await self._emit_progress(StageProgress(
-            stage=PipelineStage.NORMALIZE,
-            status="complete",
-            records_in=record_count,
-            records_out=record_count,
-            reduction_pct=0,
-            duration_ms=duration,
-            message=f"Fields normalized for {record_count:,} records"
-        ))
-
-    async def _stage_block(self, record_count: int):
-        start = datetime.utcnow()
-        await self._emit_progress(StageProgress(
-            stage=PipelineStage.BLOCK,
-            status="running",
-            message="Applying PySpark blocking rules..."
-        ))
-        
-        from engine.spark_er.blocking_rules import get_blocking_rules
-        rules = get_blocking_rules()
-        await asyncio.sleep(1.5)
-        
-        duration = int((datetime.utcnow() - start).total_seconds() * 1000)
-        await self._emit_progress(StageProgress(
-            stage=PipelineStage.BLOCK,
-            status="complete",
-            records_in=record_count,
-            records_out=record_count // 100,
-            reduction_pct=99.0,
-            duration_ms=duration,
-            message=f"Applied {len(rules)} blocking rules — candidate pairs reduced"
-        ))
-
-    async def _stage_candidates(self, record_count: int):
-        start = datetime.utcnow()
-        await self._emit_progress(StageProgress(
-            stage=PipelineStage.CANDIDATES,
-            status="running",
-            message="Generating high-confidence candidate pairs..."
-        ))
-        
-        await asyncio.sleep(1.0)
-        
-        duration = int((datetime.utcnow() - start).total_seconds() * 1000)
-        await self._emit_progress(StageProgress(
-            stage=PipelineStage.CANDIDATES,
-            status="complete",
-            records_in=record_count,
-            records_out=record_count * 2, # Simulated candidate pair count
-            reduction_pct=99.9,
-            duration_ms=duration,
-            message="Candidate pair generation complete"
-        ))
-
-    async def _stage_score_and_decide(self) -> tuple:
-        """Run Splink in a background thread, emitting granular real-time progress."""
-        import concurrent.futures
-        import queue as _queue
-
-        start = datetime.utcnow()
-
-        # Progress queue — Splink's logging handler writes here from the worker thread;
-        # the heartbeat loop drains it each tick and forwards to the WS.
-        prog_q: _queue.Queue = _queue.Queue()
-
-        await self._emit_progress(StageProgress(
-            stage=PipelineStage.SCORE,
-            status="running",
-            message="Initializing Spark session...",
-            data={"sub_step": "Initializing Spark session...", "progress_pct": 5,
-                  "em_iteration": 0, "em_max": 10}
-        ))
-
-        result_holder: Dict[str, Any] = {}
-
-        def run_spark_blocking():
-            try:
-                clusters, matches = run_splink_clustering(
-                    spark=None,
-                    match_threshold=MATCH_THRESHOLD,
-                    progress_queue=prog_q,
-                )
-                result_holder["clusters"] = clusters
-                result_holder["matches"] = matches
-            except Exception as e:
-                result_holder["error"] = str(e)
-
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(run_spark_blocking)
-
-        loop = asyncio.get_event_loop()
-        wrapped = asyncio.wrap_future(future, loop=loop)
-
-        # Last known sub-stage — used as fallback when queue is empty
-        last_sub: Dict[str, Any] = {
-            "sub_step": "Loading parquet partitions into Spark...",
-            "progress_pct": 8,
-            "em_iteration": 0,
-            "em_max": 10,
-        }
-
-        while not wrapped.done():
-            try:
-                await asyncio.wait_for(asyncio.shield(wrapped), timeout=5.0)
-            except asyncio.TimeoutError:
-                # Drain all enqueued events and emit the latest one
-                latest: Dict[str, Any] | None = None
-                try:
-                    while True:
-                        latest = prog_q.get_nowait()
-                except Exception:
-                    pass
-
-                if latest:
-                    last_sub = latest
-
-                elapsed = int((datetime.utcnow() - start).total_seconds())
-                em_iter = last_sub.get("em_iteration", 0)
-                em_max  = last_sub.get("em_max", 10)
-                pct     = last_sub.get("progress_pct", 5)
-                label   = last_sub.get("sub_step", "Processing...")
-
-                # Build a rich elapsed-time suffix
-                elapsed_str = f"{elapsed // 60}m{elapsed % 60:02d}s"
-
-                await self._emit_progress(StageProgress(
-                    stage=PipelineStage.SCORE,
-                    status="running",
-                    message=f"{label} ({elapsed_str} elapsed)",
-                    data={
-                        "sub_step":     label,
-                        "progress_pct": pct,
-                        "em_iteration": em_iter,
-                        "em_max":       em_max,
-                        "elapsed_sec":  elapsed,
-                    }
-                ))
-
-        executor.shutdown(wait=False)
-
-        if "error" in result_holder:
-            raise RuntimeError(f"Spark clustering failed: {result_holder['error']}")
-
-        clusters = result_holder.get("clusters", [])
-        matches  = result_holder.get("matches", [])
-        duration = int((datetime.utcnow() - start).total_seconds() * 1000)
-        sample_matches = matches[:50] if matches else []
-
-        await self._emit_progress(StageProgress(
-            stage=PipelineStage.SCORE,
-            status="complete",
-            records_in=len(matches) * 2,
-            records_out=len(matches),
-            reduction_pct=0,
-            duration_ms=duration,
-            message=f"Splink found {len(matches):,} high-confidence pairs",
-            data={
-                "sub_step": "Complete", "progress_pct": 100,
-                "em_iteration": 0, "em_max": 10,
-                "sample_matches": sample_matches,
-            }
-        ))
-
-        # Emit DECIDE stage
-        await self._emit_progress(StageProgress(
-            stage=PipelineStage.DECIDE,
-            status="running",
-            message="Applying threshold decisions..."
-        ))
-        await asyncio.sleep(0.3)
-        await self._emit_progress(StageProgress(
-            stage=PipelineStage.DECIDE,
-            status="complete",
-            records_in=len(matches),
-            records_out=len(clusters),
-            reduction_pct=0,
-            duration_ms=400,
-            message=f"Auto-linked: {len(matches):,} pairs → {len(clusters):,} clusters"
-        ))
-
-        return clusters, matches
-
-    async def _stage_cluster(self, clusters, matches):
-        """Map unique_ids back to CUSTOMER_CODE and populate the ClusterManager."""
-        start = datetime.utcnow()
-        await self._emit_progress(StageProgress(
-            stage=PipelineStage.CLUSTER,
-            status="running",
-            message="Building identity graph from cluster results..."
-        ))
-        
-        loop = asyncio.get_event_loop()
-        records_snapshot = self._records  # capture reference
-        run_id = self.run_id
-        
-        def build_cluster_graph():
-            try:
-                from pyspark.sql import SparkSession
-                import pyspark.sql.functions as F
-                from engine.clustering.cluster_manager import get_cluster_manager
-                
-                # Reuse running Spark session
-                spark = SparkSession.builder.appName("Splink Entity Resolution - Parallel").getOrCreate()
-                
-                # Collect unique_ids used in matches
-                unique_ids_needed = set()
-                for m in matches:
-                    unique_ids_needed.add(m['id1'])
-                    unique_ids_needed.add(m['id2'])
-                
-                if not unique_ids_needed:
-                    logger.warning("No unique_ids to map — clusters will be empty")
-                    return {'clusters_created': 0}
-                
-                # Filter just the rows we need — saves scanning all 1.5M rows
-                uid_list = [int(x) for x in unique_ids_needed if str(x).isdigit()]
-                records_df = spark.read.parquet(PARQUET_PATH)
-                
-                # Add monotonically increasing id (same as during clustering)
-                from pyspark.sql.functions import monotonically_increasing_id
-                records_df = records_df.withColumn("unique_id", monotonically_increasing_id())
-                
-                mapping_rows = records_df.filter(
-                    F.col("unique_id").isin(uid_list)
-                ).select("unique_id", "CUSTOMER_CODE").collect()
-                
-                id_to_code = {row['unique_id']: str(row['CUSTOMER_CODE']) for row in mapping_rows if row['CUSTOMER_CODE']}
-                logger.info(f"Mapped {len(id_to_code):,} unique_ids to CUSTOMER_CODE")
-                
-                manager = get_cluster_manager()
-                
-                # Reset manager state
-                manager._uf = type(manager._uf)()
-                manager._cluster_ids = {}
-                manager._members = []
-                
-                linked = 0
-                customer_codes_in_clusters = set()
-                for m in matches:
-                    c1 = id_to_code.get(m['id1'])
-                    c2 = id_to_code.get(m['id2'])
-                    if c1 and c2 and c1 != c2:
-                        manager.link(c1, c2)
-                        linked += 1
-                        customer_codes_in_clusters.add(c1)
-                        customer_codes_in_clusters.add(c2)
-                
-                logger.info(f"Linked {linked:,} pairs into cluster graph ({len(customer_codes_in_clusters):,} unique entities)")
-                
-                if run_id:
-                    os.makedirs("data/runs", exist_ok=True)
-                    manager.save_snapshot(f"data/runs/{run_id}_clusters.json")
-                    
-                    # Load ONLY the cluster member records from parquet (not all 1.5M rows)
-                    member_records = self._load_records_for_cluster_members(customer_codes_in_clusters)
-                    with open(f"data/runs/{run_id}_records.json", "w") as f:
-                        json.dump(member_records, f, default=str)
-                    logger.info(f"Saved {len(member_records):,} cluster-member records to records.json for run {run_id}")
-                
-                return {
-                    'clusters_created': len(clusters),
-                    'entities_created': len(customer_codes_in_clusters),
-                    'member_relationships': linked,
-                    'duplicate_relationships': linked
-                }
-            except Exception as e:
-                logger.error(f"Cluster graph build failed: {e}", exc_info=True)
-                # Write empty records on failure so UI doesn't crash on missing file
-                if run_id:
-                    with open(f"data/runs/{run_id}_records.json", "w") as f:
-                        json.dump({}, f)
-                return {'clusters_created': 0}
             
-        stats = await loop.run_in_executor(None, build_cluster_graph)
-        
-        duration = int((datetime.utcnow() - start).total_seconds() * 1000)
-        await self._emit_progress(StageProgress(
-            stage=PipelineStage.CLUSTER,
-            status="complete",
-            records_in=len(matches),
-            records_out=stats.get('clusters_created', 0),
-            duration_ms=duration,
-            message=f"Built identity graph: {stats.get('clusters_created', 0):,} clusters",
-            data={
-                "cluster_stats": stats,
-                "live_graph": True
-            }
-        ))
+            logger.info(f"Loaded {len(records):,} cluster-member records")
+            return records
+            
+        except Exception as e:
+            logger.error(f"Failed to load cluster records: {e}", exc_info=True)
+            return {}
 
     async def run(
         self,
@@ -497,6 +610,7 @@ class SparkPipelineOrchestrator:
         raw_records: list = None,
         mode: str = "FULL"
     ) -> PipelineResult:
+        """Execute the complete Spark-based ER pipeline."""
         result = PipelineResult(
             run_id=run_id,
             success=False,
@@ -506,24 +620,33 @@ class SparkPipelineOrchestrator:
         )
         
         try:
+            # Stage 1: Ingest - Load data into Spark
             record_count = await self._stage_ingest()
-            await self._stage_normalize(record_count)
-            await self._stage_block(record_count)
-            # 4. Candidates
-            await self._stage_candidates(record_count)
-            
-            clusters, matches = await self._stage_score_and_decide()
-            
-            await self._stage_cluster(clusters, matches)
-            
             result.records_in = record_count
+            
+            # Stage 2: Normalize - Prepare data
+            await self._stage_normalize(record_count)
             result.records_normalized = record_count
-            result.blocks_created = record_count // 100
-            result.candidates_generated = len(matches) * 2
+            
+            # Stage 3: Block - Generate candidate pairs
+            candidate_count = await self._stage_block()
+            result.blocks_created = candidate_count
+            
+            # Stage 4: Candidates - Already generated
+            await self._stage_candidates(candidate_count)
+            result.candidates_generated = candidate_count
+            
+            # Stage 5 & 6: Score and Decide
+            clusters, matches = await self._stage_score_and_decide(candidate_count)
             result.pairs_scored = len(matches)
             result.auto_links = len(matches)
             result.review_items = 0
             result.rejected = 0
+            
+            # Stage 7: Explain (skipped in Spark pipeline - all auto-linked)
+            
+            # Stage 8: Cluster - Build identity graph
+            await self._stage_cluster(clusters, matches)
             
             result.success = True
             result.ended_at = datetime.utcnow()
@@ -531,7 +654,7 @@ class SparkPipelineOrchestrator:
             await self._emit_progress(StageProgress(
                 stage=PipelineStage.COMPLETE,
                 status="complete",
-                message=f"Pipeline complete — {len(clusters):,} identity clusters resolved"
+                message=f"Pipeline complete: {len(clusters):,} identity clusters resolved from {record_count:,} records"
             ))
             
         except Exception as e:
@@ -545,5 +668,14 @@ class SparkPipelineOrchestrator:
                 status="error",
                 message=str(e)
             ))
+        
+        finally:
+            # Clean up Spark session
+            if self._spark:
+                try:
+                    from engine.spark_er.splink_commands import stop_spark_gracefully
+                    stop_spark_gracefully(self._spark)
+                except Exception as e:
+                    logger.warning(f"Spark cleanup error (non-critical): {e}")
             
         return result

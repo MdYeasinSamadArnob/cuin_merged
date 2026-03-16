@@ -94,22 +94,24 @@ load_dotenv()
 from engine.spark_er.blocking.multi_pass_blocking import MultiPassBlocker, LSHBlocker
 
 # Configuration constants
-MAX_SAMPLING_PAIRS = 1e6  # Maximum pairs to sample for u-probability estimation
+MAX_SAMPLING_PAIRS = 3e5  # Maximum pairs to sample for u-probability estimation (300K is sufficient)
 DEFAULT_CLUSTERING_OUTPUT = "clustering_results.csv"
 
 # Check PySpark availability
 try:
     from pyspark.sql import SparkSession
     from pyspark import SparkContext
-except ImportError:
-    print("=" * 70)
-    print("ERROR: PySpark not installed")
-    print("=" * 70)
-    print("\nPySpark is required for Splink integration.")
-    print("\nTo install:")
-    print("  pip install pyspark")
-    print("=" * 70)
-    sys.exit(1)
+except ImportError as e:
+    error_msg = (
+        "=" * 70 + "\n"
+        "ERROR: PySpark not installed\n"
+        "=" * 70 + "\n\n"
+        "PySpark is required for Splink integration.\n\n"
+        "To install:\n"
+        "  pip install pyspark\n"
+        + "=" * 70
+    )
+    raise ImportError(error_msg) from e
 
 # Check Splink availability with detailed error reporting
 try:
@@ -117,31 +119,35 @@ try:
     splink_version = splink.__version__
     print(f"Splink version {splink_version} detected")
 except ImportError as e:
-    print("=" * 70)
-    print("ERROR: Splink is not installed")
-    print("=" * 70)
-    print(f"\nImport error: {e}")
-    print("\nSplink 4.x with Spark bindings is required for entity resolution clustering.")
-    print("\nTo install:")
-    print("  pip install 'splink[spark]>=4.0.0'")
-    print("\nOr install all requirements:")
-    print("  pip install -r requirements.txt")
-    print("\nNote: Splink 4.x requires the [spark] extra for Spark support.")
-    print("=" * 70)
-    sys.exit(1)
+    error_msg = (
+        "=" * 70 + "\n"
+        "ERROR: Splink is not installed\n"
+        "=" * 70 + "\n\n"
+        f"Import error: {e}\n\n"
+        "Splink 4.x with Spark bindings is required for entity resolution clustering.\n\n"
+        "To install:\n"
+        "  pip install 'splink[spark]>=4.0.0'\n\n"
+        "Or install all requirements:\n"
+        "  pip install -r requirements.txt\n\n"
+        "Note: Splink 4.x requires the [spark] extra for Spark support.\n"
+        + "=" * 70
+    )
+    raise ImportError(error_msg) from e
 
 # Check for Splink 4.x
 try:
     major_version = int(splink_version.split('.')[0])
     if major_version < 4:
-        print("=" * 70)
-        print(f"ERROR: Splink {splink_version} is too old")
-        print("=" * 70)
-        print(f"\nFound Splink {splink_version}, but Splink 4.x is required.")
-        print("\nTo upgrade:")
-        print("  pip install --upgrade 'splink[spark]>=4.0.0'")
-        print("=" * 70)
-        sys.exit(1)
+        error_msg = (
+            "=" * 70 + "\n"
+            f"ERROR: Splink {splink_version} is too old\n"
+            "=" * 70 + "\n\n"
+            f"Found Splink {splink_version}, but Splink 4.x is required.\n\n"
+            "To upgrade:\n"
+            "  pip install --upgrade 'splink[spark]>=4.0.0'\n"
+            + "=" * 70
+        )
+        raise ImportError(error_msg)
 except (ValueError, AttributeError) as e:
     print(f"Warning: Could not parse Splink version '{splink_version}': {e}")
 
@@ -153,7 +159,7 @@ except ImportError as e:
     missing_modules.append(f"splink.Linker and splink.SparkAPI: {e}")
 
 try:
-    from splink.comparison_library import exact_match, levenshtein_at_thresholds, jaro_winkler_at_thresholds
+    from splink.comparison_library import ExactMatch, LevenshteinAtThresholds, JaroWinklerAtThresholds
 except ImportError as e:
     missing_modules.append(f"splink.comparison_library: {e}")
 
@@ -163,21 +169,25 @@ except ImportError as e:
     missing_modules.append(f"splink.comparison_level_library: {e}")
 
 if missing_modules:
-    print("=" * 70)
-    print("ERROR: Required Splink modules are missing")
-    print("=" * 70)
-    print(f"\nSplink {splink_version} is installed, but required modules are missing:")
+    error_msg = (
+        "=" * 70 + "\n"
+        "ERROR: Required Splink modules are missing\n"
+        "=" * 70 + "\n\n"
+        f"Splink {splink_version} is installed, but required modules are missing:\n"
+    )
     for module in missing_modules:
-        print(f"  ✗ {module}")
-    print("\nThis usually means:")
-    print("  1. Splink was installed without [spark] extras")
-    print("  2. Splink version is too old (need 4.x)")
-    print("  3. Splink installation is incomplete or corrupted")
-    print("\nTo fix:")
-    print("  pip install --upgrade --force-reinstall 'splink[spark]>=4.0.0'")
-    print("\nNote: The [spark] extra is required for Spark bindings in Splink 4.x")
-    print("=" * 70)
-    sys.exit(1)
+        error_msg += f"  ✗ {module}\n"
+    error_msg += (
+        "\nThis usually means:\n"
+        "  1. Splink was installed without [spark] extras\n"
+        "  2. Splink version is too old (need 4.x)\n"
+        "  3. Splink installation is incomplete or corrupted\n\n"
+        "To fix:\n"
+        "  pip install --upgrade --force-reinstall 'splink[spark]>=4.0.0'\n\n"
+        "Note: The [spark] extra is required for Spark bindings in Splink 4.x\n"
+        + "=" * 70
+    )
+    raise ImportError(error_msg)
 
 # Configuration from environment variables
 CACHE_DIR = os.getenv("CACHE_DIR", "data_source")
@@ -350,11 +360,13 @@ def load_data(spark: SparkSession):
         data_path = CUSTOMER_AGGREGATED_PATH
     
     if not os.path.exists(data_path):
-        print(f"✗ ERROR: Parquet data not found at: {data_path}")
-        print(f"  Also checked cache: {cache_path}")
-        print("\nPlease ensure parquet data exists at one of these locations.")
-        print("You can configure the path via CUSTOMER_AGGREGATED_PATH in .env file")
-        sys.exit(1)
+        error_msg = (
+            f"✗ ERROR: Parquet data not found at: {data_path}\n"
+            f"  Also checked cache: {cache_path}\n\n"
+            "Please ensure parquet data exists at one of these locations.\n"
+            "You can configure the path via CUSTOMER_AGGREGATED_PATH in .env file"
+        )
+        raise FileNotFoundError(error_msg)
     
     print("=" * 70)
     print("LOADING DATA INTO SPARK")
@@ -367,9 +379,11 @@ def load_data(spark: SparkSession):
     
     # Verify CUSTOMER_CODE exists
     if "CUSTOMER_CODE" not in df.columns:
-        print(f"✗ ERROR: CUSTOMER_CODE column not found in parquet data")
-        print(f"  Available columns: {df.columns}")
-        sys.exit(1)
+        error_msg = (
+            "✗ ERROR: CUSTOMER_CODE column not found in parquet data\n"
+            f"  Available columns: {df.columns}"
+        )
+        raise ValueError(error_msg)
     
     # Repartition for parallel processing
     # import multiprocessing
@@ -415,42 +429,42 @@ def create_splink_settings(link_type: str = "dedupe_only") -> Dict[str, Any]:
         {
             "output_column_name": "name",
             "comparison_levels": [
-                cll.null_level("NAME"),
-                cll.exact_match_level("NAME"),
-                cll.levenshtein_level("NAME", 2),
-                cll.else_level(),
+                cll.NullLevel("NAME"),
+                cll.ExactMatchLevel("NAME"),
+                cll.LevenshteinLevel("NAME", 2),
+                cll.ElseLevel(),
             ],
         },
         {
             "output_column_name": "document",
             "comparison_levels": [
-                cll.null_level("DOCUMENT"),
-                cll.exact_match_level("DOCUMENT"),
-                cll.else_level(),
+                cll.NullLevel("DOCUMENT"),
+                cll.ExactMatchLevel("DOCUMENT"),
+                cll.ElseLevel(),
             ],
         },
         {
             "output_column_name": "mobile",
             "comparison_levels": [
-                cll.null_level("MOBILE"),
-                cll.exact_match_level("MOBILE"),
-                cll.else_level(),
+                cll.NullLevel("MOBILE"),
+                cll.ExactMatchLevel("MOBILE"),
+                cll.ElseLevel(),
             ],
         },
         {
             "output_column_name": "email",
             "comparison_levels": [
-                cll.null_level("EMAIL"),
-                cll.exact_match_level("EMAIL"),
-                cll.else_level(),
+                cll.NullLevel("EMAIL"),
+                cll.ExactMatchLevel("EMAIL"),
+                cll.ElseLevel(),
             ],
         },
         {
             "output_column_name": "dob",
             "comparison_levels": [
-                cll.null_level("BIRTH_DATE"),
-                cll.exact_match_level("BIRTH_DATE"),
-                cll.else_level(),
+                cll.NullLevel("BIRTH_DATE"),
+                cll.ExactMatchLevel("BIRTH_DATE"),
+                cll.ElseLevel(),
             ],
         }
     ]
@@ -467,7 +481,7 @@ def create_splink_settings(link_type: str = "dedupe_only") -> Dict[str, Any]:
     return settings
 
 
-def run_blocking(spark: SparkSession, df, output_csv: str = "blocking_analysis.csv"):
+def run_blocking(spark: SparkSession, df, output_csv: str = "blocking_analysis.csv", record_count: int = None):
     """Run Spark-native distributed blocking with maximum performance.
     
     This implements blocking using pure Spark SQL operations (no Python UDFs):
@@ -507,7 +521,7 @@ def run_blocking(spark: SparkSession, df, output_csv: str = "blocking_analysis.c
     
     # Initialize MultiPassBlocker configuration (but won't use it directly due to serialization issues)
     # Instead, we'll implement the same logic using pure Spark SQL
-    total_records = df.count()
+    total_records = record_count if record_count is not None else df.count()
     
     # Choose configuration based on dataset size
     if total_records > 500000:
@@ -555,9 +569,10 @@ def run_blocking(spark: SparkSession, df, output_csv: str = "blocking_analysis.c
     
     settings = create_splink_settings()
     
-    # Cache the input DataFrame for reuse
-    df.cache()
-    df.count()  # Materialize cache
+    # Cache the input DataFrame for reuse (skip if already cached from normalisation stage)
+    if not df.is_cached:
+        df.cache()
+        df.count()  # Materialize cache
     
     print("\n" + "=" * 70)
     print("GENERATING CANDIDATE PAIRS - SPARK NATIVE BLOCKING")
@@ -901,9 +916,8 @@ def run_blocking(spark: SparkSession, df, output_csv: str = "blocking_analysis.c
     )
     
     df_viable.cache()
-    viable_instances = df_viable.count()
-    print(f"  ✓ Viable key instances: {viable_instances:,}")
-    
+    # (skip viable_instances count — not used for logic, saves one Spark job)
+
     # Generate candidate pairs via self-join
     print("  • Generating candidate pairs (self-join on blocking keys)...")
     pairs_df = df_viable.alias("l").join(
@@ -1166,6 +1180,24 @@ def run_scoring(spark: SparkSession, df, settings: Dict[str, Any],
     
     try:
         print(f"  [1/2] Creating linker...")
+
+        # --- Column pruning: keep ONLY what Splink needs ---
+        # Carrying extra columns (especially wide ARRAY columns like MOBILE/EMAIL/DOCUMENT)
+        # through Splink's self-joins massively inflates shuffle size.
+        # Splink only requires: unique_id + all columns referenced in comparisons/blocking.
+        _splink_required = {
+            settings.get("unique_id_column_name", "CUSTOMER_CODE"),
+            "NAME", "DOCUMENT", "MOBILE", "EMAIL", "BIRTH_DATE",
+        }
+        _available = set(df.columns)
+        _keep = list(_splink_required & _available)
+        if set(_keep) != _available:
+            dropped = sorted(_available - set(_keep))
+            print(f"  • Pruning {len(dropped)} unused columns before training: {dropped}")
+            df = df.select(*_keep)
+        else:
+            print(f"  • All {len(_available)} columns are used by Splink — no pruning needed")
+
         # Create Linker with Splink 4.x API
         api = SparkAPI(spark_session=spark)
         linker = Linker(
@@ -1195,373 +1227,130 @@ def run_scoring(spark: SparkSession, df, settings: Dict[str, Any],
             print(f"    ✗ Error during u-probability estimation: {e}")
             raise
         
-        # Training pass 2: m-probabilities using EM for each blocking rule
-        print(f"  Training pass 2: m-probability estimation (multipass)")
+        # Training pass 2: m-probabilities via EM — one pass per blocking rule
+        print(f"  Training pass 2: m-probability estimation (all {len(blocking_rules)} blocking rules)")
         print(f"    • Method: Expectation Maximisation (EM)")
-        print(f"    • Rules: {len(blocking_rules)} blocking rules")
         print()
-        
-        with tqdm(total=len(blocking_rules), desc="    Training on rules", ncols=80) as pbar:
-            for rule_idx, rule in enumerate(blocking_rules):
-                try:
-                    print(f"    [Rule {rule_idx + 1}/{len(blocking_rules)}] Training on: {rule}")
-                    
-                    rule_training_start = datetime.now()
-                    linker.training.estimate_parameters_using_expectation_maximisation(rule)
-                    rule_training_duration = (datetime.now() - rule_training_start).total_seconds()
-                    
-                    print(f"      ✓ Completed in {rule_training_duration:.1f}s")
-                    pbar.set_postfix_str(f"Rule {rule_idx + 1}/{len(blocking_rules)}")
-                    pbar.update(1)
-                    
-                except MemoryError:
-                    print(f"      ✗ Out of Memory training on rule: {rule}")
-                    print(f"      • Continuing with remaining rules...")
-                    pbar.set_postfix_str(f"Rule {rule_idx + 1} OOM")
-                    pbar.update(1)
-                    continue
-                    
-                except Exception as e:
-                    print(f"      ✗ Error training on rule {rule}: {e}")
-                    print(f"      • Continuing with remaining rules...")
-                    pbar.set_postfix_str(f"Rule {rule_idx + 1} Error")
-                    pbar.update(1)
-                    continue
-        
+
+        for em_idx, em_rule in enumerate(blocking_rules, 1):
+            print(f"    [{em_idx}/{len(blocking_rules)}] Rule: {em_rule}")
+            em_start = datetime.now()
+            try:
+                linker.training.estimate_parameters_using_expectation_maximisation(em_rule)
+                em_duration = (datetime.now() - em_start).total_seconds()
+                print(f"    ✓ EM pass {em_idx} completed in {em_duration:.1f}s")
+            except MemoryError:
+                print(f"    ✗ Out of Memory during EM pass {em_idx}; skipping rule")
+            except Exception as e:
+                print(f"    ✗ EM pass {em_idx} failed ({e}); skipping rule")
+            print()
+
         print()
         print(f"  ✓ Training phase completed")
         print("=" * 70)
         print()
-        
+
     except Exception as e:
         print(f"\n  ✗ Training phase failed: {e}")
         print("=" * 70)
         raise
     
-    # Scoring phase - multipass distributed with OOM prevention
+    # Scoring phase — single-pass prediction (all blocking rules combined)
     print("=" * 70)
-    print("SCORING PHASE - MULTIPASS DISTRIBUTED PREDICTION")
+    print("SCORING PHASE - SINGLE-PASS PREDICTION")
     print("=" * 70)
-    
+
     try:
-        print(f"  Processing predictions using multipass distributed strategy...")
-        print(f"    • Strategy: Process one blocking rule at a time")
+        print(f"  Generating predictions in a single Spark pass...")
+        print(f"    • Strategy: All blocking rules combined (no per-rule overhead)")
         print(f"    • Threshold: {threshold}")
-        print(f"    • Blocking rules: {len(blocking_rules)}")
-        print(f"    • Streaming: Write results incrementally to CSV")
-        print(f"    • Memory-safe: No full dataset loaded into memory")
+        print(f"    • Output: {output_csv}")
         print()
-        
+
+        import csv
+
         scoring_start = datetime.now()
         total_predictions = 0
-        predictions_per_rule = []
-        use_pandas = os.getenv("CUIN_USE_PANDAS", "").lower() in ("1", "true", "yes")
-        
-        # Import csv module for CSV writing (needed for both pandas and Spark paths)
-        import csv
-        
+
+        # Clean up old output file
+        if os.path.exists(output_csv):
+            print(f"  ⚠ Deleting old scoring results: {output_csv}")
+            os.remove(output_csv)
+
         def spark_row_to_csv_values(row, columns):
             row_dict = row.asDict(recursive=True)
             return ["" if row_dict.get(col) is None else str(row_dict.get(col)) for col in columns]
-        
-        if use_pandas:
-            try:
-                import pandas as pd
-            except ImportError:
-                print("  • Pandas not available, using Spark streaming CSV writer instead")
-                use_pandas = False
-        
-        # Check if output CSV already exists and warn user
-        if os.path.exists(output_csv):
-            print(f"  ⚠ WARNING: Output CSV already exists: {output_csv}")
-            print(f"  • Deleting old file to ensure fresh CSV write")
-            os.remove(output_csv)
-        
-        # Initialize CSV file
-        first_write = True
-        
-        # Process predictions for each blocking rule separately (multipass)
-        print(f"  Processing predictions by blocking rule (multipass)...")
-        print()
-        
-        with tqdm(total=len(blocking_rules), desc="  Scoring passes", ncols=80) as pbar:
-            for rule_idx, rule in enumerate(blocking_rules):
-                rule_start = datetime.now()
-                print(f"  [Pass {rule_idx + 1}/{len(blocking_rules)}] Scoring: {rule}")
-                
-                try:
-                    # Create a temporary linker with only this blocking rule
-                    # This limits the candidate pairs to process at once
-                    temp_settings = settings.copy()
-                    temp_settings["blocking_rules_to_generate_predictions"] = [rule]
-                    
-                    print(f"    • Creating temporary linker for this rule...")
-                    temp_api = SparkAPI(spark_session=spark)
-                    temp_linker = Linker(
-                        df,
-                        temp_settings,
-                        db_api=temp_api
-                    )
-                    
-                    # Copy trained parameters from main linker
-                    # This avoids re-training for each rule
-                    # NOTE: Using private attribute _settings_obj may break with Splink updates
-                    # This is necessary to avoid re-training for each rule, which would be inefficient
-                    # and could cause OOM issues. Monitor Splink releases for API changes.
-                    print(f"    • Copying trained parameters...")
-                    try:
-                        temp_linker._settings_obj = linker._settings_obj
-                    except AttributeError:
-                        # If Splink API changes, fall back to re-training
-                        print(f"    • Warning: Could not copy parameters (Splink API may have changed)")
-                        print(f"    • Falling back to using trained model directly (may be slower)")
-                    
-                    print(f"    • Generating predictions (distributed)...")
-                    # Predict only for this blocking rule
-                    # Spark handles parallelization internally
-                    rule_predictions = temp_linker.inference.predict(
-                        threshold_match_probability=threshold
-                    )
-                    
-                    if use_pandas:
-                        # Convert to pandas and write immediately (streaming approach)
-                        print(f"    • Converting to pandas (streaming)...")
-                        try:
-                            rule_predictions_pd = rule_predictions.as_pandas_dataframe()
-                            
-                            print(f"    • Predictions generated: {len(rule_predictions_pd):,}")
-                            
-                            # Drop array columns (DOCUMENT, MOBILE, EMAIL) to prevent CSV corruption
-                            # These columns cause issues when serialized to CSV and aren't needed for clustering
-                            array_cols_to_drop = [col for col in rule_predictions_pd.columns 
-                                                  if any(arr_field in col for arr_field in ['DOCUMENT', 'MOBILE', 'EMAIL', 'FULL_ADDRESS', 'TELEPHONE'])]
-                            if array_cols_to_drop:
-                                print(f"    • Dropping {len(array_cols_to_drop)} array columns to prevent CSV corruption")
-                                rule_predictions_pd = rule_predictions_pd.drop(columns=array_cols_to_drop)
-                            
-                            # Ensure match_probability column exists before writing to CSV
-                            if "match_probability" not in rule_predictions_pd.columns:
-                                if "match_weight" in rule_predictions_pd.columns:
-                                    print(f"    • Adding match_probability column from match_weight...")
-                                    import numpy as np
-                                    # match_probability = 1 / (1 + 2^(-match_weight))
-                                    rule_predictions_pd["match_probability"] = 1.0 / (1.0 + np.power(2.0, -rule_predictions_pd["match_weight"]))
-                                else:
-                                    print(f"    ⚠ Warning: Neither match_probability nor match_weight found in predictions")
-                                    print(f"    • Available columns: {list(rule_predictions_pd.columns)}")
-                            
-                            rule_count = len(rule_predictions_pd)
-                            
-                            if rule_count > 0:
-                                print(f"    • Writing {rule_count:,} predictions to CSV...")
-                                
-                                # Write to CSV incrementally (using standard CSV format)
-                                if first_write:
-                                    rule_predictions_pd.to_csv(output_csv, index=False, mode='w')
-                                    first_write = False
-                                else:
-                                    rule_predictions_pd.to_csv(output_csv, index=False, mode='a', header=False)
-                                
-                                total_predictions += rule_count
-                                predictions_per_rule.append((rule, rule_count))
-                                
-                                rule_duration = (datetime.now() - rule_start).total_seconds()
-                                print(f"    ✓ Pass completed: {rule_count:,} predictions in {rule_duration:.1f}s")
-                                pbar.set_postfix_str(f"{rule_count:,} predictions")
-                            else:
-                                print(f"    ✓ No predictions above threshold")
-                                pbar.set_postfix_str("0 predictions")
-                            
-                        except MemoryError:
-                            print(f"    ✗ Out of Memory converting predictions for rule: {rule}")
-                            print(f"    • Skipping this rule and continuing...")
-                            print(f"    • Consider: increasing memory or reducing candidate pairs")
-                            pbar.set_postfix_str("OOM - skipped")
-                            continue
-                        
-                        except Exception as e:
-                            print(f"    ✗ Error processing predictions for rule: {e}")
-                            print(f"    • Skipping this rule and continuing...")
-                            pbar.set_postfix_str("Error - skipped")
-                            continue
-                    else:
-                        print(f"    • Writing predictions to CSV (Spark streaming)...")
-                        try:
-                            rule_predictions_df = rule_predictions.as_spark_dataframe()
-                            
-                            print(f"    • Predictions generated: {rule_predictions_df.count():,}")
-                            
-                            # Drop array columns (DOCUMENT, MOBILE, EMAIL) to prevent CSV corruption
-                            array_cols_to_drop = [col for col in rule_predictions_df.columns 
-                                                  if any(arr_field in col for arr_field in ['DOCUMENT', 'MOBILE', 'EMAIL', 'FULL_ADDRESS', 'TELEPHONE'])]
-                            if array_cols_to_drop:
-                                print(f"    • Dropping {len(array_cols_to_drop)} array columns to prevent CSV corruption")
-                                rule_predictions_df = rule_predictions_df.drop(*array_cols_to_drop)
-                            
-                            # Ensure match_probability column exists before writing to CSV
-                            if "match_probability" not in rule_predictions_df.columns:
-                                if "match_weight" in rule_predictions_df.columns:
-                                    print(f"    • Adding match_probability column from match_weight...")
-                                    from pyspark.sql.functions import expr
-                                    # match_probability = 1 / (1 + 2^(-match_weight))
-                                    rule_predictions_df = rule_predictions_df.withColumn(
-                                        "match_probability",
-                                        expr("1.0 / (1.0 + pow(2.0, -match_weight))")
-                                    )
-                                else:
-                                    print(f"    ⚠ Warning: Neither match_probability nor match_weight found in predictions")
-                                    print(f"    • Available columns: {rule_predictions_df.columns}")
-                            
-                            row_iter = rule_predictions_df.toLocalIterator()
-                            first_row = next(row_iter, None)
-                            
-                            if first_row is None:
-                                print(f"    ✓ No predictions above threshold")
-                                pbar.set_postfix_str("0 predictions")
-                            else:
-                                columns = rule_predictions_df.columns
-                                mode = "w" if first_write else "a"
-                                row_count = 0
-                                
-                                with open(output_csv, mode, newline="", encoding="utf-8") as csvfile:
-                                    writer = csv.writer(csvfile)
-                                    if first_write:
-                                        writer.writerow(columns)
-                                        first_write = False
-                                    
-                                    writer.writerow(spark_row_to_csv_values(first_row, columns))
-                                    row_count += 1
-                                    
-                                    for row in row_iter:
-                                        writer.writerow(spark_row_to_csv_values(row, columns))
-                                        row_count += 1
-                                
-                                print(f"    ✓ [Scoring] Wrote {row_count:,} predictions to CSV")
-                                total_predictions += row_count
-                                predictions_per_rule.append((rule, row_count))
-                                
-                                rule_duration = (datetime.now() - rule_start).total_seconds()
-                                print(f"    ✓ Pass completed: {row_count:,} predictions in {rule_duration:.1f}s")
-                                pbar.set_postfix_str(f"{row_count:,} predictions")
-                        
-                        except MemoryError:
-                            print(f"    ✗ Out of Memory writing predictions for rule: {rule}")
-                            print(f"    • Skipping this rule and continuing...")
-                            print(f"    • Consider: increasing memory or reducing candidate pairs")
-                            pbar.set_postfix_str("OOM - skipped")
-                            continue
-                        
-                        except Exception as e:
-                            print(f"    ✗ Error processing predictions for rule: {e}")
-                            print(f"    • Skipping this rule and continuing...")
-                            pbar.set_postfix_str("Error - skipped")
-                            continue
-                    
-                    pbar.update(1)
-                    
-                except MemoryError:
-                    print(f"    ✗ Out of Memory generating predictions for rule: {rule}")
-                    print(f"    • Skipping this rule and continuing...")
-                    print(f"    • Consider: reducing blocking candidate pairs or increasing memory")
-                    pbar.set_postfix_str("OOM - skipped")
-                    pbar.update(1)
-                    continue
-                    
-                except Exception as e:
-                    print(f"    ✗ Error generating predictions for rule: {e}")
-                    print(f"    • Skipping this rule and continuing...")
-                    pbar.set_postfix_str("Error - skipped")
-                    pbar.update(1)
-                    continue
-        
-        print()
-        scoring_duration = (datetime.now() - scoring_start).total_seconds()
-        
-        # Deduplicate results if we have any predictions
-        if total_predictions > 0:
-            print(f"  Deduplicating predictions...")
-            try:
-                # Use Spark for deduplication to avoid OOM issues
-                # This is more memory-efficient than pandas for large datasets
-                print(f"  • Using Spark for memory-efficient deduplication...")
-                
-                # Read CSV into Spark DataFrame
-                predictions_spark_df = spark.read.csv(
-                    output_csv, 
-                    header=True, 
-                    inferSchema=True,
-                    mode='DROPMALFORMED'  # Drop corrupt rows if any
+
+        # Single predict call — Splink deduplicates pairs across blocking rules internally
+        print(f"  Running Splink predict (single pass, all rules)...")
+        predict_start = datetime.now()
+        raw_predictions = linker.inference.predict(threshold_match_probability=threshold)
+        predictions_df_spark = raw_predictions.as_spark_dataframe()
+
+        # Drop array columns to prevent CSV corruption
+        ARRAY_FIELDS = ['DOCUMENT', 'MOBILE', 'EMAIL', 'FULL_ADDRESS', 'TELEPHONE']
+        array_cols_to_drop = [c for c in predictions_df_spark.columns
+                              if any(arr in c for arr in ARRAY_FIELDS)]
+        if array_cols_to_drop:
+            print(f"  • Dropping {len(array_cols_to_drop)} array columns from predictions")
+            predictions_df_spark = predictions_df_spark.drop(*array_cols_to_drop)
+
+        # Ensure match_probability column exists
+        if "match_probability" not in predictions_df_spark.columns:
+            if "match_weight" in predictions_df_spark.columns:
+                print(f"  • Deriving match_probability from match_weight...")
+                predictions_df_spark = predictions_df_spark.withColumn(
+                    "match_probability",
+                    F.expr("1.0 / (1.0 + pow(2.0, -match_weight))")
                 )
-                original_count = predictions_spark_df.count()
-                
-                # Check if required columns exist
-                # Splink predictions should have id_l and id_r columns
-                if 'id_l' not in predictions_spark_df.columns or 'id_r' not in predictions_spark_df.columns:
-                    print(f"  • Warning: Missing id_l or id_r columns, skipping deduplication")
-                    print(f"  • Columns found: {predictions_spark_df.columns}")
-                else:
-                    # Deduplicate by (id_l, id_r) pair using Spark
-                    predictions_dedup = predictions_spark_df.dropDuplicates(['id_l', 'id_r'])
-                    dedup_count = predictions_dedup.count()
-                    duplicates_removed = original_count - dedup_count
-                    
-                    if duplicates_removed > 0:
-                        print(f"  • Removed {duplicates_removed:,} duplicate predictions")
-                        # Write deduplicated results back using Spark
-                        # Use coalesce(1) to write a single CSV file
-                        predictions_dedup.coalesce(1).write.mode('overwrite') \
-                            .option('header', 'true') \
-                            .csv(output_csv + '_temp')
-                        
-                        # Move the single CSV file to the output path
-                        temp_files = glob.glob(f"{output_csv}_temp/*.csv")
-                        if temp_files:
-                            shutil.move(temp_files[0], output_csv)
-                            shutil.rmtree(f"{output_csv}_temp")
-                    else:
-                        print(f"  • No duplicates found")
-                    
-                    print(f"  ✓ Final predictions: {dedup_count:,}")
-                
-            except MemoryError:
-                print(f"  ✗ Out of Memory during deduplication")
-                print(f"  • Predictions saved but may contain duplicates")
-                print(f"  • Consider: post-processing deduplication separately")
-            except Exception as e:
-                print(f"  • Warning: Could not deduplicate: {e}")
-                print(f"  • Predictions saved but may contain duplicates")
-        
+            else:
+                print(f"  ⚠ Warning: No match_probability or match_weight column found")
+
+        predict_duration = (datetime.now() - predict_start).total_seconds()
+        print(f"  ✓ Predictions plan built in {predict_duration:.1f}s")
+
+        # Stream rows to CSV via toLocalIterator (avoids loading full result into driver memory)
+        print(f"  Streaming predictions to CSV...")
+        row_iter = predictions_df_spark.toLocalIterator()
+        first_row = next(row_iter, None)
+        if first_row is not None:
+            columns = predictions_df_spark.columns
+            with open(output_csv, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(columns)
+                writer.writerow(spark_row_to_csv_values(first_row, columns))
+                total_predictions = 1
+                for row in row_iter:
+                    writer.writerow(spark_row_to_csv_values(row, columns))
+                    total_predictions += 1
+            print(f"  ✓ Wrote {total_predictions:,} predictions to {output_csv}")
+        else:
+            print(f"  • No predictions above threshold {threshold}")
+
+        scoring_duration = (datetime.now() - scoring_start).total_seconds()
+
         print()
         print("=" * 70)
         print("SCORING SUMMARY")
         print("=" * 70)
         print(f"  Records processed: {total_records:,}")
         print(f"  Blocking rules: {len(blocking_rules)}")
-        print(f"  Scoring passes: {len(predictions_per_rule)}/{len(blocking_rules)} completed")
+        print(f"  Strategy: Single-pass (all rules combined, Splink deduplicates internally)")
         print(f"  Match threshold: {threshold}")
-        print(f"  Parallel processing: {spark.sparkContext.defaultParallelism} partitions per pass")
         print(f"  Total predictions: {total_predictions:,}")
         if scoring_duration > 0:
             print(f"  Average speed: {total_predictions/scoring_duration:.0f} predictions/sec")
         print(f"  Total time: {scoring_duration:.1f}s")
-        print()
-        
-        if len(predictions_per_rule) > 0:
-            print(f"  Predictions per blocking rule:")
-            for rule, count in predictions_per_rule:
-                print(f"    • {rule}: {count:,}")
-        
         print("=" * 70)
         print()
-        
+
         # Export summary
         print("=" * 70)
         print("EXPORT SUMMARY")
         print("=" * 70)
         try:
             if total_predictions > 0:
-                file_size = os.path.getsize(output_csv) / (1024 * 1024)  # Size in MB
-                print(f"  ✓ Successfully saved predictions")
+                file_size = os.path.getsize(output_csv) / (1024 * 1024)
                 print(f"  ✓ Total predictions: {total_predictions:,}")
                 print(f"  ✓ File size: {file_size:.2f} MB")
                 print(f"  ✓ Output: {output_csv}")
@@ -1572,30 +1361,18 @@ def run_scoring(spark: SparkSession, df, settings: Dict[str, Any],
             print(f"  • Warning: Could not get file stats: {e}")
         print("=" * 70)
         print()
-        
-        # Create a mock predictions object for compatibility with clustering
-        # Since we processed in batches, we return the combined results
-        # NOTE: PredictionsWrapper loads data lazily to avoid OOM issues
-        # Only load into memory when explicitly requested
+
+        # Wrap results in a lazy-loading object for compatibility with clustering
         class PredictionsWrapper:
-            """Wrapper for predictions CSV file to provide compatibility with Splink API.
-            
-            This wrapper loads data lazily to avoid OOM issues. The CSV is only read
-            into memory when methods are called, and users should be aware that
-            as_pandas_dataframe() will load the entire dataset into memory.
-            """
+            """Wrapper for predictions CSV \u2014 provides Splink-compatible API, loads lazily."""
+
             def __init__(self, csv_path, spark_session):
                 self.csv_path = csv_path
                 self.spark = spark_session
                 self._cached_df = None
-            
+
             def as_pandas_dataframe(self):
-                """Load predictions into pandas DataFrame.
-                
-                WARNING: This loads the entire CSV into memory. Only use when
-                you have sufficient memory available. Consider using as_spark_dataframe()
-                for large datasets.
-                """
+                """Load predictions into pandas DataFrame."""
                 try:
                     import pandas as pd
                 except ImportError as exc:
@@ -1604,20 +1381,17 @@ def run_scoring(spark: SparkSession, df, settings: Dict[str, Any],
                         "Install pandas or use as_spark_dataframe() instead."
                     ) from exc
                 if self._cached_df is None:
-                    # Read CSV with standard format
                     self._cached_df = pd.read_csv(self.csv_path)
                 return self._cached_df
-            
+
             def as_spark_dataframe(self):
                 """Load predictions into Spark DataFrame for distributed processing."""
-                # Read CSV without schema inference to avoid issues with array columns
-                # Array columns have been dropped during write, but old CSVs might still have them
                 try:
                     df = self.spark.read.csv(
-                        self.csv_path, 
-                        header=True, 
+                        self.csv_path,
+                        header=True,
                         inferSchema=True,
-                        mode='DROPMALFORMED'  # Drop rows with corrupt data
+                        mode='DROPMALFORMED'
                     )
                     print(f"  • DEBUG: PredictionsWrapper loaded CSV with columns: {df.columns}")
                     print(f"  • DEBUG: match_probability in CSV: {'match_probability' in df.columns}")
@@ -1625,29 +1399,20 @@ def run_scoring(spark: SparkSession, df, settings: Dict[str, Any],
                 except Exception as e:
                     print(f"  ✗ Error reading CSV with inferSchema: {e}")
                     print(f"  • Trying again with all columns as strings...")
-                    # Fallback: read as strings
-                    df = self.spark.read.csv(
-                        self.csv_path, 
-                        header=True, 
-                        inferSchema=False
-                    )
-                    # Convert numeric columns manually
+                    df = self.spark.read.csv(self.csv_path, header=True, inferSchema=False)
                     from pyspark.sql import functions as F
-                    from pyspark.sql.types import DoubleType, IntegerType, LongType
-                    
-                    # Try to cast common numeric columns
+                    from pyspark.sql.types import DoubleType, LongType
                     for col_name in df.columns:
                         if any(key in col_name.lower() for key in ['probability', 'weight', 'gamma']):
                             df = df.withColumn(col_name, F.col(col_name).cast(DoubleType()))
                         elif col_name in ['id_l', 'id_r']:
                             df = df.withColumn(col_name, F.col(col_name).cast(LongType()))
-                    
                     return df
-        
+
         predictions_combined = PredictionsWrapper(output_csv, spark) if total_predictions > 0 else None
-        
+
         return linker, predictions_combined
-        
+
     except Exception as e:
         print(f"\n  ✗ Scoring phase failed: {e}")
         print("=" * 70)

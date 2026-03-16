@@ -5,29 +5,28 @@ This is the main entry point for the CUIN v2 backend API.
 It configures the FastAPI application with all routes, middleware,
 and WebSocket support.
 """
-
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import AsyncGenerator
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from api import db_init
 from api.config import settings
+from api.routes_admin import router as admin_router
+from api.routes_audit import router as audit_router
+from api.routes_candidates import router as candidates_router
+from api.routes_graph import router as graph_router
+from api.routes_matches import router as matches_router
+from api.routes_metrics import router as metrics_router
+from api.routes_review import router as review_router
 from api.routes_runs import router as runs_router
+
 # Trigger reload
 from api.routes_upload import router as upload_router
-from api.routes_candidates import router as candidates_router
-from api.routes_matches import router as matches_router
-from api.routes_review import router as review_router
-from api.routes_audit import router as audit_router
-from api.routes_metrics import router as metrics_router
-from api.routes_graph import router as graph_router
-from api.routes_admin import router as admin_router
 from api.ws_events import ConnectionManager
-from api import db_init
 from services.run_service import get_run_service
 
 # Configure logging
