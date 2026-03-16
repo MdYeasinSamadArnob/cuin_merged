@@ -404,7 +404,7 @@ def get_record_profile(rid: str, run_records: Optional[dict] = None, run_id: Opt
 @router.get("/entities", response_model=ClusterListResponse)
 async def list_clusters(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=5000),
     min_size: int = Query(1, ge=1, description="Minimum cluster size to include"),
     run_id: Optional[str] = Query(None, description="Filter by run ID (optional)")
 ):
@@ -755,6 +755,89 @@ async def split_record_from_cluster(
         "note": "Full split implementation requires cluster rebuild",
         "split_by": reviewer
     }
+
+
+@router.get("/data")
+async def get_graph_data(
+    run_id: Optional[str] = Query(None, description="Run ID to load graph for"),
+    limit: int = Query(2000, le=5000, description="Max nodes to return"),
+):
+    """
+    Primary graph visualization endpoint used by the frontend Graph page.
+    Returns nodes and edges for the D3 force-directed graph.
+    Delegates to /graph/clusters logic.
+    """
+    return await get_cluster_graph(
+        cluster_id=None,
+        limit=limit,
+        run_id=run_id,
+        include_singletons=True,
+    )
+
+
+@router.get("/uniques")
+async def get_unique_records(
+    run_id: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=5000),
+):
+    """
+    Returns singleton records – customer IDs that belong to no multi-member cluster.
+    Used by the Explorer UNIQUE tab.
+    """
+    manager = get_cluster_manager()
+
+    if run_id:
+        path = f"data/runs/{run_id}_clusters.json"
+        if os.path.exists(path):
+            if not manager._members or getattr(manager, "loaded_run_id", None) != run_id:
+                manager.load_snapshot(path, run_id)
+
+    all_clusters = manager.get_clusters()
+    clustered: set = set()
+    for members in all_clusters.values():
+        if len(members) > 1:
+            clustered.update(members)
+
+    # Load run records from disk
+    run_records: dict = {}
+    if run_id:
+        file_path = f"data/runs/{run_id}_records.json"
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, "r") as f:
+                    run_records = json.load(f)
+            except Exception as e:
+                logger.warning(f"Could not load records for run {run_id}: {e}")
+
+    singletons = [rid for rid in run_records if rid not in clustered]
+    singletons.sort()
+
+    total = len(singletons)
+    start = (page - 1) * page_size
+    end = start + page_size
+    paged = singletons[start:end]
+
+    return {
+        "records": [run_records[rid] for rid in paged if rid in run_records],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
+
+
+@router.get("/cluster-entities", response_model=ClusterListResponse)
+async def list_cluster_entities(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=5000),
+    min_size: int = Query(2, ge=1, description="Minimum cluster size"),
+    run_id: Optional[str] = Query(None),
+):
+    """
+    Alias for /graph/entities used by the Explorer ENTITIES tab.
+    Returns clusters with full member profiles.
+    """
+    return await list_clusters(page=page, page_size=page_size, min_size=min_size, run_id=run_id)
 
 
 @router.get("/stats")

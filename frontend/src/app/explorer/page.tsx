@@ -49,7 +49,17 @@ const getDisplayName = (record: any) => {
     return 'Unknown Entity';
 };
 
-const RecordCard = ({ title, data, color }: { title: string, data: any, color: string }) => (
+const RecordCard = ({ title, data, color }: { title: string, data: any, color: string }) => {
+    if (!data) return (
+        <div className={`p-4 rounded-xl border ${color === 'blue' ? 'bg-blue-50 dark:bg-blue-900/10 border-blue-200 dark:border-blue-800' : 'bg-purple-50 dark:bg-purple-900/10 border-purple-200 dark:border-purple-800'}`}>
+            <div className="flex items-center gap-2 mb-3">
+                <div className={`w-2 h-2 rounded-full ${color === 'blue' ? 'bg-blue-500 dark:bg-blue-400' : 'bg-purple-500 dark:bg-purple-400'}`} />
+                <h3 className="font-medium text-gray-900 dark:text-white">{title}</h3>
+            </div>
+            <p className="text-sm text-gray-400 dark:text-gray-500 italic">Record details unavailable</p>
+        </div>
+    );
+    return (
     <div className={`p-4 rounded-xl border ${color === 'blue' ? 'bg-blue-50 dark:bg-blue-900/10 border-blue-200 dark:border-blue-800' : 'bg-purple-50 dark:bg-purple-900/10 border-purple-200 dark:border-purple-800'}`}>
         <div className="flex items-center gap-2 mb-3">
             <div className={`w-2 h-2 rounded-full ${color === 'blue' ? 'bg-blue-500 dark:bg-blue-400' : 'bg-purple-500 dark:bg-purple-400'}`} />
@@ -123,7 +133,8 @@ const RecordCard = ({ title, data, color }: { title: string, data: any, color: s
             )}
         </div>
     </div>
-);
+    );
+}
 
 function ExplorerPageContent() {
     const [runs, setRuns] = useState<RunInfo[]>([]);
@@ -341,7 +352,7 @@ function ExplorerPageContent() {
         try {
             // Fetch all the data we need for the report using proper API calls
             const [clustersData, uniquesData, scoresData] = await Promise.all([
-                api.getClusters(selectedRunId, 1, 1000),
+                api.getClusterEntities(1, 1000, 2, selectedRunId),
                 api.getUniques(selectedRunId, 1, 1000),
                 api.getMatchScores(selectedRunId, 1, 1000)
             ]);

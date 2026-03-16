@@ -46,6 +46,10 @@ class SparkPipelineOrchestrator:
         self._spark = None
         self._df = None
         
+        # Splink objects preserved from scoring for use in clustering
+        self._linker = None
+        self._predictions_raw = None
+        
         # Set environment variables for spark logic
         os.environ["CACHE_DIR"] = "data_source"
         os.environ["CACHE_FORMAT"] = "parquet"
@@ -329,6 +333,9 @@ class SparkPipelineOrchestrator:
                     output_csv=SCORING_CSV
                 )
                 
+                # Preserve raw Splink predictions object (needed for run_clustering later)
+                predictions_raw = predictions_df
+
                 # Materialise predictions — run_scoring returns a PredictionsWrapper, not a pandas DF
                 if predictions_df is not None and hasattr(predictions_df, 'as_pandas_dataframe'):
                     predictions_pd = predictions_df.as_pandas_dataframe()
@@ -348,7 +355,8 @@ class SparkPipelineOrchestrator:
                 
                 logger.info(f"Scoring complete: {len(matches):,} high-confidence matches found")
                 
-                return matches
+                # Return matches + raw Splink objects for clustering stage
+                return matches, linker, predictions_raw
                 
             except Exception as e:
                 logger.error(f"Scoring phase failed: {e}", exc_info=True)
@@ -375,8 +383,11 @@ class SparkPipelineOrchestrator:
                 }
             ))
         
-        # Get result
-        matches = await scoring_task
+        # Get result - unpack (matches, linker, predictions_raw)
+        matches, linker, predictions_raw = await scoring_task
+        # Preserve for clustering stage
+        self._linker = linker
+        self._predictions_raw = predictions_raw
         
         duration = int((datetime.utcnow() - start).total_seconds() * 1000)
         
@@ -469,54 +480,104 @@ class SparkPipelineOrchestrator:
         
         def build_cluster_graph():
             try:
+                from engine.spark_er.splink_commands import run_clustering
                 from engine.clustering.cluster_manager import get_cluster_manager
-                
-                # Collect unique customer codes from matches
-                customer_codes_in_clusters = set()
-                for m in matches:
-                    customer_codes_in_clusters.add(str(m['id1']))
-                    customer_codes_in_clusters.add(str(m['id2']))
-                
-                logger.info(f"Building cluster graph for {len(customer_codes_in_clusters):,} entities")
-                
-                manager = get_cluster_manager()
-                
-                # Reset manager state
                 from engine.clustering.union_find import UnionFind
+                import shutil
+
+                # ── Use Splink's graph-connected-components clustering ──────────
+                # This is more consistent than the manual union-find approach:
+                # it reuses the same linker + predictions object from the scoring
+                # stage, applies the same NAME/DOCUMENT constraints, and produces
+                # deterministic cluster IDs.
+                logger.info("Running Splink graph clustering (run_clustering)...")
+                clusters_df = run_clustering(
+                    linker=self._linker,
+                    predictions=self._predictions_raw,
+                    threshold=MATCH_THRESHOLD,
+                )
+
+                if clusters_df is None:
+                    logger.warning("run_clustering returned None – falling back to match-pair union-find")
+                    clusters_df = None
+
+                # Convert Splink clusters DataFrame → {cluster_id: [CUSTOMER_CODE, ...]}
+                cluster_groups: dict = {}
+                if clusters_df is not None:
+                    # May be a Spark DF or a pandas DF
+                    if hasattr(clusters_df, 'toPandas'):
+                        clusters_pd = clusters_df.toPandas()
+                    else:
+                        clusters_pd = clusters_df
+
+                    uid_col = 'CUSTOMER_CODE'
+                    if uid_col in clusters_pd.columns:
+                        for cid, grp in clusters_pd.groupby('cluster_id')[uid_col]:
+                            members = [str(v).lstrip('0') or '0' for v in grp.tolist()]
+                            if len(members) >= 2:   # skip singletons
+                                cluster_groups[str(cid)] = members
+                    else:
+                        logger.warning(f"Expected '{uid_col}' column in clustering output; got {clusters_pd.columns.tolist()}")
+
+                # Fall back to manual union-find if Splink clustering produced nothing
+                if not cluster_groups:
+                    logger.warning("Splink clustering produced no multi-member clusters; using match-pair union-find fallback")
+                    temp_uf = UnionFind()
+                    for m in matches:
+                        temp_uf.union(str(m['id1']), str(m['id2']))
+                    groups_tmp: dict = {}
+                    for m in matches:
+                        root = temp_uf.find(str(m['id1']))
+                        groups_tmp.setdefault(root, set()).update([str(m['id1']), str(m['id2'])])
+                    cluster_groups = {k: list(v) for k, v in groups_tmp.items()}
+
+                # Collect all unique entity codes
+                customer_codes_in_clusters: set = set()
+                for members in cluster_groups.values():
+                    customer_codes_in_clusters.update(members)
+
+                logger.info(f"Building cluster graph for {len(customer_codes_in_clusters):,} entities in {len(cluster_groups):,} clusters")
+
+                # ── Feed Splink cluster assignments into ClusterManager ────────
+                manager = get_cluster_manager()
                 manager._uf = UnionFind()
                 manager._cluster_ids = {}
                 manager._members = []
-                
-                # Link matched pairs
+
                 linked = 0
-                for m in matches:
-                    c1 = str(m['id1'])
-                    c2 = str(m['id2'])
-                    if c1 != c2:
-                        manager.link(c1, c2)
-                        linked += 1
-                
-                logger.info(f"Linked {linked:,} pairs into cluster graph")
-                
-                # Save cluster snapshot
+                for cid, members in cluster_groups.items():
+                    root = members[0]
+                    for other in members[1:]:
+                        if root != other:
+                            manager.link(root, other)
+                            linked += 1
+
+                logger.info(f"Linked {linked:,} member pairs into ClusterManager")
+
+                # ── Persist run artifacts ─────────────────────────────────────
                 if run_id:
                     os.makedirs("data/runs", exist_ok=True)
                     manager.save_snapshot(f"data/runs/{run_id}_clusters.json")
-                    
+
+                    # Copy scoring CSV for /matches/scores endpoint
+                    if os.path.exists(SCORING_CSV):
+                        dest = f"data/runs/{run_id}_scores.csv"
+                        shutil.copy2(SCORING_CSV, dest)
+                        logger.info(f"Saved scoring results to {dest}")
+
                     # Load and save cluster member records
                     member_records = self._load_records_for_clusters(customer_codes_in_clusters)
                     with open(f"data/runs/{run_id}_records.json", "w") as f:
                         json.dump(member_records, f, default=str)
                     logger.info(f"Saved {len(member_records):,} cluster-member records")
-                
+
                 return {
-                    'clusters_created': len(clusters),
+                    'clusters_created': len(cluster_groups),
                     'entities_created': len(customer_codes_in_clusters),
                     'duplicate_relationships': linked
                 }
             except Exception as e:
                 logger.error(f"Cluster graph build failed: {e}", exc_info=True)
-                # Create empty records file on failure
                 if run_id:
                     with open(f"data/runs/{run_id}_records.json", "w") as f:
                         json.dump({}, f)
@@ -553,13 +614,16 @@ class SparkPipelineOrchestrator:
             df = pd.read_parquet(PARQUET_PATH, columns=NEEDED_COLS, engine='pyarrow')
             
             # Filter to cluster members
-            codes_str = {str(c) for c in customer_codes}
+            # Cluster keys are stripped of leading zeros (numeric strings from Spark int conversion)
+            # Parquet may have zero-padded codes, so strip for matching
+            codes_str = {str(c).lstrip('0') or '0' for c in customer_codes}
             df['CUSTOMER_CODE'] = df['CUSTOMER_CODE'].astype(str)
-            df = df[df['CUSTOMER_CODE'].isin(codes_str)]
+            df['_key'] = df['CUSTOMER_CODE'].str.lstrip('0').replace('', '0')
+            df = df[df['_key'].isin(codes_str)]
             
             records = {}
             for _, row in df.iterrows():
-                ckey = str(row['CUSTOMER_CODE'])
+                ckey = str(row['_key'])  # stripped key matches cluster IDs
                 
                 def safe_get(col):
                     val = row.get(col)

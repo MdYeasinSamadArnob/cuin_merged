@@ -198,7 +198,7 @@ CUSTOMER_AGGREGATED_PATH = os.getenv("CUSTOMER_AGGREGATED_PATH", "customer_aggre
 # MAX_BLOCK_SIZE: Max records per blocking key (larger = more pairs, more memory)
 MAX_BLOCK_SIZE = int(os.getenv("MAX_BLOCK_SIZE", "200"))
 # MAX_PAIRS_PER_RULE: Max candidate pairs per blocking rule
-MAX_PAIRS_PER_RULE = int(os.getenv("MAX_PAIRS_PER_RULE", "500000"))
+MAX_PAIRS_PER_RULE = int(os.getenv("MAX_PAIRS_PER_RULE", "90000000"))
 # LSH_SAMPLE_SIZE: Max records to process for LSH blocking
 LSH_SAMPLE_SIZE = int(os.getenv("LSH_SAMPLE_SIZE", "50000"))
 # MAX_LSH_BUCKET_SIZE: Max records per LSH bucket
@@ -527,7 +527,7 @@ def run_blocking(spark: SparkSession, df, output_csv: str = "blocking_analysis.c
     if total_records > 500000:
         print(f"  Dataset size: {total_records:,} (LARGE - using selective mode)")
         multipass_config = {
-            'use_lsh': True,             # TRUE LSH with MinHash and banding (Spark SQL native)
+            'use_lsh': False,             # TRUE LSH with MinHash and banding (Spark SQL native)
             'use_soundex': False,        # Can use Spark's soundex() function if needed
             'use_rules': True,           # Implemented via Spark SQL
             'max_block_size': 100,        # Prevent combinatorial explosion
