@@ -475,7 +475,9 @@ def create_splink_settings(link_type: str = "dedupe_only") -> Dict[str, Any]:
         "blocking_rules_to_generate_predictions": blocking_rules,
         "comparisons": comparisons,
         "retain_matching_columns": True,
-        "retain_intermediate_calculation_columns": True,
+        "retain_intermediate_calculation_columns": False,
+        "max_iterations": 5,
+        "em_convergence": 0.05,
     }
     
     return settings
@@ -1227,13 +1229,24 @@ def run_scoring(spark: SparkSession, df, settings: Dict[str, Any],
             print(f"    ✗ Error during u-probability estimation: {e}")
             raise
         
-        # Training pass 2: m-probabilities via EM — one pass per blocking rule
-        print(f"  Training pass 2: m-probability estimation (all {len(blocking_rules)} blocking rules)")
+        # Training pass 2: m-probabilities via EM — use only the 2 most discriminative
+        # blocking rules (NAME and MOBILE) to avoid 5 slow EM passes.
+        # Using a subset is sufficient — Splink estimates m-probs for all comparisons
+        # not blocked on, so 2 passes cover all 5 comparisons.
+        em_training_rules = [
+            r for r in blocking_rules
+            if "NAME" in r or "MOBILE" in r or "DOCUMENT" in r
+        ][:3]  # Cap at 3: NAME + MOBILE + DOCUMENT cover all comparisons
+        if not em_training_rules:
+            em_training_rules = blocking_rules[:3]
+
+        print(f"  Training pass 2: m-probability estimation ({len(em_training_rules)} of {len(blocking_rules)} blocking rules)")
         print(f"    • Method: Expectation Maximisation (EM)")
+        print(f"    • Rules selected: {em_training_rules}")
         print()
 
-        for em_idx, em_rule in enumerate(blocking_rules, 1):
-            print(f"    [{em_idx}/{len(blocking_rules)}] Rule: {em_rule}")
+        for em_idx, em_rule in enumerate(em_training_rules, 1):
+            print(f"    [{em_idx}/{len(em_training_rules)}] Rule: {em_rule}")
             em_start = datetime.now()
             try:
                 linker.training.estimate_parameters_using_expectation_maximisation(em_rule)

@@ -21,5 +21,51 @@
     "duration_seconds": 949.729289,
     "error_message": null,
     "current_stage": "complete"
+  },
+  "42c6c9d0-7adb-4ac6-a628-c436e1379302": {
+    "run_id": "42c6c9d0-7adb-4ac6-a628-c436e1379302",
+    "mode": "FULL",
+    "policy_version": 1,
+    "status": "RUNNING",
+    "description": "Datasource Spark Demo",
+    "counters": {
+      "records_in": 1567782,
+      "records_normalized": 0,
+      "blocks_created": 0,
+      "candidates_generated": 1000000,
+      "pairs_scored": 0,
+      "auto_links": 0,
+      "review_items": 0,
+      "rejected": 0,
+      "clusters_created": 0
+    },
+    "started_at": "2026-03-16T05:37:16.623418",
+    "ended_at": null,
+    "duration_seconds": null,
+    "error_message": null,
+    "current_stage": "score"
+  },
+  "d6601c25-d026-47fb-88a6-b5d783f053ad": {
+    "run_id": "d6601c25-d026-47fb-88a6-b5d783f053ad",
+    "mode": "FULL",
+    "policy_version": 1,
+    "status": "RUNNING",
+    "description": "Datasource Spark Demo",
+    "counters": {
+      "records_in": 1567782,
+      "records_normalized": 0,
+      "blocks_created": 0,
+      "candidates_generated": 1000000,
+      "pairs_scored": 0,
+      "auto_links": 0,
+      "review_items": 0,
+      "rejected": 0,
+      "clusters_created": 0
+    },
+    "started_at": "2026-04-02T10:35:30.497098",
+    "ended_at": null,
+    "duration_seconds": null,
+    "error_message": null,
+    "current_stage": "score"
   }
 }
