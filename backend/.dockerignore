@@ -1,0 +1,31 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# Runtime data — mounted as volumes, not baked into the image
+data/
+data_source/
+spark-warehouse/
+e:/
+
+# Logs and scratch artifacts left over from local runs
+*.log
+blocking_analysis.csv
+scoring_results.csv
+
+# Env / secrets
+.env
+.env.local
+
+# VCS / editor
+.git/
+.gitignore
+.vscode/
+.idea/

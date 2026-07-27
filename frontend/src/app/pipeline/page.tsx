@@ -95,7 +95,7 @@ export default function PipelinePage() {
     const [activeRun, setActiveRun] = useState<RunInfo | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const { lastEvent } = useWebSocket();
+    const { lastMessage } = useWebSocket();
     const [liveMatches, setLiveMatches] = useState<any[]>([]);
     const [graphData, setGraphData] = useState<any>(null);
     const [showLiveInsight, setShowLiveInsight] = useState(false);
@@ -107,9 +107,9 @@ export default function PipelinePage() {
 
     // Handle WebSocket messages
     useEffect(() => {
-        if (!lastEvent) return;
+        if (!lastMessage) return;
 
-        const event = lastEvent;
+        const event = lastMessage;
         const payload = event.data as any;
         const eventRunId = event.run_id || payload?.run_id;
 
@@ -197,7 +197,7 @@ export default function PipelinePage() {
                 fetchRunInfo(payload.run_id);
             }
         }
-    }, [lastEvent, activeRun]);
+    }, [lastMessage, activeRun]);
 
     const fetchRunInfo = async (runId: string) => {
         try {

@@ -1,6 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Required for the multi-stage Docker build (frontend/Dockerfile), which
+  // copies .next/standalone into the runtime image -- that directory is
+  // only produced when this is set. Has no effect on `next dev`.
+  output: "standalone",
   // Allow all origins for Server Actions and general access in development
   experimental: {
     serverActions: {

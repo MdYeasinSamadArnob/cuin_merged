@@ -6,7 +6,19 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { Run, DashboardMetrics } from "@/lib/api";
+
+// api.ts's methods are loosely typed (no exported response interfaces --
+// see ApiClient.request<T = any>), so these are defined locally rather
+// than imported. Only run_id is accessed directly by this store
+// (updateRun); everything else passes through untyped.
+interface Run {
+    run_id: string;
+    [key: string]: any;
+}
+
+interface DashboardMetrics {
+    [key: string]: any;
+}
 
 interface AppState {
     // Current run being viewed

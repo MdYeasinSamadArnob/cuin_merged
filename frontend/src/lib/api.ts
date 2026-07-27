@@ -13,7 +13,13 @@ class ApiClient {
         this.baseUrl = baseUrl;
     }
 
-    private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+    // Defaulting T to `any` (not leaving it to infer as `unknown`) matches
+    // how every call site in this file already uses it -- none pass an
+    // explicit type argument, and callers destructure/assign the result
+    // directly into typed state. Without this default, `next build`'s
+    // full TypeScript pass (which `next dev` does not run) fails on every
+    // single page that does so.
+    private async request<T = any>(endpoint: string, options: RequestInit = {}): Promise<T> {
         const url = `${this.baseUrl}${endpoint}`;
         const response = await fetch(url, {
             ...options,
@@ -99,8 +105,12 @@ class ApiClient {
     }
 
     // Graph
-    async getGraphData(runId: string, limit: number = 1000) {
-        return this.request(`/graph/data?run_id=${runId}&limit=${limit}`);
+    async getGraphData(runId?: string, limit: number = 1000) {
+        const params = new URLSearchParams({ limit: limit.toString() });
+        if (runId) {
+            params.append('run_id', runId);
+        }
+        return this.request(`/graph/data?${params.toString()}`);
     }
 
     async previewClustering(runId: string | undefined, config: any) {

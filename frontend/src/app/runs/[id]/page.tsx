@@ -35,7 +35,7 @@ export default function RunDetailsPage() {
     const params = useParams();
     const router = useRouter();
     const runId = params.id as string;
-    const { lastEvent } = useWebSocket();
+    const { lastMessage } = useWebSocket();
 
     const [run, setRun] = useState<any>(null);
     const [activeStage, setActiveStage] = useState<string>('ingest');
@@ -155,9 +155,9 @@ export default function RunDetailsPage() {
 
     // WebSocket Handling (Live updates)
     useEffect(() => {
-        if (!lastEvent || !runId || isReplaying) return; // Ignore live updates during replay
+        if (!lastMessage || !runId || isReplaying) return; // Ignore live updates during replay
 
-        const event = lastEvent;
+        const event = lastMessage;
         const payload = event.data as any;
         const eventRunId = event.run_id || payload?.run_id;
 
@@ -272,7 +272,7 @@ export default function RunDetailsPage() {
             const payload = event.data as any;
             addLog("System", `Run failed: ${payload?.error || 'Unknown error'}`, 'warn', activeStage);
         }
-    }, [lastEvent, runId, isReplaying]);
+    }, [lastMessage, runId, isReplaying]);
 
     // 1-second tick so elapsed-time displays in stage nodes update in real time
     useEffect(() => {

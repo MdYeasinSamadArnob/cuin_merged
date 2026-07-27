@@ -2,7 +2,6 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 
 from services.run_service import get_run_service, RunStatus
-from pipeline.spark_orchestrator import SparkPipelineOrchestrator
 from pipeline.duckdb_orchestrator import DuckDBPipelineOrchestrator
 from api.ws_events import ws_manager, EventType
 from datetime import datetime
@@ -66,10 +65,18 @@ async def start_datasource_demo(
                         data=progress.data
                     )
 
-                orchestrator_cls = (
-                    DuckDBPipelineOrchestrator if request.engine == "duckdb"
-                    else SparkPipelineOrchestrator
-                )
+                if request.engine == "duckdb":
+                    orchestrator_cls = DuckDBPipelineOrchestrator
+                else:
+                    # Imported lazily, not at module load time: pyspark/
+                    # splink are excluded from the Docker image's dependency
+                    # set (requirements-docker.txt) since only this legacy/
+                    # rollback path needs them -- the app must still boot
+                    # fine when they aren't installed, and only requesting
+                    # engine=spark should fail, with a clear error, not the
+                    # whole API refusing to start.
+                    from pipeline.spark_orchestrator import SparkPipelineOrchestrator
+                    orchestrator_cls = SparkPipelineOrchestrator
                 orchestrator = orchestrator_cls(
                     progress_callback=progress_callback,
                     run_id=run.run_id

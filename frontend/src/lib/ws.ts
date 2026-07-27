@@ -11,6 +11,8 @@ const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws';
 interface WebSocketMessage {
     type: string;
     data: any;
+    timestamp?: string;
+    run_id?: string | null;
 }
 
 interface WebSocketHook {

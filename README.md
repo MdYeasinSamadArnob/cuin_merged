@@ -4,27 +4,70 @@
 
 ---
 
-## 🚀 Quick Start (For Interns)
-Follow these steps to get the system running in 5 minutes!
+## 🐳 Quick Start (Docker — Recommended)
+The entire stack — Postgres, Neo4j, Redis, the backend API, and the frontend dashboard — builds and runs from one place: `infra/`.
 
 ### 1. Prerequisites
-You need **Docker** and **Docker Compose** installed. That's it!
+**Docker** and **Docker Compose**. That's it — no local Python/Node install needed.
 
-### 2. Start the Infrastructure
-Open your terminal in this folder and run:
+### 2. Configure (first time only)
 ```bash
-sudo docker-compose up -d --build
+cp infra/.env.example infra/.env
 ```
-This starts:
-*   **Postgres** (Database) - Port 5433
-*   **Neo4j** (Graph Database) - Port 7474
-*   **Redis** (Cache) - Port 6380
-*   **Management UIs**:
-    *   PgAdmin (Postgres UI): [http://localhost:18080](http://localhost:18080) (Email: `admin@cuin.com`, Pass: `password123`)
-    *   RedisInsight: [http://localhost:15540](http://localhost:15540)
+Open `infra/.env` and set:
+*   `PUBLIC_HOST` — the address you'll type into your **browser** to reach the app (e.g. `localhost`, or this machine's LAN IP if you're accessing it from another device). This gets baked into the frontend at build time — see the comment in the file.
+*   `BACKEND_UID` / `BACKEND_GID` — set to your host user's `id -u` / `id -g` if you hit `Permission denied` errors on the backend writing to `backend/data/` (a bind-mount ownership mismatch, not a bug in the app).
+*   Ports, if any of the defaults (`8000`, `3000`, `5436`, `7476`, `7689`, `6381`, `18080`, `15540`) are already taken on your machine.
 
-### 3. Run the Backend (API)
-The backend manages the logic. Open a new terminal:
+### 3. Up
+```bash
+cd infra
+docker compose up --build -d
+```
+First build takes a few minutes (installing backend/frontend dependencies); subsequent runs reuse the Docker layer cache and start in seconds. Watch progress with `docker compose logs -f`.
+
+*   **Dashboard**: `http://<PUBLIC_HOST>:3000`
+*   **API Docs**: `http://<PUBLIC_HOST>:8000/docs`
+*   **Health Check**: `http://<PUBLIC_HOST>:8000/health/ready`
+*   **PgAdmin**: `http://<PUBLIC_HOST>:18080` (Email: `admin@cuin.com`, Pass: `password123`, or whatever you set in `.env`)
+*   **RedisInsight**: `http://<PUBLIC_HOST>:15540`
+
+Check everything came up healthy:
+```bash
+docker compose ps
+```
+
+### 4. Down
+```bash
+cd infra
+docker compose down
+```
+This stops and removes the containers but **keeps your data** — Postgres, Neo4j, and pipeline run artifacts live in bind-mounted host folders (`../data/`, `../backend/data/`), not inside the containers, so nothing is lost. Run `docker compose up -d` again later and you're back where you left off.
+
+To also wipe the data volumes (start completely fresh):
+```bash
+docker compose down
+rm -rf ../data/postgres ../data/neo4j ../backend/data/runs
+```
+
+### Rebuilding after a code change
+```bash
+docker compose up --build -d backend    # backend code changed
+docker compose up --build -d frontend   # frontend code changed (re-bakes NEXT_PUBLIC_* too)
+```
+
+---
+
+## 🧑‍💻 Alternative: Run Without Docker (Local Dev)
+Useful for fast iteration on backend/frontend code without rebuilding containers each time.
+
+### 1. Start infra only
+```bash
+docker-compose up -d --build
+```
+This starts Postgres (`5433`), Neo4j (`7474`), Redis (`6380`), PgAdmin (`18080`), and RedisInsight (`15540`) from the **root** `docker-compose.yml` (infra services only — no backend/frontend containers).
+
+### 2. Run the backend
 ```bash
 cd backend
 python3 -m venv venv
@@ -33,11 +76,9 @@ pip install -r requirements.txt
 uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 *   **API Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
-*   **Health Check**: [http://localhost:8000/health/ready](http://localhost:8000/health/ready)
-    *   *Note: Tables are created automatically on startup!*
+*   *Tables are created automatically on startup.*
 
-### 4. Run the Frontend (Dashboard)
-The visualized dashboard. Open another terminal:
+### 3. Run the frontend
 ```bash
 cd frontend
 npm install
@@ -45,20 +86,17 @@ npm run dev
 ```
 *   **Dashboard**: [http://localhost:3001](http://localhost:3001) (redirects to `/dashboard`)
     *   *Note: the dev server runs on port **3001**, not 3000 — see `frontend/package.json`.*
-    *   The frontend talks to the backend via `NEXT_PUBLIC_API_URL` (defaults to `http://localhost:8000`). Copy `frontend/.env.example` to `.env.local` if you need to point it elsewhere.
+    *   Talks to the backend via `NEXT_PUBLIC_API_URL` (defaults to `http://localhost:8000`). Copy `frontend/.env.example` to `.env.local` if you need to point it elsewhere.
 
----
-
-## ⚡ One-Line Alternative (Makefile)
-A `Makefile` wraps the same steps:
+### Makefile shortcuts
 ```bash
 make install      # installs backend (venv) + frontend (npm) deps
 make docker-up    # starts Postgres, Neo4j, Redis, PgAdmin, RedisInsight
 make dev          # runs backend (uvicorn :8000) + frontend (next :3001) concurrently
 ```
-Other useful targets: `make test`, `make lint`, `make format`, `make db-migrate`, `make docker-down`, `make clean`. Run `make help` to list them all.
+Other targets: `make test`, `make lint`, `make format`, `make db-migrate`, `make docker-down`, `make clean`. Run `make help` to list them all.
 
-### Stopping everything
+### Stopping (local dev mode)
 ```bash
 docker-compose down      # or: make docker-down
 # Ctrl+C the backend and frontend terminals
