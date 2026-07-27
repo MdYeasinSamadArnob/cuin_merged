@@ -1,0 +1,170 @@
+# ============================================
+# CUIN v2 - Deterministic Ruleset v2
+# ============================================
+# Replaces probabilistic (Splink EM-trained) scoring with a fixed,
+# auditable rule set. Every AUTO_LINK decision must be explainable
+# in one sentence to a bank compliance auditor.
+#
+# Changing this file changes engine.ruleset.version.RULESET_VERSION's
+# fingerprint. Bump RULESET_VERSION in the same commit as any change.
+# ============================================
+
+version: 2
+name: "CUIN v2 Deterministic Ruleset"
+description: "Two-identifier compliance rule for banking entity resolution"
+
+# ----------------------------------------
+# Identifier validation
+# ----------------------------------------
+identifiers:
+  mobile:
+    country: BD
+    pattern: '^01[3-9]\d{8}$'
+    # Reject numbers whose 8-digit subscriber part has too few distinct
+    # digits (kills 01700000000, 01711000000, 01800000000, 0000000000
+    # structurally, with no blacklist).
+    min_distinct_digits: 3
+
+  email:
+    pattern: '^[^@\s]+@[^@\s]+\.[^@\s]+$'
+
+  document:
+    # Format is "TYPE:VALUE" (e.g. "TIN:574352752846").
+    pattern: '^\s*([A-Z]+)\s*:\s*(.*)$'
+    types:
+      TIN:
+        charset: numeric
+        length: 12
+      NID:
+        charset: numeric
+        length: [10, 13, 17]
+      PASSPORT:
+        pattern: '^[A-Z]{1,2}\d{6,7}$'
+      BRC:
+        charset: numeric
+        length: 17
+    # Any other/unknown type: accept only if charset is alnum and length >= 6
+    default_min_length: 6
+
+  name:
+    honorifics:
+      - MD
+      - MD.
+      - MOHD
+      - MOHAMMAD
+      - MUHAMMAD
+      - MST
+      - MST.
+      - MRS
+      - MR
+      - MS
+      - ALHAJ
+      - HAJI
+      - DR
+      - ENGR
+      - ADV
+      - LATE
+      - BEGUM
+
+  dob:
+    # A DOB whose month/day is January 1st is treated as year-only
+    # precision (a very common "year known, day/month defaulted" stub).
+    year_only_month_day: [1, 1]
+
+  address:
+    min_chars: 12
+    min_tokens: 3
+
+# ----------------------------------------
+# Frequency suppression (Layer 2)
+# ----------------------------------------
+# Any normalized identifier value occurring in MORE than this many
+# distinct records is non-discriminative and excluded from both
+# blocking and STRONG evidence. Absolute counts, not percentages —
+# at 1.5M+ rows a percentage-based threshold never fires.
+suppression:
+  mobile_max_records: 20
+  email_max_records: 20
+  document_max_records: 20
+  name_token_max_records: 1500   # ~0.1% of a ~1.5M row dataset
+  address_max_records: 20
+
+# ----------------------------------------
+# Evidence tiers
+# ----------------------------------------
+tiers:
+  strong:
+    identifiers: [mobile, email, document]
+    require: [validated, not_suppressed, set_intersection_non_empty]
+
+  medium:
+    - full_dob_exact           # both dob_precision == FULL and equal
+    - rare_token_jaccard_1     # Jaccard == 1.0 on non-suppressed name tokens
+
+  weak:
+    - dob_year_equal
+    - rare_token_jaccard_partial
+    - address_exact_non_boilerplate
+
+# ----------------------------------------
+# Hard conflicts (VETO — absolute, no override)
+# ----------------------------------------
+hard_conflicts:
+  - field: document
+    rule: same_type_present_mismatch
+    action: reject
+    description: "Both records have a validated NatID of the same type, but the values don't intersect"
+
+  - field: dob
+    rule: both_full_precision_mismatch
+    action: reject
+    description: "Both records have full-precision DOB (not a Jan-1 stub) and they differ"
+
+# ----------------------------------------
+# Decision rule
+# ----------------------------------------
+decisioning:
+  auto_link:
+    - min_strong: 2
+    - min_strong: 1
+      require_medium_name: true
+
+  review:
+    - min_strong: 1
+    - require_medium_name: true
+      require_medium_dob: true
+
+  # Name similarity alone (no STRONG identifier) NEVER creates a link
+  # or a review item — it is display-only corroboration.
+  name_alone_gates_nothing: true
+
+# ----------------------------------------
+# Clustering cohesion guard
+# ----------------------------------------
+clustering:
+  max_cluster_size: 12
+  min_density: 0.35
+  oversized_reason_code: OVERSIZED_COMPONENT
+  low_cohesion_reason_code: LOW_COHESION
+
+# ----------------------------------------
+# Review workflow (reused verbatim from policy_v1.yaml)
+# ----------------------------------------
+review:
+  mandatory_reason: true
+  reason_codes:
+    - code: SAME_PERSON_CONFIRMED
+      description: "Confirmed as same person based on evidence"
+    - code: DIFFERENT_PERSONS
+      description: "Confirmed as different people"
+    - code: INSUFFICIENT_INFO
+      description: "Not enough information to decide"
+    - code: DATA_QUALITY_ISSUE
+      description: "Data quality prevents decision"
+    - code: OVERSIZED_COMPONENT
+      description: "Connected component too large to auto-link as one cluster"
+    - code: LOW_COHESION
+      description: "Connected component density too low to auto-link as one cluster"
+    - code: OTHER
+      requires_note: true
+      description: "Other (note required)"

@@ -35,8 +35,22 @@ interface ReviewStats {
     with_ai_explanation: number;
 }
 
+const PAGE_SIZE = 20;
+
+function getDisplayName(item: ReviewItem, side: 'a' | 'b'): string {
+    const nameEv = item.evidence.find(e => e.field === 'name');
+    if (nameEv) {
+        const value = side === 'a' ? nameEv.value_a : nameEv.value_b;
+        if (value) return value;
+    }
+    return side === 'a' ? item.a_key : item.b_key;
+}
+
 export default function ReviewPage() {
     const [queue, setQueue] = useState<ReviewItem[]>([]);
+    const [queueTotal, setQueueTotal] = useState(0);
+    const [page, setPage] = useState(1);
+    const [recentlyReviewed, setRecentlyReviewed] = useState<ReviewItem[]>([]);
     const [stats, setStats] = useState<ReviewStats | null>(null);
     const [selectedItem, setSelectedItem] = useState<ReviewItem | null>(null);
     const [isLoading, setIsLoading] = useState(true);
@@ -48,8 +62,8 @@ export default function ReviewPage() {
     const [isExplanationLoading, setIsExplanationLoading] = useState(false);
 
     useEffect(() => {
-        fetchReviewData();
-    }, []);
+        fetchReviewData(page);
+    }, [page]);
 
     useEffect(() => {
         if (selectedItem?.has_ai_explanation) {
@@ -72,14 +86,26 @@ export default function ReviewPage() {
         }
     }, [selectedItem]);
 
-    const fetchReviewData = async () => {
+    const fetchReviewData = async (targetPage: number) => {
+        setIsLoading(true);
         try {
-            const [queueData, statsData] = await Promise.all([
-                api.getReviewQueue(),
+            const [pendingData, approvedData, rejectedData, statsData] = await Promise.all([
+                api.getReviewQueue(targetPage, PAGE_SIZE, 'PENDING'),
+                api.getReviewQueue(1, 5, 'APPROVED'),
+                api.getReviewQueue(1, 5, 'REJECTED'),
                 api.getReviewStats(),
             ]);
-            setQueue(queueData.items);
+            setQueue(pendingData.items);
+            setQueueTotal(pendingData.total);
+
+            const recent = [...(approvedData.items || []), ...(rejectedData.items || [])]
+                .filter(i => i.reviewed_at)
+                .sort((a, b) => new Date(b.reviewed_at!).getTime() - new Date(a.reviewed_at!).getTime())
+                .slice(0, 10);
+            setRecentlyReviewed(recent);
+
             setStats(statsData);
+            setError(null);
         } catch (err) {
             console.error('Failed to fetch review data:', err);
             setError('Failed to load review queue');
@@ -101,7 +127,7 @@ export default function ReviewPage() {
             await api.approveReview(selectedItem.pair_id, reviewerName, reviewReason);
             setSelectedItem(null);
             setReviewReason('');
-            fetchReviewData();
+            fetchReviewData(page);
         } catch (err) {
             setError('Failed to approve review');
         } finally {
@@ -122,7 +148,7 @@ export default function ReviewPage() {
             await api.rejectReview(selectedItem.pair_id, reviewerName, reviewReason);
             setSelectedItem(null);
             setReviewReason('');
-            fetchReviewData();
+            fetchReviewData(page);
         } catch (err) {
             setError('Failed to reject review');
         } finally {
@@ -142,10 +168,12 @@ export default function ReviewPage() {
         return 'bg-orange-100 dark:bg-orange-900/30 border-orange-200 dark:border-orange-700';
     };
 
-    if (isLoading) {
+    const totalPages = Math.max(1, Math.ceil(queueTotal / PAGE_SIZE));
+
+    if (isLoading && queue.length === 0) {
         return (
             <div className="p-8 flex items-center justify-center min-h-screen">
-                <div className="text-gray-400">Loading review queue...</div>
+                <div className="text-gray-500 dark:text-gray-400">Loading review queue...</div>
             </div>
         );
     }
@@ -172,37 +200,39 @@ export default function ReviewPage() {
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div className="bg-yellow-100 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded-xl p-4">
                     <p className="text-yellow-600 dark:text-yellow-400 text-sm">Pending</p>
-                    <p className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">{stats?.pending || 0}</p>
+                    <p className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">{(stats?.pending || 0).toLocaleString()}</p>
                 </div>
                 <div className="bg-emerald-100 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-700 rounded-xl p-4">
                     <p className="text-emerald-600 dark:text-emerald-400 text-sm">Approved</p>
-                    <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{stats?.approved || 0}</p>
+                    <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{(stats?.approved || 0).toLocaleString()}</p>
                 </div>
                 <div className="bg-red-100 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-xl p-4">
                     <p className="text-red-600 dark:text-red-400 text-sm">Rejected</p>
-                    <p className="text-2xl font-bold text-red-600 dark:text-red-400">{stats?.rejected || 0}</p>
+                    <p className="text-2xl font-bold text-red-600 dark:text-red-400">{(stats?.rejected || 0).toLocaleString()}</p>
                 </div>
                 <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
                     <p className="text-gray-600 dark:text-gray-400 text-sm">Total</p>
-                    <p className="text-2xl font-bold text-gray-900 dark:text-white">{stats?.total || 0}</p>
+                    <p className="text-2xl font-bold text-gray-900 dark:text-white">{(stats?.total || 0).toLocaleString()}</p>
                 </div>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Queue List */}
-                <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-6 shadow-sm dark:shadow-none">
-                    <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Pending Reviews</h2>
+                <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-6 shadow-sm dark:shadow-none flex flex-col">
+                    <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Pending Reviews</h2>
+                        <span className="text-sm text-gray-500 dark:text-gray-400">{queueTotal.toLocaleString()} total</span>
+                    </div>
 
-                    {queue.filter(item => item.status === 'PENDING').length === 0 ? (
+                    {queue.length === 0 ? (
                         <div className="text-center py-12 text-gray-500 dark:text-gray-400">
                             <p className="text-4xl mb-4">✅</p>
                             <p>No items pending review!</p>
                         </div>
                     ) : (
-                        <div className="space-y-3 max-h-[500px] overflow-y-auto">
-                            {queue
-                                .filter(item => item.status === 'PENDING')
-                                .map((item) => (
+                        <>
+                            <div className="space-y-3 max-h-[500px] overflow-y-auto flex-1">
+                                {queue.map((item) => (
                                     <div
                                         key={item.review_id}
                                         onClick={() => {
@@ -211,47 +241,82 @@ export default function ReviewPage() {
                                             setError(null);
                                         }}
                                         className={`p-4 rounded-lg border cursor-pointer transition-all ${selectedItem?.review_id === item.review_id
-                                            ? 'border-blue-500 bg-blue-900/20'
-                                            : 'border-gray-700 bg-gray-900/50 hover:border-gray-600'
+                                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                                            : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 hover:border-gray-300 dark:hover:border-gray-600'
                                             }`}
                                     >
                                         <div className="flex items-center justify-between">
-                                            <div className="flex items-center gap-3">
-                                                <span className={`px-2 py-1 rounded border text-sm font-medium ${getScoreBg(item.score)} ${getScoreColor(item.score)}`}>
+                                            <div className="flex items-center gap-3 min-w-0">
+                                                <span className={`shrink-0 px-2 py-1 rounded border text-sm font-medium ${getScoreBg(item.score)} ${getScoreColor(item.score)}`}>
                                                     {(item.score * 100).toFixed(0)}%
                                                 </span>
-                                                <div>
-                                                    <p className="text-white font-mono text-sm">
-                                                        {item.a_key.slice(0, 8)}... ↔ {item.b_key.slice(0, 8)}...
+                                                <div className="min-w-0">
+                                                    <p className="text-gray-900 dark:text-white text-sm font-medium truncate">
+                                                        {getDisplayName(item, 'a')} ↔ {getDisplayName(item, 'b')}
                                                     </p>
-                                                    <p className="text-gray-500 text-xs mt-1">
-                                                        {item.signals.length} signals hit
+                                                    <p className="text-gray-500 dark:text-gray-400 text-xs mt-1">
+                                                        {item.signals.length} signal{item.signals.length === 1 ? '' : 's'} hit
                                                     </p>
                                                 </div>
                                             </div>
                                             {item.has_ai_explanation && (
-                                                <span className="text-purple-400 text-sm" title="AI Explanation Available">
+                                                <span className="shrink-0 text-purple-500 dark:text-purple-400 text-sm" title="AI Explanation Available">
                                                     🤖
                                                 </span>
                                             )}
                                         </div>
                                     </div>
                                 ))}
-                        </div>
+                            </div>
+
+                            <div className="flex items-center justify-between pt-4 mt-4 border-t border-gray-200 dark:border-gray-700">
+                                <button
+                                    onClick={() => setPage(p => Math.max(1, p - 1))}
+                                    disabled={page <= 1 || isLoading}
+                                    className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-800"
+                                >
+                                    Previous
+                                </button>
+                                <span className="text-sm text-gray-500 dark:text-gray-400">
+                                    Page {page} of {totalPages.toLocaleString()}
+                                </span>
+                                <button
+                                    onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                                    disabled={page >= totalPages || isLoading}
+                                    className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-800"
+                                >
+                                    Next
+                                </button>
+                            </div>
+                        </>
                     )}
                 </div>
 
                 {/* Detail Panel */}
-                <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-6">
-                    <h2 className="text-xl font-semibold text-white mb-4">Review Details</h2>
+                <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-6 shadow-sm dark:shadow-none">
+                    <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Review Details</h2>
 
                     {!selectedItem ? (
-                        <div className="text-center py-12 text-gray-400">
+                        <div className="text-center py-12 text-gray-500 dark:text-gray-400">
                             <p className="text-4xl mb-4">👆</p>
                             <p>Select an item from the queue to review</p>
                         </div>
                     ) : (
                         <div className="space-y-6">
+                            {/* Records being compared */}
+                            <div className="grid grid-cols-2 gap-3">
+                                <div className="p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800">
+                                    <p className="text-xs text-blue-600 dark:text-blue-400 font-medium mb-1">Record A</p>
+                                    <p className="text-gray-900 dark:text-white text-sm font-medium truncate">{getDisplayName(selectedItem, 'a')}</p>
+                                    <p className="text-gray-500 dark:text-gray-400 text-xs font-mono mt-1">{selectedItem.a_key}</p>
+                                </div>
+                                <div className="p-3 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-100 dark:border-purple-800">
+                                    <p className="text-xs text-purple-600 dark:text-purple-400 font-medium mb-1">Record B</p>
+                                    <p className="text-gray-900 dark:text-white text-sm font-medium truncate">{getDisplayName(selectedItem, 'b')}</p>
+                                    <p className="text-gray-500 dark:text-gray-400 text-xs font-mono mt-1">{selectedItem.b_key}</p>
+                                </div>
+                            </div>
+
                             {/* Score */}
                             <div className="text-center">
                                 <div className={`inline-flex items-center justify-center w-24 h-24 rounded-full border-4 ${getScoreBg(selectedItem.score)}`}>
@@ -259,25 +324,25 @@ export default function ReviewPage() {
                                         {(selectedItem.score * 100).toFixed(0)}%
                                     </span>
                                 </div>
-                                <p className="text-gray-400 mt-2">Match Score</p>
+                                <p className="text-gray-500 dark:text-gray-400 mt-2">Match Score</p>
                             </div>
 
                             {/* AI Explanation */}
                             {(selectedItem.has_ai_explanation || explanation) && (
-                                <div className="bg-purple-900/10 border border-purple-700/50 rounded-lg p-4">
-                                    <h3 className="text-lg font-medium text-purple-300 mb-2 flex items-center gap-2">
+                                <div className="bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-700/50 rounded-lg p-4">
+                                    <h3 className="text-lg font-medium text-purple-700 dark:text-purple-300 mb-2 flex items-center gap-2">
                                         <span>🤖</span> AI Analysis
                                     </h3>
                                     {isExplanationLoading ? (
-                                        <div className="text-gray-400 text-sm animate-pulse">
+                                        <div className="text-gray-500 dark:text-gray-400 text-sm animate-pulse">
                                             Generating explanation...
                                         </div>
                                     ) : explanation ? (
-                                        <div className="whitespace-pre-wrap font-sans text-sm text-gray-300 bg-black/20 p-3 rounded border border-purple-900/30">
+                                        <div className="whitespace-pre-wrap font-sans text-sm text-gray-700 dark:text-gray-300 bg-white/60 dark:bg-black/20 p-3 rounded border border-purple-100 dark:border-purple-900/30">
                                             {explanation}
                                         </div>
                                     ) : (
-                                        <div className="text-gray-500 text-sm">
+                                        <div className="text-gray-500 dark:text-gray-500 text-sm">
                                             Explanation details not available
                                         </div>
                                     )}
@@ -286,66 +351,73 @@ export default function ReviewPage() {
 
                             {/* Evidence */}
                             <div>
-                                <h3 className="text-lg font-medium text-white mb-3">Evidence</h3>
+                                <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-3">Evidence</h3>
                                 <div className="space-y-2">
                                     {selectedItem.evidence.length > 0 ? (
                                         selectedItem.evidence.map((ev, idx) => (
-                                            <div key={idx} className="flex items-center justify-between p-3 bg-gray-900/50 rounded-lg">
-                                                <div>
-                                                    <span className="text-gray-300 font-medium">{ev.field}</span>
-                                                    <span className={`ml-2 text-xs px-2 py-0.5 rounded ${ev.type === 'exact_match' ? 'bg-emerald-900/50 text-emerald-400' :
-                                                        ev.type === 'fuzzy_match' ? 'bg-yellow-900/50 text-yellow-400' :
-                                                            'bg-gray-700 text-gray-400'
-                                                        }`}>
-                                                        {ev.type || 'unknown'}
-                                                    </span>
+                                            <div key={idx} className="p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-transparent">
+                                                <div className="flex items-center justify-between">
+                                                    <div className="flex items-center gap-2 min-w-0">
+                                                        <span className="text-gray-700 dark:text-gray-300 font-medium">{ev.field}</span>
+                                                        <span className={`text-xs px-2 py-0.5 rounded ${ev.type === 'exact_set_intersection' && (ev.similarity ?? 0) > 0 ? 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-400' :
+                                                            ev.type === 'rare_token_jaccard' && (ev.similarity ?? 0) > 0 ? 'bg-yellow-100 dark:bg-yellow-900/50 text-yellow-700 dark:text-yellow-400' :
+                                                                'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+                                                            }`}>
+                                                            {ev.type || 'unknown'}
+                                                        </span>
+                                                    </div>
+                                                    {ev.similarity !== undefined && (
+                                                        <span className="text-gray-500 dark:text-gray-400 shrink-0">
+                                                            {(ev.similarity * 100).toFixed(0)}%
+                                                        </span>
+                                                    )}
                                                 </div>
-                                                {ev.similarity !== undefined && (
-                                                    <span className="text-gray-400">
-                                                        {(ev.similarity * 100).toFixed(0)}%
-                                                    </span>
+                                                {(ev.value_a || ev.value_b) && (
+                                                    <div className="mt-1.5 text-xs text-gray-500 dark:text-gray-400 font-mono truncate">
+                                                        {ev.value_a || '—'} vs {ev.value_b || '—'}
+                                                    </div>
                                                 )}
                                             </div>
                                         ))
                                     ) : (
-                                        <p className="text-gray-500 text-sm">No evidence details available</p>
+                                        <p className="text-gray-500 dark:text-gray-500 text-sm">No evidence details available</p>
                                     )}
                                 </div>
                             </div>
 
                             {/* Signals */}
                             <div>
-                                <h3 className="text-lg font-medium text-white mb-3">Signals Hit</h3>
+                                <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-3">Signals Hit</h3>
                                 <div className="flex flex-wrap gap-2">
                                     {selectedItem.signals.map((signal, idx) => (
-                                        <span key={idx} className="px-3 py-1 bg-purple-900/30 border border-purple-700 text-purple-400 rounded-full text-sm">
+                                        <span key={idx} className="px-3 py-1 bg-purple-100 dark:bg-purple-900/30 border border-purple-200 dark:border-purple-700 text-purple-700 dark:text-purple-400 rounded-full text-sm">
                                             {signal}
                                         </span>
                                     ))}
                                     {selectedItem.signals.length === 0 && (
-                                        <span className="text-gray-500 text-sm">No signals</span>
+                                        <span className="text-gray-500 dark:text-gray-500 text-sm">No signals</span>
                                     )}
                                 </div>
                             </div>
 
                             {/* Reviewer Input */}
-                            <div className="border-t border-gray-700 pt-4 space-y-4">
+                            <div className="border-t border-gray-200 dark:border-gray-700 pt-4 space-y-4">
                                 <div>
-                                    <label className="block text-sm text-gray-400 mb-2">Reviewer Name</label>
+                                    <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">Reviewer Name</label>
                                     <input
                                         type="text"
                                         value={reviewerName}
                                         onChange={(e) => setReviewerName(e.target.value)}
-                                        className="w-full px-4 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white focus:border-blue-500 focus:outline-none"
+                                        className="w-full px-4 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white focus:border-blue-500 focus:outline-none"
                                         placeholder="Your name"
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-sm text-gray-400 mb-2">Reason (Required)</label>
+                                    <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">Reason (Required)</label>
                                     <textarea
                                         value={reviewReason}
                                         onChange={(e) => setReviewReason(e.target.value)}
-                                        className="w-full px-4 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white focus:border-blue-500 focus:outline-none resize-none"
+                                        className="w-full px-4 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white focus:border-blue-500 focus:outline-none resize-none"
                                         rows={3}
                                         placeholder="Explain your decision..."
                                     />
@@ -375,12 +447,12 @@ export default function ReviewPage() {
             </div>
 
             {/* Completed Reviews */}
-            <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-6">
-                <h2 className="text-xl font-semibold text-white mb-4">Recently Reviewed</h2>
+            <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-6 shadow-sm dark:shadow-none">
+                <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Recently Reviewed</h2>
                 <div className="overflow-x-auto">
                     <table className="w-full">
                         <thead>
-                            <tr className="text-left text-gray-400 text-sm border-b border-gray-700">
+                            <tr className="text-left text-gray-500 dark:text-gray-400 text-sm border-b border-gray-200 dark:border-gray-700">
                                 <th className="pb-3">Pair</th>
                                 <th className="pb-3">Score</th>
                                 <th className="pb-3">Decision</th>
@@ -388,37 +460,34 @@ export default function ReviewPage() {
                                 <th className="pb-3">Reason</th>
                             </tr>
                         </thead>
-                        <tbody className="text-gray-300">
-                            {queue
-                                .filter(item => item.status !== 'PENDING')
-                                .slice(0, 10)
-                                .map((item) => (
-                                    <tr key={item.review_id} className="border-b border-gray-800">
-                                        <td className="py-3 font-mono text-sm">
-                                            {item.a_key.slice(0, 8)}... ↔ {item.b_key.slice(0, 8)}...
-                                        </td>
-                                        <td className="py-3">
-                                            <span className={getScoreColor(item.score)}>
-                                                {(item.score * 100).toFixed(0)}%
-                                            </span>
-                                        </td>
-                                        <td className="py-3">
-                                            <span className={`px-2 py-1 rounded text-xs ${item.status === 'APPROVED'
-                                                ? 'bg-emerald-900/50 text-emerald-400'
-                                                : 'bg-red-900/50 text-red-400'
-                                                }`}>
-                                                {item.status}
-                                            </span>
-                                        </td>
-                                        <td className="py-3">{item.reviewer || '—'}</td>
-                                        <td className="py-3 text-gray-400 text-sm max-w-[200px] truncate">
-                                            {item.review_reason || '—'}
-                                        </td>
-                                    </tr>
-                                ))}
-                            {queue.filter(item => item.status !== 'PENDING').length === 0 && (
+                        <tbody className="text-gray-700 dark:text-gray-300">
+                            {recentlyReviewed.map((item) => (
+                                <tr key={item.review_id} className="border-b border-gray-100 dark:border-gray-800">
+                                    <td className="py-3 text-sm truncate max-w-[220px]">
+                                        {getDisplayName(item, 'a')} ↔ {getDisplayName(item, 'b')}
+                                    </td>
+                                    <td className="py-3">
+                                        <span className={getScoreColor(item.score)}>
+                                            {(item.score * 100).toFixed(0)}%
+                                        </span>
+                                    </td>
+                                    <td className="py-3">
+                                        <span className={`px-2 py-1 rounded text-xs ${item.status === 'APPROVED'
+                                            ? 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-400'
+                                            : 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-400'
+                                            }`}>
+                                            {item.status}
+                                        </span>
+                                    </td>
+                                    <td className="py-3">{item.reviewer || '—'}</td>
+                                    <td className="py-3 text-gray-500 dark:text-gray-400 text-sm max-w-[200px] truncate">
+                                        {item.review_reason || '—'}
+                                    </td>
+                                </tr>
+                            ))}
+                            {recentlyReviewed.length === 0 && (
                                 <tr>
-                                    <td colSpan={5} className="py-8 text-center text-gray-500">
+                                    <td colSpan={5} className="py-8 text-center text-gray-500 dark:text-gray-500">
                                         No reviews completed yet
                                     </td>
                                 </tr>

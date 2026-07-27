@@ -1,12 +1,18 @@
 """
-CUIN v2 - Cluster Manager
+CUIN v2 - Cluster Manager (Ruleset v2)
 
 Manages identity clusters with versioning and golden record generation.
+
+cluster_id is now a deterministic sha256 of the ruleset version plus
+the sorted member set, NOT uuid4() -- the old str(uuid4()) meant the
+same set of members got a brand-new random cluster_id on every single
+pipeline run, even on byte-identical input data, which broke the
+"same run twice -> same cluster IDs" reproducibility requirement.
 """
 
 from typing import Dict, List, Set, Optional, Tuple
 from datetime import datetime
-from uuid import uuid4
+import hashlib
 import json
 import os
 import logging
@@ -15,6 +21,7 @@ from dataclasses import asdict
 from engine.clustering.union_find import UnionFind
 from engine.golden.golden_builder import GoldenBuilder
 from engine.structures import ClusterMember, GoldenRecord
+from engine.ruleset.version import RULESET_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -89,10 +96,27 @@ class ClusterManager:
             logger.error(f"Failed to load cluster snapshot: {e}")
     
     def _get_or_create_cluster_id(self, root: str) -> str:
-        """Get or create a cluster ID for a root element."""
-        if root not in self._cluster_ids:
-            self._cluster_ids[root] = str(uuid4())
-        return self._cluster_ids[root]
+        """
+        Deterministic cluster ID: sha256(RULESET_VERSION + sorted(members)).
+
+        Deliberately NOT cached by root string. A component's membership
+        grows across many incremental union() calls before it settles
+        (spark_orchestrator._stage_cluster links members into a shared
+        root one pair at a time), and the deterministic root chosen by
+        UnionFind.union() can stay the SAME string across several of
+        those calls while membership keeps growing underneath it -- so
+        caching by root alone would freeze the ID at whatever partial
+        membership existed on first request. UnionFind.get_members() is
+        O(current component size) via incremental tracking, not an O(N)
+        full-table scan, so recomputing on every call is cheap.
+        """
+        members = sorted(self._uf.get_members(root))
+        digest = hashlib.sha256(
+            (RULESET_VERSION + "|" + "|".join(members)).encode("utf-8")
+        ).hexdigest()
+        cluster_id = f"CL_{digest[:32]}"
+        self._cluster_ids[root] = cluster_id  # kept for get_clusters()'s id lookup
+        return cluster_id
     
     def find(self, key: str) -> str:
         """Find the cluster ID for a record key."""
@@ -159,24 +183,15 @@ class ClusterManager:
         Returns mapping of customer_key -> cluster_id.
         """
         self._current_version += 1
-        
+
         for a_key, b_key in pairs:
             self.link(a_key, b_key)
-        
-        # Build result mapping
+
         result = {}
-        for element in self._uf.get_clusters():
-            # UnionFind.get_clusters returns dict[root, set[members]], but here we iterate keys of UF parent
-            # Actually get_clusters() implies iterating roots.
-            # I need result for ALL elements usually?
-            # User code iterate self._uf._parent usually. Or use get_clusters()
-            pass
-            
-        # Safer way: iterate all known members
         for member in self._members:
-             if member.valid_to is None:
-                 result[member.customer_key] = self.find(member.customer_key)
-        
+            if member.valid_to is None:
+                result[member.customer_key] = self.find(member.customer_key)
+
         return result
     
     def get_cluster_members(self, cluster_id: str) -> List[str]:

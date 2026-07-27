@@ -65,8 +65,15 @@ class ApiClient {
     }
 
     // Review
-    async getReviewQueue() {
-        return this.request('/review/queue');
+    async getReviewQueue(page: number = 1, pageSize: number = 20, status?: string) {
+        const params = new URLSearchParams({
+            page: page.toString(),
+            page_size: pageSize.toString(),
+        });
+        if (status) {
+            params.append('status', status);
+        }
+        return this.request(`/review/queue?${params.toString()}`);
     }
 
     async getReviewStats() {
@@ -88,7 +95,7 @@ class ApiClient {
     }
 
     async getExplanation(pairId: string) {
-        return this.request(`/matches/${pairId}/explanation`);
+        return this.request(`/review/${pairId}/explanation`);
     }
 
     // Graph
@@ -123,7 +130,7 @@ class ApiClient {
     }
 
     // Matches
-    async getMatchScores(runId: string, page: number = 1, pageSize: number = 10, minScore?: number) {
+    async getMatchScores(runId: string, page: number = 1, pageSize: number = 10, minScore?: number, decision?: string) {
         const params = new URLSearchParams({
             run_id: runId,
             page: page.toString(),
@@ -131,6 +138,9 @@ class ApiClient {
         });
         if (minScore !== undefined) {
             params.append('min_score', minScore.toString());
+        }
+        if (decision) {
+            params.append('decision', decision);
         }
         return this.request(`/matches/scores?${params.toString()}`);
     }

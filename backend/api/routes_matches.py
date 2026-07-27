@@ -194,10 +194,16 @@ async def list_match_scores_query(
     page: int = 1,
     page_size: int = 50,
     min_score: Optional[float] = None,
+    decision: Optional[str] = None,
 ) -> dict:
     """
     List match scores for a run using query parameters.
     Reads from the run-specific scoring CSV saved after each pipeline run.
+
+    `decision` filters to AUTO_LINK/REVIEW/REJECT when the CSV has a
+    `decision` column (written by pipeline.duckdb_orchestrator since the
+    Ruleset v2 rework -- older CSVs without it ignore this filter rather
+    than erroring, so this stays backward compatible).
     """
     import pandas as pd
 
@@ -210,17 +216,32 @@ async def list_match_scores_query(
             return {"scores": [], "total": 0, "page": page, "page_size": page_size}
 
     try:
-        df = pd.read_csv(csv_path)
+        # dtype=str on the code columns is required: CUSTOMER_CODEs are
+        # all-digit strings (e.g. "00000301"), and pandas' default type
+        # inference silently parses an all-digit column as an integer,
+        # stripping the leading zeros that make the code the correct
+        # length for lookup against the source parquet.
+        df = pd.read_csv(csv_path, dtype={"CUSTOMER_CODE_l": str, "CUSTOMER_CODE_r": str})
+        has_decision_col = "decision" in df.columns
 
-        if min_score is not None:
+        if min_score is not None and "match_probability" in df.columns:
             df = df[df["match_probability"] >= min_score]
 
-        df = df.sort_values("match_probability", ascending=False)
+        if decision and has_decision_col:
+            df = df[df["decision"] == decision.upper()]
+
+        if "match_probability" in df.columns:
+            df = df.sort_values("match_probability", ascending=False)
 
         total = len(df)
         start = (page - 1) * page_size
         end = start + page_size
         paged = df.iloc[start:end]
+
+        def _split(value) -> list:
+            if not value or (isinstance(value, float) and pd.isna(value)):
+                return []
+            return [v for v in str(value).split(";") if v]
 
         scores = []
         for _, row in paged.iterrows():
@@ -231,8 +252,9 @@ async def list_match_scores_query(
                 "a_key": id_l,
                 "b_key": id_r,
                 "score": float(row.get("match_probability", 0)),
-                "signals_hit": [],
-                "hard_conflicts": [],
+                "decision": row.get("decision", "") if has_decision_col else "",
+                "signals_hit": _split(row.get("signals_hit")),
+                "hard_conflicts": _split(row.get("hard_conflicts")),
             })
 
         return {"scores": scores, "total": total, "page": page, "page_size": page_size}
@@ -243,124 +265,213 @@ async def list_match_scores_query(
         return {"scores": [], "total": 0, "page": page, "page_size": page_size}
 
 
+def _load_two_customer_rows(codes: list) -> dict:
+    """
+    On-demand lookup of raw parquet rows for exactly the two requested
+    customer codes. Deterministic and always correct regardless of
+    which run_id (if any) is currently selected in the UI -- the
+    pipeline is a pure function of this same source data, so evidence
+    computed fresh here matches what any run would have computed.
+    """
+    import duckdb
+    from pipeline.duckdb_orchestrator import PARQUET_PATH
+
+    con = duckdb.connect()
+    try:
+        placeholders = ",".join(["?"] * len(codes))
+        rows = con.execute(f"""
+            SELECT CUSTOMER_CODE, NAME, BIRTH_DATE, MOBILE, EMAIL, DOCUMENT, FULL_ADDRESS
+            FROM read_parquet(?)
+            WHERE CUSTOMER_CODE IN ({placeholders})
+        """, [PARQUET_PATH] + codes).fetchall()
+    finally:
+        con.close()
+
+    return {
+        r[0]: {
+            "CUSTOMER_CODE": r[0], "NAME": r[1], "BIRTH_DATE": r[2],
+            "MOBILE": r[3] or [], "EMAIL": r[4] or [], "DOCUMENT": r[5] or [], "FULL_ADDRESS": r[6] or [],
+        }
+        for r in rows
+    }
+
+
+def _build_display_record(raw: dict) -> dict:
+    from engine.normalize.identity import norm_name, norm_dob, norm_mobile_bd, norm_email, norm_address
+
+    name_norm, _ = norm_name(raw.get("NAME"))
+    dob_iso, _ = norm_dob(raw.get("BIRTH_DATE"))
+    mobile = next((norm_mobile_bd(m)[0] for m in raw.get("MOBILE", []) if norm_mobile_bd(m)[0]), None)
+    email = next((norm_email(e)[0] for e in raw.get("EMAIL", []) if norm_email(e)[0]), None)
+    address = next((norm_address(a) for a in raw.get("FULL_ADDRESS", []) if norm_address(a)), None)
+
+    code = raw["CUSTOMER_CODE"]
+    return {
+        "customer_key": code, "source_customer_id": code,
+        "name": raw.get("NAME") or "", "name_norm": name_norm or "",
+        "email": email or "", "email_norm": email or "",
+        "phone": mobile or "", "phone_norm": mobile or "",
+        "dob": raw.get("BIRTH_DATE") or "", "dob_norm": dob_iso or "",
+        "address": (raw.get("FULL_ADDRESS") or [""])[0] if raw.get("FULL_ADDRESS") else "",
+        "address_norm": address or "",
+        "natid": (raw.get("DOCUMENT") or [""])[0] if raw.get("DOCUMENT") else "",
+        "status": "ACT",
+    }
+
+
+def _compute_pair_evidence_fresh(raw_a: dict, raw_b: dict):
+    """
+    Computes evidence + tier classification for exactly one pair using
+    the same rules as the bulk pipeline (engine.normalize.identity,
+    engine.scoring.tiers), without needing any persisted run artifact.
+    This is what makes match details available for EVERY pair --
+    AUTO_LINK, REVIEW, or REJECT, from any run, even runs whose
+    in-memory orchestrator or file artifacts no longer exist.
+    """
+    from engine.normalize.identity import norm_name, norm_dob, norm_mobile_bd, norm_email, norm_address, parse_document
+    from engine.scoring.tiers import classify, decide
+    from engine.structures import FieldEvidence
+
+    def identifiers_for(raw, kind):
+        if kind == "mobile":
+            return {v for v in (norm_mobile_bd(m)[0] for m in raw.get("MOBILE", [])) if v}
+        if kind == "email":
+            return {v for v in (norm_email(e)[0] for e in raw.get("EMAIL", [])) if v}
+        return set()
+
+    def documents_for(raw):
+        out = {}
+        for d in raw.get("DOCUMENT", []):
+            dtype, value, _ = parse_document(d)
+            if value:
+                out.setdefault(dtype, set()).add(value)
+        return out
+
+    name_a, tokens_a = norm_name(raw_a.get("NAME"))
+    name_b, tokens_b = norm_name(raw_b.get("NAME"))
+    dob_a, prec_a = norm_dob(raw_a.get("BIRTH_DATE"))
+    dob_b, prec_b = norm_dob(raw_b.get("BIRTH_DATE"))
+
+    docs_a, docs_b = documents_for(raw_a), documents_for(raw_b)
+    id_evidence = []
+    for kind in ("mobile", "email"):
+        vals_a, vals_b = identifiers_for(raw_a, kind), identifiers_for(raw_b, kind)
+        id_evidence.append({
+            "id_type": kind, "doc_type": None,
+            "values_a": sorted(vals_a), "values_b": sorted(vals_b),
+            "intersection": sorted(vals_a & vals_b),
+        })
+    for dtype in set(docs_a) | set(docs_b):
+        vals_a, vals_b = docs_a.get(dtype, set()), docs_b.get(dtype, set())
+        id_evidence.append({
+            "id_type": "document", "doc_type": dtype,
+            "values_a": sorted(vals_a), "values_b": sorted(vals_b),
+            "intersection": sorted(vals_a & vals_b),
+        })
+
+    tokens_a, tokens_b = tokens_a or [], tokens_b or []
+    evidence = {
+        "identifiers": id_evidence,
+        "name_dob": {
+            "name_a": name_a, "name_b": name_b,
+            "tokens_a": tokens_a, "tokens_b": tokens_b,
+            "token_intersection": sorted(set(tokens_a) & set(tokens_b)),
+            "token_union": sorted(set(tokens_a) | set(tokens_b)),
+            "dob_a": dob_a, "dob_b": dob_b,
+            "dob_precision_a": prec_a, "dob_precision_b": prec_b,
+        },
+    }
+
+    tier = classify(evidence)
+    decision = decide(tier)
+
+    field_evidence = []
+    for id_ev in id_evidence:
+        has_match = len(id_ev["intersection"]) > 0
+        field_evidence.append(FieldEvidence(
+            field_name=id_ev["id_type"] if not id_ev["doc_type"] else f"document({id_ev['doc_type']})",
+            value_a=",".join(id_ev["values_a"]) or None,
+            value_b=",".join(id_ev["values_b"]) or None,
+            comparison_type="exact_set_intersection",
+            similarity_score=1.0 if has_match else 0.0,
+            match_weight=1.0 if has_match else 0.0,
+            explanation=f"Matched on {','.join(id_ev['intersection'])}" if has_match else "No intersecting validated value",
+        ))
+    nd = evidence["name_dob"]
+    if nd["token_union"]:
+        jaccard = len(nd["token_intersection"]) / len(nd["token_union"])
+        field_evidence.append(FieldEvidence(
+            field_name="name", value_a=name_a, value_b=name_b,
+            comparison_type="rare_token_jaccard", similarity_score=jaccard, match_weight=jaccard,
+            explanation=(f"Rare-token overlap: {nd['token_intersection']} (Jaccard={jaccard:.2f})"
+                         if jaccard > 0 else "No shared rare name tokens"),
+        ))
+    if dob_a and dob_b:
+        equal = dob_a == dob_b
+        both_full = prec_a == "FULL" and prec_b == "FULL"
+        field_evidence.append(FieldEvidence(
+            field_name="dob", value_a=dob_a, value_b=dob_b,
+            comparison_type="exact" if both_full else "year_only",
+            similarity_score=1.0 if equal else 0.0,
+            match_weight=1.0 if (equal and both_full) else 0.0,
+            explanation=f"DOB {'exact match' if equal else 'differs'} ({'full precision' if both_full else 'year-only precision'})",
+        ))
+
+    score_value = {"AUTO_LINK": 0.99, "REVIEW": 0.65, "REJECT": 0.20}[decision.value]
+    return field_evidence, tier, decision, score_value
+
+
 @router.get("/{pair_id}")
 async def get_match_details(pair_id: str) -> dict:
     """
     Get detailed match information for a specific pair.
-    pair_id format: "id1:id2" (as generated by /matches/scores)
-    Falls back to in-memory orchestrator for legacy compatibility.
-    """
-    import pandas as pd
-    import glob
+    pair_id format: "a_key:b_key" (as generated by /matches/scores).
 
-    # Decode URL-encoded colon (%3A)
+    Evidence and decision are computed FRESH from the source parquet
+    (via _compute_pair_evidence_fresh), not read from a persisted CSV
+    or _records.json snapshot. Those files only ever contain data for
+    customers involved in AUTO_LINK/REVIEW pairs that survived into a
+    specific run's clusters -- a REVIEW or REJECT pair's customers are
+    routinely absent from them, which is exactly why "Record details
+    unavailable" was showing. Recomputing here works identically for
+    AUTO_LINK, REVIEW, and REJECT pairs, from any run, since the
+    pipeline is a deterministic function of this same source data.
+    """
     decoded = pair_id.replace("%3A", ":")
     parts = decoded.split(":")
-    id1 = parts[0] if len(parts) >= 1 else ""
-    id2 = parts[1] if len(parts) >= 2 else ""
+    if len(parts) < 2:
+        raise HTTPException(status_code=400, detail="pair_id must be 'a_key:b_key'")
+    id1, id2 = parts[0], parts[1]
 
-    # 1. Try reading from run-specific scores CSVs first
-    csv_files = sorted(glob.glob("data/runs/*_scores.csv"), reverse=True)
-    if not csv_files:
-        csv_files = ["scoring_results.csv"] if os.path.exists("scoring_results.csv") else []
+    try:
+        raw_rows = _load_two_customer_rows([id1, id2])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load records: {e}")
 
-    for csv_path in csv_files:
-        try:
-            df = pd.read_csv(csv_path)
-            # Match row where CUSTOMER_CODE_l==id1 and CUSTOMER_CODE_r==id2 (or vice versa)
-            df["id_l"] = df["CUSTOMER_CODE_l"].astype(str)
-            df["id_r"] = df["CUSTOMER_CODE_r"].astype(str)
-            mask = ((df["id_l"] == id1) & (df["id_r"] == id2)) | \
-                   ((df["id_l"] == id2) & (df["id_r"] == id1))
-            row_df = df[mask]
-            if row_df.empty:
-                continue
-            row = row_df.iloc[0]
+    if id1 not in raw_rows or id2 not in raw_rows:
+        raise HTTPException(status_code=404, detail="One or both customer codes not found in source data")
 
-            # Find run_id from filename
-            run_id_from_file = os.path.basename(csv_path).replace("_scores.csv", "")
-            if run_id_from_file == "scoring_results":
-                run_id_from_file = None
+    record_a = _build_display_record(raw_rows[id1])
+    record_b = _build_display_record(raw_rows[id2])
+    field_evidence, tier, decision, score_value = _compute_pair_evidence_fresh(raw_rows[id1], raw_rows[id2])
 
-            # Load records from matching run records file
-            record_a, record_b = None, None
-            if run_id_from_file:
-                rec_path = f"data/runs/{run_id_from_file}_records.json"
-                if os.path.exists(rec_path):
-                    import json
-                    with open(rec_path) as f:
-                        recs = json.load(f)
-                    record_a = recs.get(id1)
-                    record_b = recs.get(id2)
-
-            # Build evidence from CSV columns
-            evidence = []
-            field_map = {
-                "name": ("NAME_l", "NAME_r", "gamma_name"),
-                "dob": ("BIRTH_DATE_l", "BIRTH_DATE_r", "gamma_dob"),
-                "document": (None, None, "gamma_document"),
-                "mobile": (None, None, "gamma_mobile"),
-                "email": (None, None, "gamma_email"),
-            }
-            for field, (col_l, col_r, gamma_col) in field_map.items():
-                gamma = float(row.get(gamma_col, 0)) if gamma_col and gamma_col in row else 0
-                val_a = str(row.get(col_l, "")) if col_l and col_l in row else ""
-                val_b = str(row.get(col_r, "")) if col_r and col_r in row else ""
-                evidence.append({
-                    "field": field,
-                    "value_a": val_a,
-                    "value_b": val_b,
-                    "comparison_type": "exact" if gamma == 1 else "no_match",
-                    "similarity": gamma,
-                    "weight": float(row.get(f"bf_{field}", 0)) if f"bf_{field}" in row else 0,
-                    "explanation": "Exact match" if gamma == 1 else "No match",
-                })
-
-            prob = float(row.get("match_probability", 0))
-            return {
-                "pair_id": decoded,
-                "run_id": run_id_from_file,
-                "a_key": id1,
-                "b_key": id2,
-                "score": prob,
-                "decision": "AUTO_LINK" if prob >= 0.85 else "REVIEW" if prob >= 0.6 else "REJECT",
-                "signals_hit": [e["field"] for e in evidence if e["similarity"] == 1],
-                "hard_conflicts": [],
-                "evidence": evidence,
-                "record_a": record_a,
-                "record_b": record_b,
-            }
-        except Exception:
-            continue
-
-    # 2. Fallback: search in-memory orchestrators
-    run_service = get_run_service()
-    runs, _ = run_service.list_runs(page=1, page_size=100)
-    for run in runs:
-        orchestrator = run_service.get_orchestrator(run.run_id)
-        if orchestrator:
-            scores = orchestrator.get_scores()
-            if pair_id in scores:
-                score = scores[pair_id]
-                decision = orchestrator.get_decisions().get(pair_id)
-                record_a = orchestrator._records.get(score.a_key)
-                record_b = orchestrator._records.get(score.b_key)
-                evidence = [
-                    {"field": ev.field_name, "value_a": ev.value_a, "value_b": ev.value_b,
-                     "comparison_type": ev.comparison_type, "similarity": ev.similarity_score,
-                     "weight": ev.match_weight, "explanation": ev.explanation}
-                    for ev in score.evidence
-                ]
-                return {
-                    "pair_id": pair_id, "run_id": run.run_id,
-                    "a_key": score.a_key, "b_key": score.b_key,
-                    "score": score.score,
-                    "decision": decision.value if decision else None,
-                    "signals_hit": score.signals_hit, "hard_conflicts": score.hard_conflicts,
-                    "evidence": evidence, "record_a": record_a, "record_b": record_b,
-                }
-
-    raise HTTPException(status_code=404, detail="Match not found")
+    return {
+        "pair_id": decoded,
+        "a_key": id1,
+        "b_key": id2,
+        "score": score_value,
+        "decision": decision.value,
+        "signals_hit": tier.signals_hit,
+        "hard_conflicts": tier.vetoes,
+        "evidence": [
+            {"field": ev.field_name, "value_a": ev.value_a, "value_b": ev.value_b,
+             "comparison_type": ev.comparison_type, "similarity": ev.similarity_score,
+             "weight": ev.match_weight, "explanation": ev.explanation}
+            for ev in field_evidence
+        ],
+        "record_a": record_a,
+        "record_b": record_b,
+    }
 
 
 @router.get("/run/{run_id}/uniques")

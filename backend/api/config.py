@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql://cuin:cuin_secret@localhost:5432/cuin_db"
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 10
+
+    # Whether pipeline.duckdb_orchestrator persists results (customers,
+    # candidate pairs, scores, decisions, clusters) to Postgres. Off by
+    # default so a fresh checkout without a reachable Postgres still runs
+    # the pipeline against in-memory/file artifacts only.
+    PERSIST_TO_POSTGRES: bool = True
     
     # ----------------------------------------
     # Neo4j

@@ -12,6 +12,7 @@ interface MatchScore {
     a_key: string;
     b_key: string;
     score: number;
+    decision?: string;
     signals_hit: string[];
     hard_conflicts: string[];
 }
@@ -314,7 +315,10 @@ function ExplorerPageContent() {
 
     const fetchScores = async (runId: string, page: number) => {
         try {
-            const data = await api.getMatchScores(runId, page, pageSize, minScore > 0 ? minScore : undefined);
+            // 'all' sends no decision filter; auto_link/review/reject map
+            // directly to the backend's AUTO_LINK/REVIEW/REJECT values.
+            const decisionFilter = filter === 'all' ? undefined : filter.toUpperCase();
+            const data = await api.getMatchScores(runId, page, pageSize, minScore > 0 ? minScore : undefined, decisionFilter);
             setScores(data.scores || []);
             setTotalScores(data.total || 0);
         } catch (err) {
@@ -350,31 +354,31 @@ function ExplorerPageContent() {
         if (!selectedRunId) return;
         setIsGeneratingReport(true);
         try {
-            // Fetch all the data we need for the report using proper API calls
-            const [clustersData, uniquesData, scoresData] = await Promise.all([
-                api.getClusterEntities(1, 1000, 2, selectedRunId),
-                api.getUniques(selectedRunId, 1, 1000),
-                api.getMatchScores(selectedRunId, 1, 1000)
+            // Matching totals (auto links/review/reject/pairs/records) come
+            // from the run's own counters -- these are the pipeline's
+            // authoritative totals, computed once over the full dataset.
+            // Previously this filtered a 1000-row SAMPLE of scores/clusters/
+            // uniques by score and used array .length, which silently
+            // undercounted by orders of magnitude once real totals exceeded
+            // 1000 (e.g. 53,910 clusters or 1,445,597 uniques reported as
+            // at most 1000). Preview lists (topClusters/uniqueRecords) still
+            // fetch a small page for display, but every COUNT below reads
+            // the API's `.total` field, not the length of a truncated page.
+            const [run, clustersData, uniquesData] = await Promise.all([
+                api.getRun(selectedRunId),
+                api.getClusterEntities(1, 5, 2, selectedRunId),
+                api.getUniques(selectedRunId, 1, 10),
             ]);
 
+            const counters = run?.counters || {};
             const clusters = clustersData?.clusters || [];
             const uniques = uniquesData?.records || [];
-            const allScores = scoresData?.scores || [];
+            const totalEntities = clustersData?.total || 0;
+            const totalUniques = uniquesData?.total || 0;
+            const totalRecords = counters.records_in || 0;
 
-            // Calculate statistics
-            const totalEntities = clusters.length;
-            const totalUniques = uniques.length;
-            const multiRecordClusters = clusters.filter((c: any) => c.size > 1);
-
-            // Calculate decision counts from actual score thresholds
-            const autoLinks = allScores.filter((s: any) => s.score >= 0.85).length;
-            const reviewItems = allScores.filter((s: any) => s.score >= 0.6 && s.score < 0.85).length;
-            const rejectItems = allScores.filter((s: any) => s.score < 0.6).length;
-
-            // Calculate total records and deduplication rate
-            const totalRecords = multiRecordClusters.reduce((sum: number, c: any) => sum + c.size, 0) + totalUniques;
             const dedupRate = totalRecords > 0
-                ? ((totalRecords - multiRecordClusters.length - totalUniques) / totalRecords * 100).toFixed(1)
+                ? (((counters.auto_links || 0) / totalRecords) * 100).toFixed(1)
                 : '0';
 
             setReportData({
@@ -387,12 +391,12 @@ function ExplorerPageContent() {
                     deduplicationRate: dedupRate,
                 },
                 matching: {
-                    autoLinks,
-                    reviewItems,
-                    rejectItems,
-                    totalPairs: allScores.length
+                    autoLinks: counters.auto_links || 0,
+                    reviewItems: counters.review_items || 0,
+                    rejectItems: counters.rejected || 0,
+                    totalPairs: counters.pairs_scored || 0,
                 },
-                topClusters: multiRecordClusters.slice(0, 5).map((c: any) => ({
+                topClusters: clusters.slice(0, 5).map((c: any) => ({
                     name: c.representative_record?.name_norm || c.representative_name || c.cluster_id?.slice(0, 12) || 'Entity',
                     size: c.size,
                     id: c.cluster_id
@@ -652,6 +656,17 @@ function ExplorerPageContent() {
                                                         <span className={`px-2 py-0.5 rounded border text-sm font-medium ${getScoreBg(score.score)} ${getScoreColor(score.score)}`}>
                                                             {(score.score * 100).toFixed(0)}%
                                                         </span>
+                                                        {score.decision && (
+                                                            <span className={`px-2 py-0.5 rounded text-xs font-semibold uppercase tracking-wide ${
+                                                                score.decision === 'AUTO_LINK'
+                                                                    ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300'
+                                                                    : score.decision === 'REVIEW'
+                                                                        ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300'
+                                                                        : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400'
+                                                            }`}>
+                                                                {score.decision.replace('_', ' ')}
+                                                            </span>
+                                                        )}
                                                     </div>
                                                     {score.signals_hit.length > 0 && (
                                                         <span className="text-xs text-gray-500">

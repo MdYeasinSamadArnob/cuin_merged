@@ -782,44 +782,81 @@ async def get_unique_records(
     page_size: int = Query(20, ge=1, le=5000),
 ):
     """
-    Returns singleton records – customer IDs that belong to no multi-member cluster.
-    Used by the Explorer UNIQUE tab.
+    Returns singleton records - customer IDs that belong to no accepted
+    cluster for this run. Used by the Explorer UNIQUE tab.
+
+    Reads the lightweight code-only manifest written by
+    pipeline.duckdb_orchestrator._persist_run_artifacts
+    (data/runs/{run_id}_singletons.csv) rather than deriving singletons
+    from {run_id}_records.json -- that file only ever contains CLUSTER
+    MEMBERS (see _load_records_for_members), so subtracting "clustered"
+    from it was always empty by construction, regardless of how many
+    true singletons existed. The manifest holds only customer_code
+    (cheap even at ~1.2M rows); full profile data for the current page
+    is looked up on demand from the source parquet, so this never
+    materializes more than one page's worth of full records at a time.
     """
-    manager = get_cluster_manager()
+    singletons_path = f"data/runs/{run_id}_singletons.csv" if run_id else None
 
-    if run_id:
-        path = f"data/runs/{run_id}_clusters.json"
-        if os.path.exists(path):
-            if not manager._members or getattr(manager, "loaded_run_id", None) != run_id:
-                manager.load_snapshot(path, run_id)
+    if not run_id or not os.path.exists(singletons_path):
+        return {"records": [], "total": 0, "page": page, "page_size": page_size}
 
-    all_clusters = manager.get_clusters()
-    clustered: set = set()
-    for members in all_clusters.values():
-        if len(members) > 1:
-            clustered.update(members)
+    import csv as csv_module
+    with open(singletons_path, "r", newline="") as f:
+        reader = csv_module.reader(f)
+        next(reader, None)  # header
+        all_codes = [row[0] for row in reader if row]
 
-    # Load run records from disk
-    run_records: dict = {}
-    if run_id:
-        file_path = f"data/runs/{run_id}_records.json"
-        if os.path.exists(file_path):
-            try:
-                with open(file_path, "r") as f:
-                    run_records = json.load(f)
-            except Exception as e:
-                logger.warning(f"Could not load records for run {run_id}: {e}")
-
-    singletons = [rid for rid in run_records if rid not in clustered]
-    singletons.sort()
-
-    total = len(singletons)
+    total = len(all_codes)
     start = (page - 1) * page_size
     end = start + page_size
-    paged = singletons[start:end]
+    page_codes = all_codes[start:end]
+
+    records = []
+    if page_codes:
+        try:
+            import duckdb
+            from pipeline.duckdb_orchestrator import PARQUET_PATH
+
+            con = duckdb.connect()
+            placeholders = ",".join(["?"] * len(page_codes))
+            rows = con.execute(f"""
+                SELECT
+                    CUSTOMER_CODE,
+                    NAME,
+                    BIRTH_DATE,
+                    list_extract(list_filter(MOBILE, x -> x IS NOT NULL), 1) AS mobile,
+                    list_extract(list_filter(EMAIL, x -> x IS NOT NULL), 1) AS email,
+                    list_extract(list_filter(FULL_ADDRESS, x -> x IS NOT NULL), 1) AS address,
+                    list_extract(list_filter(DOCUMENT, x -> x IS NOT NULL), 1) AS natid
+                FROM read_parquet(?)
+                WHERE CUSTOMER_CODE IN ({placeholders})
+            """, [PARQUET_PATH] + page_codes).fetchall()
+            con.close()
+
+            for code, name, dob, mobile, email, address, natid in rows:
+                records.append({
+                    "customer_key": code,
+                    "source_customer_id": code,
+                    "name": name or "",
+                    "name_norm": (name or "").upper(),
+                    "email": email or "",
+                    "email_norm": (email or "").lower(),
+                    "phone": mobile or "",
+                    "phone_norm": mobile or "",
+                    "dob": dob or "",
+                    "dob_norm": dob or "",
+                    "address": address or "",
+                    "address_norm": (address or "").upper(),
+                    "natid": natid or "",
+                    "natid_norm": (natid or "").upper(),
+                    "status": "ACT",
+                })
+        except Exception as e:
+            logger.error(f"Failed to load singleton profiles for run {run_id}: {e}")
 
     return {
-        "records": [run_records[rid] for rid in paged if rid in run_records],
+        "records": records,
         "total": total,
         "page": page,
         "page_size": page_size,

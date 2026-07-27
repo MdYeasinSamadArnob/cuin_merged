@@ -656,8 +656,11 @@ class SparkPipelineOrchestrator:
                     "phone": mobile or phone,
                     "phone_norm": "".join(filter(str.isdigit, mobile or phone or "")),
                     "dob": dob,
+                    "dob_norm": dob,
                     "address": address,
+                    "address_norm": address.upper() if address else "",
                     "natid": doc,
+                    "natid_norm": doc.upper() if doc else "",
                     "status": "ACT",
                 }
             

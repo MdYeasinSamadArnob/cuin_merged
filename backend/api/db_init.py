@@ -49,7 +49,7 @@ def init_db():
             logger.info("Tables not found. Applying schema.sql...")
             with open(schema_path, "r") as f:
                 schema_sql = f.read()
-                
+
             # Execute schema
             # We split by statement if possible, or just run the whole block if using simple SQL
             # psycopg2 can execute multiple statements in one go usually
@@ -58,9 +58,11 @@ def init_db():
             logger.info("Schema applied successfully!")
         else:
             logger.info("Database schema already exists.")
-            
+
         cur.close()
-        
+
+        _apply_migrations(conn, schema_path.parent / "migrations")
+
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
         if conn:
@@ -68,6 +70,48 @@ def init_db():
     finally:
         if conn:
             conn.close()
+
+
+def _apply_migrations(conn, migrations_dir: Path):
+    """
+    Applies db/migrations/*.sql in filename order, tracked in
+    schema_migrations. The base-schema guard above (checking whether
+    `runs` exists) only decides whether to apply schema.sql -- it does
+    NOT re-run schema.sql's ALTER-free CREATE TABLE IF NOT EXISTS
+    statements, so an existing database never picks up new columns
+    added after initial deployment. Migrations are the mechanism for
+    that: numbered, idempotent (IF NOT EXISTS / ADD COLUMN IF NOT
+    EXISTS), and applied exactly once each.
+    """
+    if not migrations_dir.exists():
+        return
+
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            filename VARCHAR(255) PRIMARY KEY,
+            applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+        )
+    """)
+    conn.commit()
+
+    cur.execute("SELECT filename FROM schema_migrations")
+    applied = {row[0] for row in cur.fetchall()}
+
+    for migration_file in sorted(migrations_dir.glob("*.sql")):
+        if migration_file.name in applied:
+            continue
+        logger.info(f"Applying migration: {migration_file.name}")
+        with open(migration_file, "r") as f:
+            cur.execute(f.read())
+        cur.execute(
+            "INSERT INTO schema_migrations (filename) VALUES (%s)",
+            (migration_file.name,),
+        )
+        conn.commit()
+        logger.info(f"Migration applied: {migration_file.name}")
+
+    cur.close()
 
 def init_graph():
     """

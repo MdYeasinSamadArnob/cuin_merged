@@ -69,7 +69,9 @@ class Run:
     duration_seconds: Optional[float] = None
     error_message: Optional[str] = None
     current_stage: Optional[str] = None
-    
+    ruleset_version: Optional[str] = None
+    output_fingerprint: Optional[str] = None
+
     def to_dict(self) -> dict:
         """Convert to dictionary for API response."""
         return {
@@ -77,6 +79,8 @@ class Run:
             'mode': self.mode.value,
             'policy_version': self.policy_version,
             'status': self.status.value,
+            'ruleset_version': self.ruleset_version,
+            'output_fingerprint': self.output_fingerprint,
             'description': self.description,
             'counters': asdict(self.counters),
             'started_at': self.started_at.isoformat(),

@@ -3,17 +3,31 @@ CUIN v2 - Review Service
 
 Manages the human review queue for uncertain matches.
 Implements maker-checker workflow with audit logging.
+
+Persisted to data/review_queue.json (mirrors services.run_service's
+_save_runs/_load_runs pattern) so the queue survives a backend
+restart -- previously this was purely in-memory, so any restart
+silently wiped the entire officer review queue with no way to
+recover it, even though the pipeline run that populated it had
+completed successfully.
 """
 
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from uuid import uuid4
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from enum import Enum
+import json
+import logging
+import os
 
 from services.audit import log_audit_event, AuditEventType
 from engine.clustering import get_cluster_manager
 from agents.referee_agent import get_referee
+
+logger = logging.getLogger(__name__)
+
+_QUEUE_PATH = "data/review_queue.json"
 
 
 class ReviewStatus(str, Enum):
@@ -77,7 +91,53 @@ class ReviewService:
     def __init__(self):
         self._items: Dict[str, ReviewItem] = {}
         self._by_pair: Dict[str, str] = {}  # pair_id -> review_id
-    
+        self._load_queue()
+
+    def _save_queue(self) -> None:
+        """
+        Persist the full queue to disk. NOT called from queue_for_review
+        directly -- pipeline.duckdb_orchestrator queues review items in a
+        tight loop (up to ~190K calls on the full dataset), and dumping
+        an ever-growing multi-MB JSON file on every single call would
+        make the pipeline run take far longer than the actual matching
+        work. Callers doing bulk queueing must call this ONCE after the
+        loop finishes; approve()/reject() (human-paced, one at a time)
+        call it directly since that cost is negligible per action.
+        """
+        try:
+            os.makedirs(os.path.dirname(_QUEUE_PATH) or ".", exist_ok=True)
+
+            def default(o):
+                if isinstance(o, datetime):
+                    return o.isoformat()
+                return str(o)
+
+            data = {rid: asdict(item) for rid, item in self._items.items()}
+            with open(_QUEUE_PATH, "w") as f:
+                json.dump(data, f, default=default)
+        except Exception as e:
+            logger.error(f"Failed to save review queue: {e}")
+
+    def _load_queue(self) -> None:
+        try:
+            if not os.path.exists(_QUEUE_PATH):
+                return
+            with open(_QUEUE_PATH, "r") as f:
+                data = json.load(f)
+
+            for rid, item_data in data.items():
+                if item_data.get("created_at"):
+                    item_data["created_at"] = datetime.fromisoformat(item_data["created_at"])
+                if item_data.get("reviewed_at"):
+                    item_data["reviewed_at"] = datetime.fromisoformat(item_data["reviewed_at"])
+                item_data["status"] = ReviewStatus(item_data["status"])
+                self._items[rid] = ReviewItem(**item_data)
+                self._by_pair[item_data["pair_id"]] = rid
+
+            logger.info(f"Loaded {len(self._items)} review items from disk")
+        except Exception as e:
+            logger.error(f"Failed to load review queue: {e}")
+
     def queue_for_review(
         self,
         pair_id: str,
@@ -220,9 +280,10 @@ class ReviewService:
             actor=reviewer,
             run_id=item.run_id
         )
-        
+
+        self._save_queue()
         return item
-    
+
     def reject(
         self,
         review_id: str,
@@ -265,9 +326,10 @@ class ReviewService:
             actor=reviewer,
             run_id=item.run_id
         )
-        
+
+        self._save_queue()
         return item
-    
+
     def get_stats(self) -> dict:
         """Get review queue statistics."""
         items = list(self._items.values())
