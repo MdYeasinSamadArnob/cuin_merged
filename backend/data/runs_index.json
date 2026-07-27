@@ -128,25 +128,25 @@
     "run_id": "70bd7f7f-90f1-4242-831d-ee344a5a5f53",
     "mode": "FULL",
     "policy_version": 1,
-    "status": "RUNNING",
-    "ruleset_version": null,
-    "output_fingerprint": null,
+    "status": "COMPLETED",
+    "ruleset_version": "er-2026.07.1",
+    "output_fingerprint": "46db6a9c62f1e0120c184044146cdcd5225aa2055f8b409c603be8212ef1f8a0",
     "description": "Datasource Demo (duckdb)",
     "counters": {
       "records_in": 1567782,
-      "records_normalized": 0,
-      "blocks_created": 0,
+      "records_normalized": 1567782,
+      "blocks_created": 549879,
       "candidates_generated": 549879,
-      "pairs_scored": 0,
-      "auto_links": 0,
-      "review_items": 0,
-      "rejected": 0,
-      "clusters_created": 0
+      "pairs_scored": 549879,
+      "auto_links": 80809,
+      "review_items": 190182,
+      "rejected": 278888,
+      "clusters_created": 53910
     },
     "started_at": "2026-07-27T20:13:55.652331",
-    "ended_at": null,
-    "duration_seconds": null,
+    "ended_at": "2026-07-27T20:21:30.813886",
+    "duration_seconds": 455.161555,
     "error_message": null,
-    "current_stage": "score"
+    "current_stage": "complete"
   }
 }
