@@ -8,7 +8,7 @@ const nextConfig: NextConfig = {
     },
   },
   // Allow cross-origin requests in development
-  allowedDevOrigins: ["*"],
+  allowedDevOrigins: ["*", "10.11.200.99", "localhost", "127.0.0.1"],
   async headers() {
     return [
       {

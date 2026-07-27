@@ -1,6 +1,6 @@
 {
-  "a73a82e1-acc9-422f-b372-fd8eea98e314": {
-    "run_id": "a73a82e1-acc9-422f-b372-fd8eea98e314",
+  "681419dc-bc9c-4eab-b4bd-823311ece130": {
+    "run_id": "681419dc-bc9c-4eab-b4bd-823311ece130",
     "mode": "FULL",
     "policy_version": 1,
     "status": "COMPLETED",
@@ -11,14 +11,14 @@
       "blocks_created": 0,
       "candidates_generated": 1166466,
       "pairs_scored": 0,
-      "auto_links": 5835,
+      "auto_links": 4028,
       "review_items": 0,
       "rejected": 0,
-      "clusters_created": 2918
+      "clusters_created": 2893
     },
-    "started_at": "2026-03-16T06:47:35.416735",
-    "ended_at": "2026-03-16T06:51:40.905308",
-    "duration_seconds": 245.488573,
+    "started_at": "2026-07-27T10:40:14.959459",
+    "ended_at": "2026-07-27T10:43:38.600222",
+    "duration_seconds": 203.640763,
     "error_message": null,
     "current_stage": "complete"
   }

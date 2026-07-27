@@ -6,8 +6,8 @@ services:
     image: neo4j:5.15.0
     container_name: cuin-neo4j
     ports:
-      - "7474:7474" # HTTP
-      - "7687:7687" # Bolt
+      - "7475:7474" # HTTP
+      - "7688:7687" # Bolt
     environment:
       - NEO4J_AUTH=neo4j/password123
       # - NEO4J_PLUGINS=["apoc", "graph-data-science"] # Commented out to speed up startup
@@ -25,7 +25,7 @@ services:
     image: postgres:16-alpine
     container_name: cuin-postgres
     ports:
-      - "5433:5432" # Changed host port to 5433
+      - "5435:5432" # Changed host port to 5435 (5433 taken by another project on this host)
     environment:
       - POSTGRES_USER=admin
       - POSTGRES_PASSWORD=password123

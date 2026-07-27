@@ -43,15 +43,34 @@ cd frontend
 npm install
 npm run dev
 ```
-*   **Dashboard**: [http://localhost:3000](http://localhost:3000)
+*   **Dashboard**: [http://localhost:3001](http://localhost:3001) (redirects to `/dashboard`)
+    *   *Note: the dev server runs on port **3001**, not 3000 — see `frontend/package.json`.*
+    *   The frontend talks to the backend via `NEXT_PUBLIC_API_URL` (defaults to `http://localhost:8000`). Copy `frontend/.env.example` to `.env.local` if you need to point it elsewhere.
+
+---
+
+## ⚡ One-Line Alternative (Makefile)
+A `Makefile` wraps the same steps:
+```bash
+make install      # installs backend (venv) + frontend (npm) deps
+make docker-up    # starts Postgres, Neo4j, Redis, PgAdmin, RedisInsight
+make dev          # runs backend (uvicorn :8000) + frontend (next :3001) concurrently
+```
+Other useful targets: `make test`, `make lint`, `make format`, `make db-migrate`, `make docker-down`, `make clean`. Run `make help` to list them all.
+
+### Stopping everything
+```bash
+docker-compose down      # or: make docker-down
+# Ctrl+C the backend and frontend terminals
+```
 
 ---
 
 ## 🎮 How to Demo (The "Wow" Flow)
 1.  Go to **Upload** page. Drag & Drop a CSV (e.g., `challenging_er_200.csv`).
-2.  Go to **Pipeline** page ([http://localhost:3000/pipeline](http://localhost:3000/pipeline)).
+2.  Go to **Pipeline** page ([http://localhost:3001/pipeline](http://localhost:3001/pipeline)).
 3.  Click **"Start New Run"**. Watch the animations as it processes!
-4.  Go to **Graph** page ([http://localhost:3000/graph](http://localhost:3000/graph)).
+4.  Go to **Graph** page ([http://localhost:3001/graph](http://localhost:3001/graph)).
 5.  Click on any node to see the **"Bank Manager 360"** view (Risk Score, Balance, etc.).
 
 ---
@@ -61,6 +80,16 @@ npm run dev
 *   **Matching**: Uses **Splink** (Probabilistic Matching) to find duplicates.
 *   **Graph**: Projects the results into **Neo4j** for visualization.
 *   **Auto-Healing**: on startup, `db_init.py` checks and repairs the database schema.
+
+---
+
+## ⚠️ Troubleshooting
+
+### Port already in use
+On a shared machine, another project may already be using one of this stack's ports (`5433`, `7474`, `7687`, `8000`, `3001`, etc.). If `docker-compose up` or a dev server fails with `port is already allocated` / `address already in use`:
+1.  Find the offending process/container: `ss -ltnp | grep :<port>` or `docker ps --format '{{.Names}}: {{.Ports}}'`.
+2.  Either stop it, or remap **only your local copy**: edit the host-side port in `docker-compose.yml` (e.g. `"5433:5432"` → `"5435:5432"`) and update `backend/.env`'s `DATABASE_URL`/`NEO4J_URI` (and `frontend/.env.local`'s `NEXT_PUBLIC_API_URL` if you also moved the backend port) to match.
+3.  Don't commit personal port remaps — keep them local.
 
 ---
 

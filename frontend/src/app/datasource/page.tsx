@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { Database, Zap, Cpu, Network, CheckCircle2 } from "lucide-react";
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
 export default function DatasourcePage() {
     const [isStarting, setIsStarting] = useState(false);
     const router = useRouter();
@@ -12,7 +14,7 @@ export default function DatasourcePage() {
     const handleStartDemo = async () => {
         setIsStarting(true);
         try {
-            const res = await fetch("http://localhost:8000/datasource/demo", {
+            const res = await fetch(`${API_BASE_URL}/datasource/demo`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ mode: "FULL" })
