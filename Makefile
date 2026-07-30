@@ -38,7 +38,7 @@ dev-backend:
 	cd backend && . venv/bin/activate && uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
 
 dev-frontend:
-	@echo "🚀 Starting frontend server..."
+	@echo "🚀 Starting frontend server (port 3000)..."
 	cd frontend && npm run dev
 
 # Testing

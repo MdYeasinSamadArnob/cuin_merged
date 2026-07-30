@@ -17,7 +17,7 @@ cp infra/.env.example infra/.env
 Open `infra/.env` and set:
 *   `PUBLIC_HOST` — the address you'll type into your **browser** to reach the app (e.g. `localhost`, or this machine's LAN IP if you're accessing it from another device). This gets baked into the frontend at build time — see the comment in the file.
 *   `BACKEND_UID` / `BACKEND_GID` — set to your host user's `id -u` / `id -g` if you hit `Permission denied` errors on the backend writing to `backend/data/` (a bind-mount ownership mismatch, not a bug in the app).
-*   Ports, if any of the defaults (`8000`, `3000`, `5436`, `7476`, `7689`, `6381`, `18080`, `15540`) are already taken on your machine.
+*   Ports, if any of the defaults (`8110`, `30011`, `5436`, `7476`, `7689`, `6381`, `18080`, `15540`) are already taken on your machine.
 
 ### 3. Up
 ```bash
@@ -26,9 +26,9 @@ docker compose up --build -d
 ```
 First build takes a few minutes (installing backend/frontend dependencies); subsequent runs reuse the Docker layer cache and start in seconds. Watch progress with `docker compose logs -f`.
 
-*   **Dashboard**: `http://<PUBLIC_HOST>:3000`
-*   **API Docs**: `http://<PUBLIC_HOST>:8000/docs`
-*   **Health Check**: `http://<PUBLIC_HOST>:8000/health/ready`
+*   **Dashboard**: `http://<PUBLIC_HOST>:30011`
+*   **API Docs**: `http://<PUBLIC_HOST>:8110/docs`
+*   **Health Check**: `http://<PUBLIC_HOST>:8110/health/ready`
 *   **PgAdmin**: `http://<PUBLIC_HOST>:18080` (Email: `admin@cuin.com`, Pass: `password123`, or whatever you set in `.env`)
 *   **RedisInsight**: `http://<PUBLIC_HOST>:15540`
 
@@ -84,15 +84,14 @@ cd frontend
 npm install
 npm run dev
 ```
-*   **Dashboard**: [http://localhost:3001](http://localhost:3001) (redirects to `/dashboard`)
-    *   *Note: the dev server runs on port **3001**, not 3000 — see `frontend/package.json`.*
+*   **Dashboard**: [http://localhost:3000](http://localhost:3000) (redirects to `/dashboard`)
     *   Talks to the backend via `NEXT_PUBLIC_API_URL` (defaults to `http://localhost:8000`). Copy `frontend/.env.example` to `.env.local` if you need to point it elsewhere.
 
 ### Makefile shortcuts
 ```bash
 make install      # installs backend (venv) + frontend (npm) deps
 make docker-up    # starts Postgres, Neo4j, Redis, PgAdmin, RedisInsight
-make dev          # runs backend (uvicorn :8000) + frontend (next :3001) concurrently
+make dev          # runs backend (uvicorn :8000) + frontend (next :3000) concurrently
 ```
 Other targets: `make test`, `make lint`, `make format`, `make db-migrate`, `make docker-down`, `make clean`. Run `make help` to list them all.
 
@@ -106,9 +105,9 @@ docker-compose down      # or: make docker-down
 
 ## 🎮 How to Demo (The "Wow" Flow)
 1.  Go to **Upload** page. Drag & Drop a CSV (e.g., `challenging_er_200.csv`).
-2.  Go to **Pipeline** page ([http://localhost:3001/pipeline](http://localhost:3001/pipeline)).
+2.  Go to **Pipeline** page ([http://localhost:3000/pipeline](http://localhost:3000/pipeline)).
 3.  Click **"Start New Run"**. Watch the animations as it processes!
-4.  Go to **Graph** page ([http://localhost:3001/graph](http://localhost:3001/graph)).
+4.  Go to **Graph** page ([http://localhost:3000/graph](http://localhost:3000/graph)).
 5.  Click on any node to see the **"Bank Manager 360"** view (Risk Score, Balance, etc.).
 
 ---
@@ -124,7 +123,7 @@ docker-compose down      # or: make docker-down
 ## ⚠️ Troubleshooting
 
 ### Port already in use
-On a shared machine, another project may already be using one of this stack's ports (`5433`, `7474`, `7687`, `8000`, `3001`, etc.). If `docker-compose up` or a dev server fails with `port is already allocated` / `address already in use`:
+On a shared machine, another project may already be using one of this stack's ports (`5433`, `7474`, `7687`, `8000`, `3000`, `8110`, `30011`, etc.). If `docker-compose up` or a dev server fails with `port is already allocated` / `address already in use`:
 1.  Find the offending process/container: `ss -ltnp | grep :<port>` or `docker ps --format '{{.Names}}: {{.Ports}}'`.
 2.  Either stop it, or remap **only your local copy**: edit the host-side port in `docker-compose.yml` (e.g. `"5433:5432"` → `"5435:5432"`) and update `backend/.env`'s `DATABASE_URL`/`NEO4J_URI` (and `frontend/.env.local`'s `NEXT_PUBLIC_API_URL` if you also moved the backend port) to match.
 3.  Don't commit personal port remaps — keep them local.
