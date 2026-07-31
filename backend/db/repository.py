@@ -80,7 +80,7 @@ def upsert_customers(pg_conn, con: duckdb.DuckDBPyConnection, customer_codes: Li
                 dob_norm = EXCLUDED.dob_norm,
                 updated_at = NOW()
             RETURNING source_customer_id, customer_key
-        """, values, fetch=True)
+        """, values, fetch=True, page_size=5000)
         mapping = {row[0]: str(row[1]) for row in inserted}
     pg_conn.commit()
     return mapping
@@ -97,10 +97,16 @@ def persist_identifier_frequency(pg_conn, con: duckdb.DuckDBPyConnection, run_id
         return 0
 
     with pg_conn.cursor() as cur:
+        # bool(r[3]): DuckDB's connector returns a native Python bool
+        # for a BOOLEAN column, but pymysql (Doris) returns a plain int
+        # (0/1) -- psycopg2's execute_values infers that int's SQL type
+        # as `integer`, which Postgres's boolean column then rejects
+        # ("column is of type boolean but expression is of type
+        # integer"). Verified live against a real Doris-backed run.
         execute_values(cur, """
             INSERT INTO identifier_frequency (run_id, id_type, value_norm, n_records, is_suppressed)
             VALUES %s
-        """, [(run_id, r[0], r[1], r[2], r[3]) for r in rows])
+        """, [(run_id, r[0], r[1], r[2], bool(r[3])) for r in rows], page_size=5000)
     pg_conn.commit()
     return len(rows)
 
@@ -156,7 +162,7 @@ def persist_candidate_pairs_and_decisions(
             VALUES %s
             ON CONFLICT (run_id, a_key, b_key) DO NOTHING
             RETURNING pair_id, a_key, b_key
-        """, pair_rows, fetch=True)
+        """, pair_rows, fetch=True, page_size=5000)
         pair_id_map = {(str(r[1]), str(r[2])): r[0] for r in inserted}
 
         # Pairs already existing (ON CONFLICT DO NOTHING skipped them) still
@@ -181,7 +187,7 @@ def persist_candidate_pairs_and_decisions(
                 INSERT INTO match_scores (pair_id, run_id, score, evidence_json)
                 VALUES %s
                 ON CONFLICT (pair_id) DO NOTHING
-            """, score_values)
+            """, score_values, page_size=5000)
 
         decision_values = []
         for run_id_, a_uuid, b_uuid, decision_val, score_val, signals, conflicts, rv in decision_rows:
@@ -195,7 +201,7 @@ def persist_candidate_pairs_and_decisions(
                     (pair_id, run_id, decision, threshold_used, signals_hit, hard_conflict_flags, ruleset_version)
                 VALUES %s
                 ON CONFLICT (pair_id) DO NOTHING
-            """, decision_values)
+            """, decision_values, page_size=5000)
 
     pg_conn.commit()
     return len(pair_id_map), len(score_values), len(decision_values)
@@ -227,7 +233,55 @@ def persist_clusters(
             INSERT INTO clusters (cluster_id, customer_key, active_version, ruleset_version, cohesion_density)
             VALUES %s
             ON CONFLICT (cluster_id, customer_key, active_version) DO NOTHING
-        """, [(r[0], r[1], r[2], r[3], r[4]) for r in rows])
+        """, [(r[0], r[1], r[2], r[3], r[4]) for r in rows], page_size=5000)
+    pg_conn.commit()
+    return len(rows)
+
+
+def persist_entity_relationships(
+    pg_conn,
+    run_id: str,
+    code_to_uuid: Dict[str, str],
+    relationships: List[dict],
+) -> int:
+    """
+    Persists cross-segment connections (Stage 5 -- see
+    db/migrations/004_entity_relationships.sql and
+    engine.segments.relationships): a person and a company sharing a
+    phone/email/document/address, kept traceable but never merged into
+    one identity the way a same-segment AUTO_LINK/REVIEW pair would be.
+
+    `relationships`: [{"a_key","b_key","a_segment","b_segment","shared_evidence"}, ...]
+    with a_key/b_key as raw customer_code strings (mirrors the shape
+    pipeline orchestrators build in _stage_score_and_decide).
+    """
+    if not relationships:
+        return 0
+
+    rows = []
+    for rel in relationships:
+        a_uuid = code_to_uuid.get(rel["a_key"])
+        b_uuid = code_to_uuid.get(rel["b_key"])
+        if not a_uuid or not b_uuid:
+            continue
+        # entity_relationships' ordered_relationship_pair CHECK requires a_key < b_key.
+        if a_uuid < b_uuid:
+            a_uuid, b_uuid = a_uuid, b_uuid
+            a_seg, b_seg = rel["a_segment"], rel["b_segment"]
+        else:
+            a_uuid, b_uuid = b_uuid, a_uuid
+            a_seg, b_seg = rel["b_segment"], rel["a_segment"]
+        rows.append((run_id, a_uuid, b_uuid, a_seg, b_seg, Json(rel["shared_evidence"])))
+
+    if not rows:
+        return 0
+
+    with pg_conn.cursor() as cur:
+        execute_values(cur, """
+            INSERT INTO entity_relationships (run_id, a_key, b_key, a_segment, b_segment, shared_evidence)
+            VALUES %s
+            ON CONFLICT (run_id, a_key, b_key) DO NOTHING
+        """, rows, page_size=5000)
     pg_conn.commit()
     return len(rows)
 

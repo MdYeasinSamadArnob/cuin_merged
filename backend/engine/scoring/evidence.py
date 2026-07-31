@@ -33,9 +33,19 @@ def build_pair_evidence(con: duckdb.DuckDBPyConnection) -> None:
     # materialization, DuckDB has no cardinality estimate for the
     # aggregated relation and either re-evaluates it per reference or
     # picks a poor join order.
+    # values_/intersection/union are all list_sort()-ed to match
+    # evidence_dialect.py's array_sort() -- verified live (this session)
+    # that DuckDB's unsorted list_intersect/list_distinct is genuinely
+    # hash-ordered, not merely differently-but-deterministically ordered:
+    # array order leaks into engine.scoring.tiers.classify()'s signal
+    # strings (e.g. f"document:{doc['intersection'][0]}"), which
+    # engine.determinism.fingerprint_edges hashes -- so an unsorted vs
+    # sorted mismatch here silently produces a DIFFERENT
+    # output_fingerprint between the DuckDB and Doris pipelines despite
+    # identical decisions. See tests/unit/test_evidence_dialect_parity.py.
     con.execute("""
         CREATE OR REPLACE TABLE _agg_identifiers AS
-        SELECT customer_code, id_type, doc_type, list(DISTINCT value_norm) AS values_
+        SELECT customer_code, id_type, doc_type, list_sort(list(DISTINCT value_norm)) AS values_
         FROM identifiers
         WHERE is_valid AND NOT is_suppressed
         GROUP BY customer_code, id_type, doc_type
@@ -50,7 +60,7 @@ def build_pair_evidence(con: duckdb.DuckDBPyConnection) -> None:
             a.doc_type,
             a.values_ AS values_a,
             b.values_ AS values_b,
-            list_intersect(a.values_, b.values_) AS intersection
+            list_sort(list_intersect(a.values_, b.values_)) AS intersection
         FROM candidate_pairs p
         JOIN _agg_identifiers a ON a.customer_code = p.a_key
         JOIN _agg_identifiers b ON b.customer_code = p.b_key AND b.id_type = a.id_type
@@ -66,7 +76,14 @@ def build_pair_evidence(con: duckdb.DuckDBPyConnection) -> None:
             sb.name_norm AS name_b,
             sa.name_tokens AS tokens_a,
             sb.name_tokens AS tokens_b,
-            list_intersect(sa.name_tokens, sb.name_tokens) AS token_intersection,
+            list_sort(list_intersect(sa.name_tokens, sb.name_tokens)) AS token_intersection,
+            -- NOT sorted, matching evidence_dialect.py's dialect.array_union_distinct()
+            -- (dedup only, no sort, on both engines) -- token_union's order affects
+            -- neither a signal string (only token_intersection is embedded in one,
+            -- see tiers.py:84) nor any decision logic (only array_size(token_union)
+            -- is read, for the jaccard denominator), so canonicalizing it would be
+            -- pure churn. Sorting it here would in fact BREAK parity with
+            -- evidence_dialect.py, which deliberately leaves it unsorted.
             list_distinct(list_concat(sa.name_tokens, sb.name_tokens)) AS token_union,
             sa.dob_iso AS dob_a,
             sb.dob_iso AS dob_b,

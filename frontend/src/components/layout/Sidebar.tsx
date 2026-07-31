@@ -17,6 +17,7 @@ import {
     Sun,
     Moon,
     Database,
+    SlidersHorizontal,
 } from "lucide-react";
 import { useState } from "react";
 import { clsx } from "clsx";
@@ -35,6 +36,7 @@ const navigation = [
 
 const secondaryNavigation = [
     { name: "Settings", href: "/settings", icon: Settings },
+    { name: "Rules", href: "/settings/rules", icon: SlidersHorizontal },
 ];
 
 export default function Sidebar() {

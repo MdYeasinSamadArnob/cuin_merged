@@ -10,43 +10,52 @@ The entire stack — Postgres, Neo4j, Redis, the backend API, and the frontend d
 ### 1. Prerequisites
 **Docker** and **Docker Compose**. That's it — no local Python/Node install needed.
 
-### 2. Configure (first time only)
+### 2. One-time host setup for Apache Doris
+The stack includes **Apache Doris** as a second, MPP execution engine (selectable per run alongside the default DuckDB engine — see the engine picker on the Datasource page). Doris's storage node refuses to start unless the **host** kernel allows enough memory-mapped areas — this is a real Linux kernel setting, not something Docker Compose can set on your behalf:
+```bash
+echo 'vm.max_map_count=2000000' | sudo tee /etc/sysctl.d/99-doris.conf
+sudo sysctl --system
+```
+Do this once per host, before the first `docker compose up`. If you skip it, every other service comes up fine and only the `doris` container will crash-loop — `docker compose logs doris` will show the exact kernel-parameter error if you forget.
+
+### 3. Configure (first time only)
 ```bash
 cp infra/.env.example infra/.env
 ```
 Open `infra/.env` and set:
 *   `PUBLIC_HOST` — the address you'll type into your **browser** to reach the app (e.g. `localhost`, or this machine's LAN IP if you're accessing it from another device). This gets baked into the frontend at build time — see the comment in the file.
 *   `BACKEND_UID` / `BACKEND_GID` — set to your host user's `id -u` / `id -g` if you hit `Permission denied` errors on the backend writing to `backend/data/` (a bind-mount ownership mismatch, not a bug in the app).
-*   Ports, if any of the defaults (`8110`, `30011`, `5436`, `7476`, `7689`, `6381`, `18080`, `15540`) are already taken on your machine.
+*   Ports, if any of the defaults (`8110`, `30011`, `5436`, `7476`, `7689`, `6381`, `18080`, `15540`, `8130`, `9130`, `8040`, `9050`) are already taken on your machine.
 
-### 3. Up
+### 4. Up
 ```bash
 cd infra
 docker compose up --build -d
 ```
-First build takes a few minutes (installing backend/frontend dependencies); subsequent runs reuse the Docker layer cache and start in seconds. Watch progress with `docker compose logs -f`.
+First build takes a few minutes (installing backend/frontend dependencies, and Doris's FE+BE cold start is slow — give it ~90s before it reports healthy); subsequent runs reuse the Docker layer cache and start in seconds. Watch progress with `docker compose logs -f`.
 
 *   **Dashboard**: `http://<PUBLIC_HOST>:30011`
 *   **API Docs**: `http://<PUBLIC_HOST>:8110/docs`
 *   **Health Check**: `http://<PUBLIC_HOST>:8110/health/ready`
 *   **PgAdmin**: `http://<PUBLIC_HOST>:18080` (Email: `admin@cuin.com`, Pass: `password123`, or whatever you set in `.env`)
 *   **RedisInsight**: `http://<PUBLIC_HOST>:15540`
+*   **Doris** (MySQL protocol, for direct SQL access): `mysql -h <PUBLIC_HOST> -P 9130 -uroot`
 
 Check everything came up healthy:
 ```bash
 docker compose ps
 ```
 
-### 4. Down
+### 5. Down
 ```bash
 cd infra
 docker compose down
 ```
-This stops and removes the containers but **keeps your data** — Postgres, Neo4j, and pipeline run artifacts live in bind-mounted host folders (`../data/`, `../backend/data/`), not inside the containers, so nothing is lost. Run `docker compose up -d` again later and you're back where you left off.
+This stops and removes the containers but **keeps your data** — Postgres, Neo4j, and pipeline run artifacts live in bind-mounted host folders (`../data/`, `../backend/data/`), and Doris's data lives in named Docker volumes (`doris_fe_meta`, `doris_be_storage`) — neither is inside a container that gets deleted, so nothing is lost. Run `docker compose up -d` again later and you're back where you left off.
 
 To also wipe the data volumes (start completely fresh):
 ```bash
-docker compose down
+docker compose down -v   # -v also removes Doris's named volumes
 rm -rf ../data/postgres ../data/neo4j ../backend/data/runs
 ```
 
@@ -66,6 +75,8 @@ Useful for fast iteration on backend/frontend code without rebuilding containers
 docker-compose up -d --build
 ```
 This starts Postgres (`5433`), Neo4j (`7474`), Redis (`6380`), PgAdmin (`18080`), and RedisInsight (`15540`) from the **root** `docker-compose.yml` (infra services only — no backend/frontend containers).
+
+This root compose file does **not** include Doris (the DuckDB engine needs nothing extra and is the default). To also test the Doris engine locally, either run the full `infra/docker-compose.yml` stack instead (step 2 above — do the `vm.max_map_count` host setup first), or start just the `doris` service from it: `cd infra && docker compose up -d doris`.
 
 ### 2. Run the backend
 ```bash
@@ -121,6 +132,14 @@ docker-compose down      # or: make docker-down
 ---
 
 ## ⚠️ Troubleshooting
+
+### Doris container keeps restarting / never reports healthy
+Almost always the host kernel setting from step 2 above. Check:
+```bash
+cat /proc/sys/vm/max_map_count   # must be >= 2000000
+docker compose logs doris | tail -30
+```
+If the log mentions `vm.max_map_count`, set it (see step 2) and `docker compose restart doris`. Don't have sudo on this host? Runs against DuckDB (the default engine) work fully without Doris — it's an optional second engine, not a hard dependency.
 
 ### Port already in use
 On a shared machine, another project may already be using one of this stack's ports (`5433`, `7474`, `7687`, `8000`, `3000`, `8110`, `30011`, etc.). If `docker-compose up` or a dev server fails with `port is already allocated` / `address already in use`:

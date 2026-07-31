@@ -4,7 +4,6 @@ Handles projection of Identity Graph to Neo4j.
 """
 
 import logging
-import os
 from typing import List, Dict, Any
 from neo4j import GraphDatabase
 
@@ -12,10 +11,21 @@ logger = logging.getLogger(__name__)
 
 class Neo4jWriter:
     def __init__(self, uri: str = None, auth: tuple = None):
-        self.uri = uri or os.getenv("NEO4J_URI", "bolt://localhost:7687")
-        user = os.getenv("NEO4J_USER", "neo4j")
-        password = os.getenv("NEO4J_PASSWORD", "password123")
-        self.auth = auth or (user, password)
+        # api.config.settings loads .env into a pydantic Settings object --
+        # it does NOT export those values into os.environ, so os.getenv()
+        # here always missed .env's NEO4J_URI and silently fell back to
+        # the bare bolt://localhost:7687 default. On this host that port
+        # happens to be a DIFFERENT project's Neo4j container (not CUIN's,
+        # which is remapped to 7689 -- see docker-compose/.env), so every
+        # write failed authentication against a database with no relation
+        # to CUIN at all. Settings is the single source of truth these
+        # values should come from.
+        if uri is None or auth is None:
+            from api.config import settings
+            uri = uri or settings.NEO4J_URI
+            auth = auth or (settings.NEO4J_USER, settings.NEO4J_PASSWORD)
+        self.uri = uri
+        self.auth = auth
         self.driver = None
         self.enabled = False 
 

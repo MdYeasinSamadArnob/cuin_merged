@@ -46,6 +46,7 @@ class PipelineStage(str, Enum):
     DECIDE = "decide"
     EXPLAIN = "explain"
     CLUSTER = "cluster"
+    PERSIST = "persist"
     COMPLETE = "complete"
     FAILED = "failed"
 

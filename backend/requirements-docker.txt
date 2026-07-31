@@ -41,6 +41,7 @@ packaging==26.0
 pandas==2.3.3
 pyarrow==23.0.1
 psycopg2-binary==2.9.11
+PyMySQL==1.1.2
 pycparser==3.0
 pydantic==2.12.5
 pydantic-settings==2.13.1

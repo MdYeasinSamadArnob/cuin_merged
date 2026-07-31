@@ -85,7 +85,69 @@ services:
     restart: unless-stopped
 
   # ------------------------------------------------------------
-  # Backend API — FastAPI + DuckDB entity-resolution pipeline
+  # Apache Doris -- alternate MPP execution engine (see
+  # pipeline.doris_orchestrator). All-in-one image (FE+BE in one
+  # container) for single-node / low-resource deployments; a real
+  # multi-BE cluster would split these into separate services.
+  #
+  # HOST PREREQUISITE (cannot be set from inside a container or via
+  # Compose's `sysctls:` -- vm.max_map_count is not a namespaced kernel
+  # param): the BE refuses to start unless the HOST's
+  # vm.max_map_count >= 2000000. Set it once, persistently, via
+  #   echo 'vm.max_map_count=2000000' | sudo tee /etc/sysctl.d/99-doris.conf
+  #   sudo sysctl --system
+  # before bringing this service up. See docs/doris_compatibility.md.
+  # ------------------------------------------------------------
+  doris:
+    image: apache/doris:4.0.3-all-slim
+    container_name: cuin-doris
+    # The image's entrypoint backgrounds FE/BE then `exec`s CMD; with no
+    # CMD it exits immediately despite FE/BE still running. Keep PID 1
+    # alive so `restart: unless-stopped` actually means something.
+    command: [ "tail", "-f", "/dev/null" ]
+    ports:
+      - "${DORIS_FE_HTTP_PORT:-8130}:8030" # FE HTTP (Stream Load entry point)
+      - "${DORIS_FE_MYSQL_PORT:-9130}:9030" # FE MySQL protocol
+      # BE HTTP must be reachable directly from the client: Stream Load
+      # PUTs to the FE, which 307-redirects to the target BE's own HTTP
+      # port to actually receive the data.
+      - "${DORIS_BE_HTTP_PORT:-8040}:8040"
+      - "${DORIS_BE_HEARTBEAT_PORT:-9050}:9050"
+    environment:
+      # This sandbox's host has swap enabled and can't disable it; Doris
+      # BE otherwise refuses to start ("Disable swap memory before
+      # starting be"). Skip in a deployment that can guarantee no swap.
+      - SKIP_CHECK_ULIMIT=true
+    volumes:
+      # Named volumes (not bind mounts) -- durability across container
+      # recreation is the whole point of this block; `docker inspect`
+      # showed `Mounts: []` on the ad-hoc `docker run` container this
+      # replaces, meaning all data died with the container.
+      - doris_fe_meta:/opt/apache-doris/fe/doris-meta
+      - doris_be_storage:/opt/apache-doris/be/storage
+      - doris_fe_log:/opt/apache-doris/fe/log
+      - doris_be_log:/opt/apache-doris/be/log
+      # Lakehouse reads: the LOCAL() table-value function resolves
+      # `file_path` relative to the BE process's OWN working directory
+      # (verified live against Doris 4.0.3 -- a leading '/' does NOT
+      # mean the container filesystem root), so these must be mounted
+      # under /opt/apache-doris/be/, at the SAME relative subpath names
+      # the backend service uses from ITS working directory (/app) --
+      # that symmetry is what lets both engines address the same file
+      # with the same relative path string. Read-only: Doris only ever
+      # reads the lake via LOCAL(); DuckDB is what writes it.
+      - ../backend/data_source:/opt/apache-doris/be/data_source:ro
+      - ../backend/data:/opt/apache-doris/be/data:ro
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sf http://localhost:8030/api/health || exit 1" ]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 90s # FE+BE cold start is slow -- don't flap unhealthy during boot
+    restart: unless-stopped
+
+  # ------------------------------------------------------------
+  # Backend API — FastAPI + DuckDB/Doris entity-resolution pipeline
   # ------------------------------------------------------------
   backend:
     build:
@@ -111,6 +173,12 @@ services:
       - DUCKDB_MEMORY_LIMIT=${DUCKDB_MEMORY_LIMIT:-4GB}
       - DUCKDB_THREADS=${DUCKDB_THREADS:-4}
       - PERSIST_TO_POSTGRES=true
+      - DORIS_HOST=doris
+      - DORIS_MYSQL_PORT=9030
+      - DORIS_HTTP_PORT=8030
+      - DORIS_USER=${DORIS_USER:-root}
+      - DORIS_PASSWORD=${DORIS_PASSWORD:-}
+      - LAKE_ROOT=${LAKE_ROOT:-/app/data/lake}
     volumes:
       # Runtime state (run artifacts, review queue) and the source
       # dataset are bind-mounted, not baked into the image, so they
@@ -125,6 +193,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      doris:
+        condition: service_started # not service_healthy -- Doris is optional; DuckDB path must work without it
     restart: unless-stopped
 
   # ------------------------------------------------------------
@@ -176,3 +246,13 @@ services:
     depends_on:
       - redis
     restart: unless-stopped
+
+volumes:
+  # Named volumes -- managed by Docker, survive `docker compose down`
+  # (though not `docker compose down -v`). This is what makes Doris
+  # data durable across container recreation; see the `doris` service
+  # comment above for the incident this fixes.
+  doris_fe_meta:
+  doris_be_storage:
+  doris_fe_log:
+  doris_be_log:

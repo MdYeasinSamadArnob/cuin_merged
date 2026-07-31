@@ -6,7 +6,17 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws';
+// Same reasoning as src/lib/api.ts's resolveApiBaseUrl -- "localhost"
+// only reaches the backend when the browser IS the backend's machine.
+// Derive from wherever the page was actually loaded from instead.
+function resolveWsUrl(): string {
+    if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
+    if (typeof window !== 'undefined') {
+        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        return `${proto}//${window.location.hostname}:8000/ws`;
+    }
+    return 'ws://localhost:8000/ws';
+}
 
 interface WebSocketMessage {
     type: string;
@@ -29,7 +39,7 @@ export function useWebSocket(): WebSocketHook {
 
     const connect = useCallback(() => {
         try {
-            const ws = new WebSocket(WS_URL);
+            const ws = new WebSocket(resolveWsUrl());
 
             ws.onopen = () => {
                 console.log('WebSocket connected');

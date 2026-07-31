@@ -23,6 +23,7 @@ class ResetResponse(BaseModel):
     message: str
     deleted_files: int
     deleted_runs: int
+    deleted_doris_dbs: int = 0
 
 
 @router.post("/reset", response_model=ResetResponse)
@@ -62,6 +63,69 @@ async def reset_all_data():
             with open(runs_index_path, 'w') as f:
                 json.dump([], f)
             logger.info("Cleared runs_index.json")
+
+        # 2b. Clear the review-queue pair index (per-run queue/update
+        # files themselves already went in step 1, since they live
+        # under data/runs/ too) and reset the in-memory review service
+        # singleton so a live process doesn't keep serving stale
+        # pair->run lookups for runs that no longer exist on disk.
+        try:
+            review_index_path = Path("data/review_pair_index.json")
+            if review_index_path.exists():
+                with open(review_index_path, 'w') as f:
+                    json.dump({}, f)
+                logger.info("Cleared review_pair_index.json")
+
+            from services.review_service import get_review_service
+            review_service = get_review_service()
+            review_service._items.clear()
+            review_service._by_pair.clear()
+            review_service._loaded_runs.clear()
+            review_service._pair_index.clear()
+            logger.info("Reset in-memory review service state")
+        except Exception as e:
+            logger.warning(f"Failed to reset review service state: {e}")
+
+        # 2c. Clear the Parquet lake (engine.lake / LAKE_ROOT) -- both
+        # engines read this in place, so leftover lake data from a
+        # deleted run would otherwise keep being queryable after reset.
+        try:
+            from api.config import settings
+            lake_root = Path(settings.LAKE_ROOT)
+            if lake_root.exists():
+                shutil.rmtree(lake_root)
+                logger.info(f"Cleared lake root: {lake_root}")
+        except Exception as e:
+            logger.warning(f"Failed to clear lake root: {e}")
+
+        # 2d. Drop every per-run Doris database (cuin_run_*). Without
+        # this, `data/runs/*.duckdb` files disappearing in step 1 has
+        # no Doris-side equivalent -- run databases accumulate in Doris
+        # forever across resets, which is exactly the durability/
+        # cleanup gap the lakehouse migration plan flagged (Doris data
+        # now survives container restarts via named volumes, so it
+        # doesn't disappear on its own the way an ephemeral container's
+        # data used to).
+        deleted_doris_dbs = 0
+        try:
+            import pymysql
+            from api.config import settings
+
+            admin = pymysql.connect(
+                host=settings.DORIS_HOST, port=settings.DORIS_MYSQL_PORT,
+                user=settings.DORIS_USER, password=settings.DORIS_PASSWORD,
+                autocommit=True, connect_timeout=5,
+            )
+            with admin.cursor() as cur:
+                cur.execute("SHOW DATABASES LIKE 'cuin\\_run\\_%'")
+                db_names = [row[0] for row in cur.fetchall()]
+                for db_name in db_names:
+                    cur.execute(f"DROP DATABASE IF EXISTS {db_name}")
+                    deleted_doris_dbs += 1
+                    logger.info(f"Dropped Doris database: {db_name}")
+            admin.close()
+        except Exception as e:
+            logger.warning(f"Failed to drop Doris run databases (Doris may not be running): {e}")
         
         # 3. Clear database tables
         try:
@@ -145,13 +209,17 @@ async def reset_all_data():
         except Exception as e:
             logger.warning(f"Failed to reset in-memory state: {e}")
         
-        logger.info(f"✅ Reset complete: {deleted_files} files deleted, {deleted_runs} runs cleared")
-        
+        logger.info(
+            f"✅ Reset complete: {deleted_files} files deleted, {deleted_runs} runs cleared, "
+            f"{deleted_doris_dbs} Doris databases dropped"
+        )
+
         return ResetResponse(
             success=True,
             message="All data has been successfully reset",
             deleted_files=deleted_files,
-            deleted_runs=deleted_runs
+            deleted_runs=deleted_runs,
+            deleted_doris_dbs=deleted_doris_dbs,
         )
         
     except Exception as e:

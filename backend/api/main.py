@@ -26,16 +26,20 @@ from api.routes_runs import router as runs_router
 
 # Trigger reload
 from api.routes_upload import router as upload_router
-from api.ws_events import ConnectionManager
+# Import the module-level singleton, not the class -- api/routes_datasource.py
+# and api/routes_runs.py import this SAME `ws_manager` from api.ws_events to
+# broadcast progress. A previous version of this file instantiated its own
+# `ConnectionManager()` here, so the /ws endpoint below registered clients on
+# one instance while every broadcast went to a different, client-less one --
+# live pipeline progress silently never reached the browser (API polling
+# happened to mask it). Do not re-introduce a second instance.
+from api.ws_events import ws_manager
 from services.run_service import get_run_service
 
 # Configure logging
 # Setup logging
 logging.basicConfig(level=settings.LOG_LEVEL)
 logger = logging.getLogger("cuin-api")
-
-# WebSocket connection manager (singleton)
-ws_manager = ConnectionManager()
 
 
 @asynccontextmanager
@@ -234,6 +238,15 @@ app.include_router(admin_router, prefix="/admin", tags=["Admin"])
 
 from api.routes_datasource import router as datasource_router
 app.include_router(datasource_router, prefix="/datasource", tags=["Datasource"])
+
+from api.routes_rules import router as rules_router
+app.include_router(rules_router, prefix="/rules", tags=["Rules"])
+
+from api.routes_search import router as search_router
+app.include_router(search_router, prefix="/search", tags=["Search"])
+
+from api.routes_schema import router as schema_router
+app.include_router(schema_router, prefix="/datasource/schema", tags=["Schema"])
 
 
 # ============================================

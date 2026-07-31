@@ -64,6 +64,23 @@ class Settings(BaseSettings):
     PERSIST_TO_POSTGRES: bool = True
     
     # ----------------------------------------
+    # Doris (alternate ER execution engine -- see pipeline.doris_orchestrator)
+    # ----------------------------------------
+    DORIS_HOST: str = "127.0.0.1"
+    DORIS_MYSQL_PORT: int = 9130
+    DORIS_HTTP_PORT: int = 8130
+    DORIS_USER: str = "root"
+    DORIS_PASSWORD: str = ""
+
+    # ----------------------------------------
+    # Lakehouse storage (engine.lake) -- local filesystem path now, an
+    # S3/HDFS URI for multi-BE deployments later. Both DuckDB
+    # (read_parquet) and Doris (LOCAL()/S3() TVF) read the same files
+    # from here so bulk data is stored once, not once per engine.
+    # ----------------------------------------
+    LAKE_ROOT: str = "./data/lake"
+
+    # ----------------------------------------
     # Neo4j
     # ----------------------------------------
     NEO4J_URI: str = "bolt://localhost:7687"

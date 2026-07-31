@@ -1,65 +1,48 @@
 """
-CUIN v2 - Decision Engine (Ruleset v2)
+CUIN v2 - Decision Engine (Stage 2: confidence-based)
 
-Logic for making resolutions based on match scores. Delegates to
-engine.scoring.tiers so both the DuckDB pipeline (which builds a
-TierResult directly) and any caller holding only a MatchScore (the
-wire-format type routes_matches.py serializes) use the identical
-auto-link/review/reject rule -- one source of truth, not a numeric
-threshold that has drifted from the tier logic.
+Re-derives a MatchDecision from a MatchScore for callers that only
+have the wire-format MatchScore (routes_graph.py's preview paths), not
+the raw evidence dict engine.scoring.confidence.score_pair() consumes.
 
-MatchScore.signals_hit encodes tier membership by string prefix
-(see engine.scoring.tiers.classify): "mobile:"/"email:"/"document:"
-count as STRONG signals; "name_rare_token_jaccard_1.0:" is MEDIUM
-name; "dob_full_exact:" is MEDIUM dob. MatchScore.hard_conflicts
-non-empty is an absolute VETO, exactly as in tiers.decide().
+Previously reconstructed a TierResult by STRING-PREFIX-PARSING
+MatchScore.signals_hit ("mobile:", "document:",
+"name_rare_token_jaccard_1.0:", ...) -- brittle by construction, since
+any change to those strings would silently degrade every reconstructed
+decision. Since engine.pipeline orchestrators now set
+MatchScore.score directly to the pair's confidence_pct/100 (Stage 2),
+this can compare that value against the active MatchRuleset's
+thresholds directly -- no string parsing, and it stays correct even
+if a banker changes per-field confidence weights (a signal-prefix
+reconstruction could never have accounted for that: it only ever knew
+"this signal fired", not "how many points it was worth").
 """
 
 from typing import Optional
 from engine.structures import MatchScore, MatchDecision, ScoringConfig
-from engine.scoring.tiers import TierResult, decide as tiers_decide
-from engine.ruleset.config import RulesetConfig, get_default_ruleset
-
-_STRONG_PREFIXES = ("mobile:", "email:", "document:")
+from engine.rules.match_rules import MatchRuleset, DEFAULT_MATCH_RULESET
 
 
 class DecisionEngine:
     """
-    Evaluates match scores to determine the resolution action.
-
     `config` (ScoringConfig) is kept alive only because api/routes_config.py
     binds its attribute names directly; it is no longer consulted for
-    thresholds. Ruleset behavior comes from policies/ruleset_v2.yaml via
-    RulesetConfig -- pass one explicitly to pin a specific ruleset version.
+    thresholds. `match_ruleset` supplies the active confidence
+    thresholds -- pass the run's own (engine.rules.store.get_active_catalog()
+    .match_ruleset) to pin a specific version; defaults to the seed.
     """
 
-    def __init__(self, config: Optional[ScoringConfig] = None, ruleset: Optional[RulesetConfig] = None):
+    def __init__(self, config: Optional[ScoringConfig] = None, match_ruleset: Optional[MatchRuleset] = None):
         self.config = config or ScoringConfig()
-        self.ruleset = ruleset or get_default_ruleset()
+        self.match_ruleset = match_ruleset or DEFAULT_MATCH_RULESET
 
-    def make_decision(
-        self,
-        match_score: MatchScore
-    ) -> MatchDecision:
-        """
-        Reconstructs a TierResult from MatchScore.signals_hit/hard_conflicts
-        and applies the exact same rule as engine.scoring.tiers.decide().
-        """
-        strong_count = sum(
-            1 for s in match_score.signals_hit if s.startswith(_STRONG_PREFIXES)
-        )
-        medium_name = any(
-            s.startswith("name_rare_token_jaccard_1.0:") for s in match_score.signals_hit
-        )
-        medium_dob = any(
-            s.startswith("dob_full_exact:") for s in match_score.signals_hit
-        )
+    def make_decision(self, match_score: MatchScore) -> MatchDecision:
+        if match_score.hard_conflicts:
+            return MatchDecision.REJECT
 
-        tier = TierResult(
-            strong_count=strong_count,
-            medium_name=medium_name,
-            medium_dob=medium_dob,
-            vetoes=list(match_score.hard_conflicts),
-            signals_hit=list(match_score.signals_hit),
-        )
-        return tiers_decide(tier, self.ruleset)
+        confidence_pct = match_score.score * 100.0
+        if confidence_pct >= self.match_ruleset.auto_link_min_confidence:
+            return MatchDecision.AUTO_LINK
+        if confidence_pct >= self.match_ruleset.review_min_confidence:
+            return MatchDecision.REVIEW
+        return MatchDecision.REJECT

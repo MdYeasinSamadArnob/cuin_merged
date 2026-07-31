@@ -10,7 +10,16 @@ router = APIRouter()
 
 class DatasourceStartRequest(BaseModel):
     mode: str = "FULL"
-    # "duckdb" is the deterministic Ruleset v2 engine and the default.
+    # "duckdb" is the deterministic Ruleset v2 engine and the default --
+    # zero-ops, in-process, used by every dev/CI environment.
+    # "doris" runs the SAME ruleset (engine.rules.* compiled through
+    # engine.ports.doris_dialect) against a Doris cluster instead --
+    # proven pair-for-pair identical to the duckdb engine on the same
+    # input (tests/integration/test_doris_cross_engine_parity.py).
+    # Requires DORIS_HOST/DORIS_MYSQL_PORT/DORIS_HTTP_PORT reachable
+    # (see api/config.py) -- the import is lazy so a deployment without
+    # a Doris cluster configured never pays for pymysql/httpx unless
+    # this engine is actually requested.
     # "spark" is kept available for comparison/rollback but is no longer
     # the default -- it retrains Splink's m/u probabilities on every run
     # with no fixed seed, so identical input can produce different
@@ -33,7 +42,8 @@ async def start_datasource_demo(
         run = run_service.create_run(
             mode=request.mode,
             description=f"Datasource Demo ({request.engine})",
-            policy_version=1
+            policy_version=1,
+            engine=request.engine,
         )
 
         async def execute_pipeline():
@@ -51,6 +61,8 @@ async def start_datasource_demo(
                             cc = (progress.data or {}).get('cluster_stats', {}).get('clusters_created', 0)
                             if cc:
                                 live_run.counters.clusters_created = cc
+                        if progress.status == 'complete' and progress.duration_ms:
+                            live_run.stage_timings_ms[progress.stage.value] = progress.duration_ms
                         run_service._save_runs()
 
                     await ws_manager.broadcast_stage_progress(
@@ -67,6 +79,13 @@ async def start_datasource_demo(
 
                 if request.engine == "duckdb":
                     orchestrator_cls = DuckDBPipelineOrchestrator
+                elif request.engine == "doris":
+                    # Imported lazily -- pymysql/httpx are lightweight and
+                    # always installed, but constructing the class touches
+                    # api.config.settings' DORIS_* fields, which only
+                    # matter once this engine is actually selected.
+                    from pipeline.doris_orchestrator import DorisPipelineOrchestrator
+                    orchestrator_cls = DorisPipelineOrchestrator
                 else:
                     # Imported lazily, not at module load time: pyspark/
                     # splink are excluded from the Docker image's dependency

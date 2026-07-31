@@ -71,6 +71,14 @@ class Run:
     current_stage: Optional[str] = None
     ruleset_version: Optional[str] = None
     output_fingerprint: Optional[str] = None
+    engine: str = "duckdb"
+    # Wall-clock ms spent in each completed stage, keyed by
+    # PipelineStage.value (e.g. "ingest", "persist"). Populated from
+    # StageProgress.duration_ms as "complete" events arrive -- makes the
+    # time spent in _persist_run_artifacts/_persist_to_postgres visible
+    # instead of disappearing into the gap between the last stage event
+    # and COMPLETE.
+    stage_timings_ms: Dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for API response."""
@@ -88,6 +96,8 @@ class Run:
             'duration_seconds': self.duration_seconds,
             'error_message': self.error_message,
             'current_stage': self.current_stage,
+            'engine': self.engine,
+            'stage_timings_ms': self.stage_timings_ms,
         }
 
 
@@ -170,11 +180,12 @@ class RunService:
         self,
         mode: str = "FULL",
         description: str = "",
-        policy_version: int = 1
+        policy_version: int = 1,
+        engine: str = "duckdb",
     ) -> Run:
         """Create a new pipeline run."""
         run_id = str(uuid4())
-        
+
         run = Run(
             run_id=run_id,
             mode=RunMode(mode),
@@ -183,6 +194,7 @@ class RunService:
             description=description,
             counters=RunCounters(),
             started_at=datetime.utcnow(),
+            engine=engine,
         )
         
         self._runs[run_id] = run

@@ -20,6 +20,7 @@ const AGENTS = {
     score: { name: 'Similarity Scoring', role: 'Evaluation', icon: Activity, color: 'text-pink-600 dark:text-pink-400', message: 'Calculating match confidence...' },
     decide: { name: 'Decision Engine', role: 'Classification', icon: Shield, color: 'text-emerald-600 dark:text-emerald-400', message: 'Applying matching rules...' },
     cluster: { name: 'Entity Resolution', role: 'Consolidation', icon: Network, color: 'text-purple-600 dark:text-purple-400', message: 'Creating unified customer records...' },
+    persist: { name: 'Persistence', role: 'Storage', icon: Database, color: 'text-orange-600 dark:text-orange-400', message: 'Writing run artifacts and results...' },
     complete: { name: 'System', role: 'Complete', icon: CheckCircle, color: 'text-green-600 dark:text-green-500', message: 'Processing complete.' }
 };
 
@@ -55,7 +56,7 @@ export default function RunDetailsPage() {
     const logsEndRef = useRef<HTMLDivElement>(null);
 
     // Ordered stages for the pipeline view
-    const pipelineStages = ['ingest', 'normalize', 'block', 'candidates', 'score', 'decide', 'cluster', 'complete'];
+    const pipelineStages = ['ingest', 'normalize', 'block', 'candidates', 'score', 'decide', 'cluster', 'persist', 'complete'];
     const activeStageIndex = pipelineStages.indexOf(visualStage);
     // Initial Fetch & Cinematic Start
     useEffect(() => {
@@ -127,31 +128,36 @@ export default function RunDetailsPage() {
         return () => clearInterval(interval);
     }, [runId, isReplaying]);
 
-    // Playback Effect
+    // Playback Effect (opt-in only, via the "Replay Full Sequence" button).
+    // Deliberately depends on ONLY `isReplaying`, not `run` -- `run` is an
+    // object that gets a new reference from unrelated state updates (e.g.
+    // WS-driven counter syncs), and including it here restarted this
+    // interval from currentIndex=0 every time, before it could ever reach
+    // the end. That's what made replay look "stuck" cycling one stage
+    // forever instead of playing through once and stopping.
     useEffect(() => {
-        if (isReplaying && run) {
-            let currentIndex = 0;
-            const interval = setInterval(() => {
-                if (currentIndex >= pipelineStages.length) {
-                    setIsReplaying(false);
-                    clearInterval(interval);
-                    return;
-                }
-                const stage = pipelineStages[currentIndex];
-                setVisualStage(stage);
-                setSelectedStep(stage); // Auto-select the active step during replay
+        if (!isReplaying) return;
+        let currentIndex = 0;
+        const interval = setInterval(() => {
+            if (currentIndex >= pipelineStages.length) {
+                setIsReplaying(false);
+                clearInterval(interval);
+                return;
+            }
+            const stage = pipelineStages[currentIndex];
+            setVisualStage(stage);
+            setSelectedStep(stage); // Auto-select the active step during replay
 
-                // Add fake log for the replay experience
-                const agent = AGENTS[stage as keyof typeof AGENTS];
-                if (agent) {
-                    addLog(agent.name, agent.message, 'info', stage);
-                }
+            // Add fake log for the replay experience
+            const agent = AGENTS[stage as keyof typeof AGENTS];
+            if (agent) {
+                addLog(agent.name, agent.message, 'info', stage);
+            }
 
-                currentIndex++;
-            }, 1500); // Slower: 1.5s per stage
-            return () => clearInterval(interval);
-        }
-    }, [isReplaying, run]);
+            currentIndex++;
+        }, 1500); // Slower: 1.5s per stage
+        return () => clearInterval(interval);
+    }, [isReplaying]);
 
     // WebSocket Handling (Live updates)
     useEffect(() => {
@@ -296,8 +302,14 @@ export default function RunDetailsPage() {
                 setClustersCreated(data.counters.clusters_created);
             }
 
-            if (data.status === 'COMPLETED' && !isReplaying) {
-                setIsReplaying(true);
+            // Show the run's real final/current state immediately -- no
+            // auto-triggered cinematic replay. "Replay Full Sequence" below
+            // remains available as an explicit, opt-in recap the user can
+            // click, but opening a completed run should show what actually
+            // happened, not a decorative animation standing in front of it.
+            if (data.status === 'COMPLETED') {
+                setActiveStage('complete');
+                setVisualStage('complete');
             } else if (data.current_stage) {
                 setActiveStage(data.current_stage);
                 setVisualStage(data.current_stage);

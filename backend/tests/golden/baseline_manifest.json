@@ -1,0 +1,15 @@
+{
+  "captured_from_run_id": "f926c7c2-7e0b-4e39-8182-d13febfa7154",
+  "captured_from_engine": "duckdb",
+  "captured_at": "2026-07-31T08:22:51.946190+00:00",
+  "note": "Stage 0: canonical fingerprint after sorting evidence.py's arrays to match evidence_dialect.py -- first cross-engine-equal baseline",
+  "counts": {
+    "candidate_pairs": 549879,
+    "auto_link": 80809,
+    "review": 190182,
+    "reject": 278888,
+    "clusters": 53910
+  },
+  "output_fingerprint": "5e79284a16943e17fe0c6152309ece19b8ea9571407b072ae32a435e77ae9f1b",
+  "ruleset_version": "er-2026.07.1"
+}

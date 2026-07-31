@@ -67,8 +67,16 @@ async def get_config() -> dict:
     }
 
 @router.post("", response_model=ConfigResponse)
+@router.put("", response_model=ConfigResponse)
 async def update_config(request: UpdateConfigRequest) -> dict:
-    """Update pipeline configuration."""
+    """
+    Update pipeline configuration. Registered on both POST and PUT --
+    frontend/src/lib/api.ts's updateConfig() sends PUT, while this
+    route originally only declared POST, so every Save on /settings,
+    /graph, and /explorer 405'd silently (caught by a bare
+    console.error). Accepting both keeps existing callers working
+    without forcing a synchronized frontend/backend deploy.
+    """
     
     # Update Blocking
     if request.blocking_max_block_size is not None:
