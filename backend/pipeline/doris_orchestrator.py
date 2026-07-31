@@ -73,9 +73,9 @@ from engine.rules.match_rules import DEFAULT_MATCH_RULESET
 from engine.rules import store as rule_store
 from engine.rules.compiler import compile_and_build
 from engine.rules.confidence_compiler import compile_confidence_sql
-from engine.clustering.cohesion import evaluate_all_components
-from engine.clustering.union_find import UnionFind
 from engine.clustering import get_cluster_manager
+from engine.clustering import entity_resolver
+from engine.clustering.build_clusters import build_clusters, load_active_overrides
 from engine.ruleset.config import get_default_ruleset
 from engine.ruleset.effective import resolve_from_active_catalog
 from engine.ruleset.version import RULESET_VERSION, ruleset_fingerprint
@@ -116,6 +116,8 @@ class DorisPipelineOrchestrator:
         # by default -- see engine.segments.classifier.SegmentationConfig.
         self._segmentation = self._catalog.segmentation
         self._relationships: List[dict] = []
+        # Stage 3: mirrors duckdb_orchestrator's identical field.
+        self._override_conflicts: List[tuple] = []
         self._con: Optional[DorisConnection] = None
         self._database: Optional[str] = None
         self._dialect = DorisDialect()
@@ -483,6 +485,18 @@ class DorisPipelineOrchestrator:
                     "(redecide/reblock will fall back to a fresh compile)", exc_info=True,
                 )
 
+            # Stage 1 of the entity resolution workbench plan -- mirrors
+            # duckdb_orchestrator's identical block. See
+            # confidence_compiler.compile_contributions_sql's docstring.
+            try:
+                from engine.rules.confidence_compiler import compile_contributions_sql
+                con.execute(compile_contributions_sql(self.match_ruleset, self._dialect, table_name="pair_contributions"))
+            except Exception:
+                logger.warning(
+                    "Could not persist pair_contributions (workbench score breakdown unavailable for this run)",
+                    exc_info=True,
+                )
+
             return auto_links, review_items, rejected
 
         auto_links, review_items, rejected = await loop.run_in_executor(None, _score_and_decide)
@@ -513,50 +527,42 @@ class DorisPipelineOrchestrator:
         loop = asyncio.get_event_loop()
 
         def _cluster():
-            uf = UnionFind()
-            edges_by_root: Dict[str, set] = {}
-            for a_key, b_key in auto_links:
-                uf.union(a_key, b_key)
-            for a_key, b_key in auto_links:
-                root = uf.find(a_key)
-                edges_by_root.setdefault(root, set()).add(tuple(sorted((a_key, b_key))))
+            # Stage 3 of the entity resolution workbench plan -- mirrors
+            # duckdb_orchestrator's identical block. See
+            # engine.clustering.build_clusters's module docstring.
+            must_link, must_not_link = [], []
+            try:
+                import psycopg2
+                from api.config import settings
+                if settings.PERSIST_TO_POSTGRES:
+                    pg_conn = psycopg2.connect(settings.DATABASE_URL)
+                    try:
+                        must_link, must_not_link = load_active_overrides(pg_conn)
+                    finally:
+                        pg_conn.close()
+            except Exception:
+                logger.warning("Could not load officer overrides for clustering (proceeding with none)", exc_info=True)
 
-            components = uf.get_clusters()
-            verdicts = evaluate_all_components(
-                components, edges_by_root,
+            result = build_clusters(
+                auto_links,
                 max_cluster_size=self.ruleset.max_cluster_size,
                 min_density=self.ruleset.min_density,
+                must_link=must_link,
+                must_not_link=must_not_link,
             )
+            self._override_conflicts = result.override_conflicts
+            return result.accepted_clusters, result.demoted_to_review, result.officer_exempt_count
 
-            manager = get_cluster_manager()
-            manager._uf = UnionFind()
-            manager._cluster_ids = {}
-            manager._members = []
-
-            accepted_clusters: Dict[str, List[str]] = {}
-            demoted_to_review = 0
-            for root, members in components.items():
-                verdict = verdicts[root]
-                if not verdict.accepted:
-                    demoted_to_review += len(edges_by_root.get(root, []))
-                    continue
-                if len(members) < 2:
-                    continue
-                for i in range(1, len(members)):
-                    manager.link(members[0], members[i])
-                cluster_id = manager.find(members[0])
-                accepted_clusters[cluster_id] = sorted(members)
-            return accepted_clusters, demoted_to_review
-
-        accepted_clusters, demoted_to_review = await loop.run_in_executor(None, _cluster)
+        accepted_clusters, demoted_to_review, officer_exempt_count = await loop.run_in_executor(None, _cluster)
 
         duration = int((datetime.utcnow() - start).total_seconds() * 1000)
+        override_msg = f", {officer_exempt_count} officer-confirmed" if officer_exempt_count else ""
         await self._emit_progress(StageProgress(
             stage=PipelineStage.CLUSTER, status="complete",
             records_out=len(accepted_clusters), duration_ms=duration,
             message=(
                 f"{len(accepted_clusters):,} cohesive clusters formed "
-                f"({demoted_to_review} edges demoted to review for low cohesion/oversized component)"
+                f"({demoted_to_review} edges demoted to review for low cohesion/oversized component{override_msg})"
             ),
             data={"cluster_stats": {"clusters_created": len(accepted_clusters)}},
         ))
@@ -770,6 +776,16 @@ class DorisPipelineOrchestrator:
                     "persist_clusters", repository.persist_clusters,
                     pg_conn, code_to_uuid, clusters, RULESET_VERSION,
                 ) or 0
+
+                # Stage 2 of the entity resolution workbench plan --
+                # mirrors duckdb_orchestrator's identical block. See
+                # engine.clustering.entity_resolver's module docstring.
+                entity_result = _step(
+                    "resolve_entities", entity_resolver.resolve_entities,
+                    pg_conn, self.run_id, clusters, set(clusters.keys()), "pipeline",
+                )
+                if entity_result:
+                    pg_conn.commit()
 
                 n_relationships = _step(
                     "persist_entity_relationships", repository.persist_entity_relationships,

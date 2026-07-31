@@ -64,14 +64,19 @@ _PAIR_INDEX_PATH = "data/review_pair_index.json"
 _QUEUE_SUFFIX = "_review_queue.json"
 _UPDATES_SUFFIX = "_review_updates.jsonl"
 
-# How many of the most-recently-started runs the "browse all runs"
-# queue view (no run_id filter -- the officer's default inbox) will
-# lazily load. Older runs' review items are still on disk and still
-# reachable via an explicit ?run_id= filter or a direct pair_id lookup
-# (both go through the pair index, not this cap) -- this only bounds
-# the unfiltered inbox view so it can't degrade into reading dozens of
-# runs' worth of files on every page load.
-_MAX_RUNS_IN_BROWSE_VIEW = 20
+# Stage 0 fix: this used to be 20, unioning the last 20 runs into one
+# "pending" count whenever no run_id was given -- and since the
+# frontend never passed run_id, every page load showed a cross-run sum
+# (verified live: 3,698,268 "pending", when the true per-run figure is
+# ~187,177 -- exactly 20 replays of the same dataset). An officer
+# cannot tell which run they are actioning when items from 20 runs are
+# interleaved by score. The default inbox is now scoped to the single
+# latest COMPLETED run, matching what "the review queue" means to a
+# bank officer -- a specific run's outstanding items, not a running
+# total across every historical replay. Older runs are still on disk
+# and still reachable via an explicit ?run_id= filter or a direct
+# pair_id lookup (both go through the pair index, not this constant).
+_MAX_RUNS_IN_BROWSE_VIEW = 1
 
 
 def _run_queue_path(run_id: str) -> str:
@@ -336,16 +341,20 @@ class ReviewService:
     def _browse_run_ids(self, explicit_run_id: Optional[str]) -> List[str]:
         """
         Which runs' files a query should load: just the one given, or
-        (unfiltered inbox) the _MAX_RUNS_IN_BROWSE_VIEW most recently
-        started runs -- the retention window that keeps the default
-        officer inbox from re-reading the entire run history on every
-        page load as the number of runs grows.
+        (unfiltered inbox) the single latest COMPLETED run -- see
+        _MAX_RUNS_IN_BROWSE_VIEW's docstring for why this is 1, not a
+        cross-run union. Filters to COMPLETED specifically (not just
+        "most recently started") so a PENDING/RUNNING/FAILED run never
+        becomes the officer's default inbox -- a FAILED run's queue
+        file can exist on disk (written before the failure) with no
+        real pipeline result behind it.
         """
         if explicit_run_id:
             return [explicit_run_id]
-        from services.run_service import get_run_service
-        recent_runs, _ = get_run_service().list_runs(page=1, page_size=_MAX_RUNS_IN_BROWSE_VIEW)
-        return [r.run_id for r in recent_runs]
+        from services.run_service import get_run_service, RunStatus
+        all_runs, _ = get_run_service().list_runs(page=1, page_size=1000)
+        completed = [r for r in all_runs if r.status == RunStatus.COMPLETED]
+        return [r.run_id for r in completed[:_MAX_RUNS_IN_BROWSE_VIEW]]
 
     def get_queue(
         self,

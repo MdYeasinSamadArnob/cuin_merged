@@ -301,6 +301,132 @@ class ApiClient {
             method: 'POST',
         });
     }
+
+    // ------------------------------------------------------------------
+    // Entity resolution workbench (Stage 4/5 of the workbench plan) --
+    // purely additive, does not touch /graph or /explorer's methods above.
+    // ------------------------------------------------------------------
+
+    async wbListRuns(page: number = 1, pageSize: number = 20) {
+        return this.request(`/workbench/runs?page=${page}&page_size=${pageSize}`);
+    }
+
+    async wbPopulations(runId?: string) {
+        const q = runId ? `?run_id=${runId}` : '';
+        return this.request(`/workbench/populations${q}`);
+    }
+
+    async wbListPairs(params: { runId?: string; decision?: string; minConf?: number; maxConf?: number; hasVeto?: boolean; q?: string; recordType?: string; page?: number; pageSize?: number }) {
+        const q = new URLSearchParams();
+        if (params.runId) q.set('run_id', params.runId);
+        if (params.decision) q.set('decision', params.decision);
+        if (params.minConf !== undefined) q.set('min_conf', String(params.minConf));
+        if (params.maxConf !== undefined) q.set('max_conf', String(params.maxConf));
+        if (params.hasVeto !== undefined) q.set('has_veto', String(params.hasVeto));
+        if (params.q) q.set('q', params.q);
+        if (params.recordType && params.recordType !== 'ALL') q.set('record_type', params.recordType);
+        q.set('page', String(params.page ?? 1));
+        q.set('page_size', String(params.pageSize ?? 20));
+        return this.request(`/workbench/pairs?${q.toString()}`);
+    }
+
+    async wbPairBreakdown(aKey: string, bKey: string, runId?: string) {
+        const q = runId ? `?run_id=${runId}` : '';
+        return this.request(`/workbench/pairs/${encodeURIComponent(aKey)}/${encodeURIComponent(bKey)}/breakdown${q}`);
+    }
+
+    async wbGetRecord(customerCode: string, runId?: string) {
+        const q = runId ? `?run_id=${runId}` : '';
+        return this.request(`/workbench/records/${encodeURIComponent(customerCode)}${q}`);
+    }
+
+    async wbSearch(q: string, runId?: string, page: number = 1, pageSize: number = 20) {
+        const params = new URLSearchParams({ q, page: String(page), page_size: String(pageSize) });
+        if (runId) params.set('run_id', runId);
+        return this.request(`/workbench/search?${params.toString()}`);
+    }
+
+    async wbListEntities(params: { page?: number; pageSize?: number; hasGlobalRef?: boolean; q?: string; recordType?: string; runId?: string }) {
+        const q = new URLSearchParams();
+        q.set('page', String(params.page ?? 1));
+        q.set('page_size', String(params.pageSize ?? 20));
+        if (params.hasGlobalRef !== undefined) q.set('has_global_ref', String(params.hasGlobalRef));
+        if (params.q) q.set('q', params.q);
+        if (params.recordType && params.recordType !== 'ALL') q.set('record_type', params.recordType);
+        if (params.runId) q.set('run_id', params.runId);
+        return this.request(`/workbench/entities?${q.toString()}`);
+    }
+
+    async wbGetEntity(entityId: string, runId?: string) {
+        const q = runId ? `?run_id=${runId}` : '';
+        return this.request(`/workbench/entities/${entityId}${q}`);
+    }
+
+    async wbEntityMatches(entityId: string, runId?: string) {
+        const q = runId ? `?run_id=${runId}` : '';
+        return this.request(`/workbench/entities/${entityId}/matches${q}`);
+    }
+
+    async wbApprove(runId: string | undefined, aCode: string, bCode: string, reasonCode: string, reason: string, actor: string) {
+        return this.request('/workbench/actions/approve', {
+            method: 'POST',
+            body: JSON.stringify({ run_id: runId, a_code: aCode, b_code: bCode, reason_code: reasonCode, reason, actor }),
+        });
+    }
+
+    async wbReject(runId: string | undefined, aCode: string, bCode: string, reasonCode: string, reason: string, actor: string) {
+        return this.request('/workbench/actions/reject', {
+            method: 'POST',
+            body: JSON.stringify({ run_id: runId, a_code: aCode, b_code: bCode, reason_code: reasonCode, reason, actor }),
+        });
+    }
+
+    async wbMerge(runId: string | undefined, entityIdA: string, entityIdB: string, reasonCode: string, reason: string, actor: string) {
+        return this.request('/workbench/actions/merge', {
+            method: 'POST',
+            body: JSON.stringify({ run_id: runId, entity_id_a: entityIdA, entity_id_b: entityIdB, reason_code: reasonCode, reason, actor }),
+        });
+    }
+
+    async wbSplit(runId: string | undefined, entityId: string, customerCode: string, reasonCode: string, reason: string, actor: string) {
+        return this.request('/workbench/actions/split', {
+            method: 'POST',
+            body: JSON.stringify({ run_id: runId, entity_id: entityId, customer_code: customerCode, reason_code: reasonCode, reason, actor }),
+        });
+    }
+
+    async wbAssignGlobalRef(entityId: string, globalRef: string, state: string, reason: string, actor: string) {
+        return this.request(`/workbench/entities/${entityId}/global-ref`, {
+            method: 'POST',
+            body: JSON.stringify({ global_ref: globalRef, state, reason, actor }),
+        });
+    }
+
+    async wbRetireGlobalRef(entityId: string, reason: string, actor: string) {
+        return this.request(`/workbench/entities/${entityId}/global-ref`, {
+            method: 'DELETE',
+            body: JSON.stringify({ reason, actor }),
+        });
+    }
+
+    async wbAuditVerify() {
+        return this.request('/workbench/audit/verify');
+    }
+
+    async wbListAudit(entityId?: string, page: number = 1, pageSize: number = 50) {
+        const q = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+        if (entityId) q.set('entity_id', entityId);
+        return this.request(`/workbench/audit?${q.toString()}`);
+    }
+
+    async wbListOverrides(params: { page?: number; pageSize?: number; verdict?: string; runId?: string }) {
+        const q = new URLSearchParams();
+        q.set('page', String(params.page ?? 1));
+        q.set('page_size', String(params.pageSize ?? 50));
+        if (params.verdict) q.set('verdict', params.verdict);
+        if (params.runId) q.set('run_id', params.runId);
+        return this.request(`/workbench/overrides?${q.toString()}`);
+    }
 }
 
 export const api = new ApiClient(API_BASE_URL);

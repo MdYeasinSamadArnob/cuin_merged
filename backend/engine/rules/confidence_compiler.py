@@ -37,7 +37,7 @@ _IDENTIFIER_ID_TYPE = {
 }
 
 
-def _identifier_confidence_cte(rule, dialect: SqlDialect, alias: str) -> str:
+def _identifier_confidence_cte(rule, dialect: SqlDialect, alias: str, include_detail: bool = False) -> str:
     id_type = _IDENTIFIER_ID_TYPE[rule.attribute]
     sub_type_filter = f"AND doc_type = {dialect.quote_str(rule.sub_type)}" if rule.sub_type else ""
     matched = f"id_type = {dialect.quote_str(id_type)} {sub_type_filter} AND {dialect.array_size('intersection')} > 0"
@@ -54,33 +54,48 @@ def _identifier_confidence_cte(rule, dialect: SqlDialect, alias: str) -> str:
         veto_where = f"id_type = {dialect.quote_str(id_type)} {sub_type_filter} AND {both_present} AND {no_overlap}"
         veto_expr = f"MAX(CASE WHEN {veto_where} THEN 1 ELSE 0 END)"
 
+    # Detail: one representative matched value (AGGREGATION_PER_SUB_TYPE
+    # can match more than one sub_type, e.g. NID AND TIN -- MAX picks
+    # one deterministically rather than needing an array-of-strings
+    # aggregate whose NULL-skipping behavior isn't worth relying on
+    # across both engines for what's only ever a UI display string).
+    # For the workbench breakdown panel only, never read by
+    # compile_confidence_sql's decision path.
+    detail_col = ""
+    if include_detail:
+        one_value = dialect.array_element("intersection", 1)
+        detail_col = f""",
+                MAX(CASE WHEN {matched} THEN {one_value} ELSE NULL END) AS detail"""
+
     return f"""
         {alias} AS (
             SELECT a_key, b_key,
                 {confidence_expr} AS confidence,
-                {veto_expr} AS veto
+                {veto_expr} AS veto{detail_col}
             FROM pair_identifier_evidence
             GROUP BY a_key, b_key
         )
     """
 
 
-def _name_confidence_cte(rule, dialect: SqlDialect, alias: str) -> str:
+def _name_confidence_cte(rule, dialect: SqlDialect, alias: str, include_detail: bool = False) -> str:
     threshold = rule.params.get("min", 1.0)
     union_size = dialect.array_size("token_union")
     inter_size = dialect.array_size("token_intersection")
     matched = f"{union_size} > 0 AND CAST({inter_size} AS DOUBLE) / {union_size} >= {threshold}"
+    detail_col = f""",
+                CASE WHEN {matched} THEN {dialect.array_to_string('token_intersection', ',')} END AS detail""" if include_detail else ""
     return f"""
         {alias} AS (
             SELECT a_key, b_key,
                 CASE WHEN {matched} THEN {rule.confidence_pct} ELSE 0 END AS confidence,
-                0 AS veto
+                0 AS veto{detail_col}
             FROM pair_name_dob_evidence
         )
     """
 
 
-def _dob_confidence_cte(rule, dialect: SqlDialect, alias: str) -> str:
+def _dob_confidence_cte(rule, dialect: SqlDialect, alias: str, include_detail: bool = False) -> str:
     require_qualifier = rule.params.get("require_qualifier")
     both_sides = rule.params.get("both_sides", True)
 
@@ -95,17 +110,20 @@ def _dob_confidence_cte(rule, dialect: SqlDialect, alias: str) -> str:
     if rule.veto_kind == VETO_BOTH_QUALIFIED_AND_DIFFER:
         veto_expr = f"CASE WHEN {present} AND {qualified} AND dob_a != dob_b THEN 1 ELSE 0 END"
 
+    detail_col = f""",
+                CASE WHEN {matched} THEN dob_a ELSE NULL END AS detail""" if include_detail else ""
+
     return f"""
         {alias} AS (
             SELECT a_key, b_key,
                 CASE WHEN {matched} THEN {rule.confidence_pct} ELSE 0 END AS confidence,
-                {veto_expr} AS veto
+                {veto_expr} AS veto{detail_col}
             FROM pair_name_dob_evidence
         )
     """
 
 
-def _raw_column_confidence_cte(rule, dialect: SqlDialect, alias: str) -> str:
+def _raw_column_confidence_cte(rule, dialect: SqlDialect, alias: str, include_detail: bool = False) -> str:
     """
     SQL twin of engine.scoring.confidence._score_raw_column_rule for a
     bank-added RAW_COLUMN match rule (any schema field). Self-joins
@@ -172,12 +190,17 @@ def _raw_column_confidence_cte(rule, dialect: SqlDialect, alias: str) -> str:
     elif rule.veto_kind == VETO_BOTH_QUALIFIED_AND_DIFFER and rule.comparator not in _ARRAY_COMPARATORS:
         veto_expr = f"CASE WHEN {both_present} AND NOT {matched_expr} THEN 1 ELSE 0 END"
 
+    detail_col = ""
+    if include_detail:
+        detail_expr = dialect.array_to_string(a_expr, ",") if (is_array or rule.comparator in _ARRAY_COMPARATORS) else a_expr
+        detail_col = f",\n                CASE WHEN {both_present} AND {matched_expr} THEN {detail_expr} ELSE NULL END AS detail"
+
     return f"""
         {agg_cte}
         {alias} AS (
             SELECT cp.a_key, cp.b_key,
                 CASE WHEN {both_present} AND {matched_expr} THEN {rule.confidence_pct} ELSE 0 END AS confidence,
-                {veto_expr} AS veto
+                {veto_expr} AS veto{detail_col}
             {from_clause}
         )
     """
@@ -229,4 +252,72 @@ def compile_confidence_sql(ruleset: MatchRuleset, dialect: SqlDialect, table_nam
         FROM candidate_pairs cp
         {joins}
     """
+    return dialect.create_or_replace_table(table_name, select_sql)
+
+
+def compile_contributions_sql(ruleset: MatchRuleset, dialect: SqlDialect, table_name: str = "pair_contributions") -> str:
+    """
+    Stage 1 of the entity resolution workbench plan -- the "why this
+    score" audit table. Reuses the EXACT same per-rule CTE builders
+    compile_confidence_sql() uses (with include_detail=True added),
+    so this can never disagree with what a real run actually decided:
+    same SQL, same joins, same veto/matched predicates -- just
+    unpivoted to one row per (pair, rule) instead of summed into one
+    row per pair. compile_confidence_sql() itself is untouched and
+    this function is never called from that decision path, so it adds
+    zero risk to output_fingerprint.
+
+    One row per (a_key, b_key, rule_id) for every enabled rule,
+    including non-matching ones (matched=false rows are what let the
+    breakdown panel show "did not match" alongside "matched") --
+    mirrors engine.scoring.confidence.score_pair()'s Contribution
+    list, which already emits one entry per enabled rule for the same
+    reason (see that module's docstring).
+
+    `awarded_pct` vs `configured_pct`: for an AGGREGATION_PER_SUB_TYPE
+    rule (DOCUMENT: NID + TIN both counted), awarded_pct can be a
+    MULTIPLE of configured_pct (e.g. 100 awarded from a 50-point rule
+    when both sub_types matched) -- that ratio IS the "fired twice"
+    signal the UI renders, not a bug to normalize away.
+    """
+    ctes = []
+    selects = []
+
+    for i, rule in enumerate(ruleset.match_rules):
+        if not rule.enabled:
+            continue
+        alias = f"_rule_{i}"
+        if rule.attribute in _IDENTIFIER_ID_TYPE:
+            ctes.append(_identifier_confidence_cte(rule, dialect, alias, include_detail=True))
+        elif rule.attribute == "NAME":
+            ctes.append(_name_confidence_cte(rule, dialect, alias, include_detail=True))
+        elif rule.attribute == "BIRTH_DATE":
+            ctes.append(_dob_confidence_cte(rule, dialect, alias, include_detail=True))
+        elif rule.attribute == ATTRIBUTE_RAW_COLUMN:
+            ctes.append(_raw_column_confidence_cte(rule, dialect, alias, include_detail=True))
+        else:
+            raise ValueError(f"{rule.rule_id}: unknown attribute {rule.attribute!r}")
+
+        awarded = f"COALESCE({alias}.confidence, 0)"
+        selects.append(f"""
+            SELECT
+                {dialect.quote_str(rule.rule_id)} AS rule_id,
+                {i} AS ordinal,
+                {dialect.quote_str(rule.label or rule.attribute)} AS label,
+                {dialect.quote_str(rule.attribute)} AS attribute,
+                {dialect.quote_str(rule.sub_type) if rule.sub_type else 'NULL'} AS sub_type,
+                cp.a_key, cp.b_key,
+                {awarded} AS awarded_pct,
+                {rule.confidence_pct} AS configured_pct,
+                ({awarded} > 0) AS matched,
+                (COALESCE({alias}.veto, 0) = 1) AS is_veto,
+                {alias}.detail AS detail
+            FROM candidate_pairs cp
+            LEFT JOIN {alias} ON cp.a_key = {alias}.a_key AND cp.b_key = {alias}.b_key
+        """)
+
+    if not selects:
+        raise ValueError("MatchRuleset has no enabled match rules")
+
+    select_sql = f"WITH {','.join(ctes)} " + " UNION ALL ".join(selects)
     return dialect.create_or_replace_table(table_name, select_sql)

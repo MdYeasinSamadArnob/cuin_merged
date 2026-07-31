@@ -248,6 +248,12 @@ app.include_router(search_router, prefix="/search", tags=["Search"])
 from api.routes_schema import router as schema_router
 app.include_router(schema_router, prefix="/datasource/schema", tags=["Schema"])
 
+# Entity resolution workbench (Stage 4 of the plan) -- purely additive,
+# does not touch/redirect any /graph, /explorer, /matches, or legacy
+# /review endpoint. See api/routes_workbench.py's module docstring.
+from api.routes_workbench import router as workbench_router
+app.include_router(workbench_router, prefix="/workbench", tags=["Workbench"])
+
 
 # ============================================
 # WebSocket Endpoint

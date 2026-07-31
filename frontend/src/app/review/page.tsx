@@ -1,501 +1,977 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+// Entity Resolution Workbench (Stage 5 of the workbench plan, refined per
+// officer feedback: side-by-side record comparison, search/filters across
+// every population, and bulk actions). See docs in api/routes_workbench.py
+// and services/workbench_service.py. /explorer and /graph are untouched
+// legacy pages; this is the new, unified place a bank officer works.
+
+import { useEffect, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { motion } from 'framer-motion';
+import {
+    Users, GitMerge, GitBranch, XCircle, UserX, AlertTriangle, ShieldCheck, ShieldAlert,
+    Search as SearchIcon, CheckCircle2, IdCard, History, Building2, User as UserIcon, ArrowLeft, ChevronRight,
+} from 'lucide-react';
 import { api } from '@/lib/api';
+import { ScoreBreakdown } from '@/components/workbench/ScoreBreakdown';
+import { ReasonDialog, ReasonDialogResult } from '@/components/workbench/ReasonDialog';
+import { RecordCompare } from '@/components/workbench/RecordCompare';
+import { FilterBar, PairFilters, EntityFilters } from '@/components/workbench/FilterBar';
 
-interface ReviewItem {
-    review_id: string;
-    pair_id: string;
-    run_id: string;
-    a_key: string;
-    b_key: string;
-    score: number;
-    evidence: Array<{
-        field: string;
-        type?: string;
-        value_a?: string;
-        value_b?: string;
-        similarity?: number;
-    }>;
-    signals: string[];
-    status: string;
-    reviewer: string | null;
-    review_reason: string | null;
-    reviewed_at: string | null;
-    created_at: string;
-    has_ai_explanation: boolean;
+type Population = 'REVIEW' | 'AUTO_LINK' | 'REJECT' | 'ENTITIES' | 'APPROVED';
+
+const BULK_SELECTION_CAP = 100;
+
+function useDebounced<T>(value: T, delayMs: number): T {
+    const [debounced, setDebounced] = useState(value);
+    useEffect(() => {
+        const t = setTimeout(() => setDebounced(value), delayMs);
+        return () => clearTimeout(t);
+    }, [value, delayMs]);
+    return debounced;
 }
 
-interface ReviewStats {
-    pending: number;
-    approved: number;
-    rejected: number;
-    total: number;
-    avg_review_time_seconds: number;
-    with_ai_explanation: number;
-}
-
-const PAGE_SIZE = 20;
-
-function getDisplayName(item: ReviewItem, side: 'a' | 'b'): string {
-    const nameEv = item.evidence.find(e => e.field === 'name');
-    if (nameEv) {
-        const value = side === 'a' ? nameEv.value_a : nameEv.value_b;
-        if (value) return value;
+function toggleInSet(prev: Set<string>, id: string): Set<string> {
+    const next = new Set(prev);
+    if (next.has(id)) {
+        next.delete(id);
+    } else if (next.size < BULK_SELECTION_CAP) {
+        next.add(id);
     }
-    return side === 'a' ? item.a_key : item.b_key;
+    return next;
 }
 
-export default function ReviewPage() {
-    const [queue, setQueue] = useState<ReviewItem[]>([]);
-    const [queueTotal, setQueueTotal] = useState(0);
-    const [page, setPage] = useState(1);
-    const [recentlyReviewed, setRecentlyReviewed] = useState<ReviewItem[]>([]);
-    const [stats, setStats] = useState<ReviewStats | null>(null);
-    const [selectedItem, setSelectedItem] = useState<ReviewItem | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
-    const [actionLoading, setActionLoading] = useState(false);
-    const [reviewReason, setReviewReason] = useState('');
-    const [reviewerName, setReviewerName] = useState('Reviewer');
-    const [error, setError] = useState<string | null>(null);
-    const [explanation, setExplanation] = useState<string | null>(null);
-    const [isExplanationLoading, setIsExplanationLoading] = useState(false);
-
-    useEffect(() => {
-        fetchReviewData(page);
-    }, [page]);
-
-    useEffect(() => {
-        if (selectedItem?.has_ai_explanation) {
-            setIsExplanationLoading(true);
-            api.getExplanation(selectedItem.pair_id)
-                .then(data => {
-                    if (data.available) {
-                        setExplanation(data.explanation_text);
-                    } else {
-                        setExplanation(null);
-                    }
-                })
-                .catch(err => {
-                    console.error('Failed to fetch explanation:', err);
-                    setExplanation(null);
-                })
-                .finally(() => setIsExplanationLoading(false));
-        } else {
-            setExplanation(null);
-        }
-    }, [selectedItem]);
-
-    const fetchReviewData = async (targetPage: number) => {
-        setIsLoading(true);
-        try {
-            const [pendingData, approvedData, rejectedData, statsData] = await Promise.all([
-                api.getReviewQueue(targetPage, PAGE_SIZE, 'PENDING'),
-                api.getReviewQueue(1, 5, 'APPROVED'),
-                api.getReviewQueue(1, 5, 'REJECTED'),
-                api.getReviewStats(),
-            ]);
-            setQueue(pendingData.items);
-            setQueueTotal(pendingData.total);
-
-            const recent = [...(approvedData.items || []), ...(rejectedData.items || [])]
-                .filter(i => i.reviewed_at)
-                .sort((a, b) => new Date(b.reviewed_at!).getTime() - new Date(a.reviewed_at!).getTime())
-                .slice(0, 10);
-            setRecentlyReviewed(recent);
-
-            setStats(statsData);
-            setError(null);
-        } catch (err) {
-            console.error('Failed to fetch review data:', err);
-            setError('Failed to load review queue');
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
-    const handleApprove = async () => {
-        if (!selectedItem || !reviewReason.trim()) {
-            setError('Please provide a reason for approval');
-            return;
-        }
-
-        setActionLoading(true);
-        setError(null);
-
-        try {
-            await api.approveReview(selectedItem.pair_id, reviewerName, reviewReason);
-            setSelectedItem(null);
-            setReviewReason('');
-            fetchReviewData(page);
-        } catch (err) {
-            setError('Failed to approve review');
-        } finally {
-            setActionLoading(false);
-        }
-    };
-
-    const handleReject = async () => {
-        if (!selectedItem || !reviewReason.trim()) {
-            setError('Please provide a reason for rejection');
-            return;
-        }
-
-        setActionLoading(true);
-        setError(null);
-
-        try {
-            await api.rejectReview(selectedItem.pair_id, reviewerName, reviewReason);
-            setSelectedItem(null);
-            setReviewReason('');
-            fetchReviewData(page);
-        } catch (err) {
-            setError('Failed to reject review');
-        } finally {
-            setActionLoading(false);
-        }
-    };
-
-    const getScoreColor = (score: number) => {
-        if (score >= 0.7) return 'text-emerald-600 dark:text-emerald-400';
-        if (score >= 0.5) return 'text-yellow-600 dark:text-yellow-400';
-        return 'text-orange-600 dark:text-orange-400';
-    };
-
-    const getScoreBg = (score: number) => {
-        if (score >= 0.7) return 'bg-emerald-100 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-700';
-        if (score >= 0.5) return 'bg-yellow-100 dark:bg-yellow-900/30 border-yellow-200 dark:border-yellow-700';
-        return 'bg-orange-100 dark:bg-orange-900/30 border-orange-200 dark:border-orange-700';
-    };
-
-    const totalPages = Math.max(1, Math.ceil(queueTotal / PAGE_SIZE));
-
-    if (isLoading && queue.length === 0) {
-        return (
-            <div className="p-8 flex items-center justify-center min-h-screen">
-                <div className="text-gray-500 dark:text-gray-400">Loading review queue...</div>
+function PopCard({ label, count, active, icon: Icon, accent, onClick }: {
+    label: string; count: number | undefined; active: boolean; icon: any; accent: string; onClick: () => void;
+}) {
+    return (
+        <button
+            onClick={onClick}
+            className={`glass-card p-4 text-left transition-all ${active ? 'ring-2 ring-blue-500' : 'hover:bg-gray-50 dark:hover:bg-gray-900/40'}`}
+        >
+            <div className="flex items-center gap-2 mb-1">
+                <Icon size={16} className={accent} />
+                <span className="text-xs text-gray-500 dark:text-gray-400">{label}</span>
             </div>
-        );
-    }
+            <div className="text-xl font-bold text-gray-900 dark:text-white">
+                {count === undefined ? '…' : count.toLocaleString()}
+            </div>
+        </button>
+    );
+}
+
+function DetailField({ label, value }: { label: string; value?: string | null }) {
+    if (!value) return null;
+    return (
+        <div className="flex gap-2">
+            <span className="text-gray-400 w-24 shrink-0">{label}</span>
+            <span className="text-gray-700 dark:text-gray-300 break-words">{value}</span>
+        </div>
+    );
+}
+
+// A member row starts collapsed (just code + name, as before); clicking it
+// fetches and expands the full record profile inline -- dob, segment, and
+// every identifier -- via the same GET /workbench/records/{code} RecordCompare
+// already uses, so "view full details for this person" doesn't need a new
+// endpoint or a second modal type.
+function MemberRow({ member, runId, expanded, onToggle, canSplit, onSplit }: {
+    member: { customer_code: string; name_norm?: string | null };
+    runId: string;
+    expanded: boolean;
+    onToggle: () => void;
+    canSplit: boolean;
+    onSplit: () => void;
+}) {
+    const { data: detail, isFetching } = useQuery({
+        queryKey: ['wb-member-detail', runId, member.customer_code],
+        queryFn: () => api.wbGetRecord(member.customer_code, runId),
+        enabled: expanded,
+    });
 
     return (
-        <div className="p-8 space-y-6">
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Review Queue</h1>
-                    <p className="text-gray-600 dark:text-gray-400 mt-1">
-                        Human-in-the-loop review for uncertain matches
-                    </p>
+        <div className="rounded-lg bg-gray-50 dark:bg-gray-900/40 text-xs overflow-hidden">
+            <div className="flex items-center justify-between p-2 cursor-pointer" onClick={onToggle}>
+                <div className="flex items-center gap-1.5 min-w-0">
+                    <ChevronRight size={12} className={`text-gray-400 shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+                    <span className="font-mono text-gray-700 dark:text-gray-300 shrink-0">{member.customer_code}</span>
+                    {member.name_norm && <span className="text-gray-500 truncate">{member.name_norm}</span>}
                 </div>
+                {canSplit && (
+                    <button
+                        onClick={(e) => { e.stopPropagation(); onSplit(); }}
+                        className="text-gray-400 hover:text-red-500 shrink-0" title="Split this record out"
+                    >
+                        <UserX size={13} />
+                    </button>
+                )}
             </div>
-
-            {error && (
-                <div className="bg-red-100 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-lg p-4 text-red-600 dark:text-red-400">
-                    {error}
-                </div>
-            )}
-
-            {/* Stats Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div className="bg-yellow-100 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded-xl p-4">
-                    <p className="text-yellow-600 dark:text-yellow-400 text-sm">Pending</p>
-                    <p className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">{(stats?.pending || 0).toLocaleString()}</p>
-                </div>
-                <div className="bg-emerald-100 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-700 rounded-xl p-4">
-                    <p className="text-emerald-600 dark:text-emerald-400 text-sm">Approved</p>
-                    <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{(stats?.approved || 0).toLocaleString()}</p>
-                </div>
-                <div className="bg-red-100 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-xl p-4">
-                    <p className="text-red-600 dark:text-red-400 text-sm">Rejected</p>
-                    <p className="text-2xl font-bold text-red-600 dark:text-red-400">{(stats?.rejected || 0).toLocaleString()}</p>
-                </div>
-                <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
-                    <p className="text-gray-600 dark:text-gray-400 text-sm">Total</p>
-                    <p className="text-2xl font-bold text-gray-900 dark:text-white">{(stats?.total || 0).toLocaleString()}</p>
-                </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Queue List */}
-                <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-6 shadow-sm dark:shadow-none flex flex-col">
-                    <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Pending Reviews</h2>
-                        <span className="text-sm text-gray-500 dark:text-gray-400">{queueTotal.toLocaleString()} total</span>
-                    </div>
-
-                    {queue.length === 0 ? (
-                        <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-                            <p className="text-4xl mb-4">✅</p>
-                            <p>No items pending review!</p>
-                        </div>
-                    ) : (
+            {expanded && (
+                <div className="px-2 pb-2 pt-1.5 border-t border-gray-200 dark:border-gray-700 space-y-1">
+                    {isFetching && <p className="text-gray-400">Loading details...</p>}
+                    {detail && detail.resolved === false && <p className="text-amber-500">Record not found for this run.</p>}
+                    {detail && detail.resolved !== false && (
                         <>
-                            <div className="space-y-3 max-h-[500px] overflow-y-auto flex-1">
-                                {queue.map((item) => (
-                                    <div
-                                        key={item.review_id}
-                                        onClick={() => {
-                                            setSelectedItem(item);
-                                            setReviewReason('');
-                                            setError(null);
-                                        }}
-                                        className={`p-4 rounded-lg border cursor-pointer transition-all ${selectedItem?.review_id === item.review_id
-                                            ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-                                            : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 hover:border-gray-300 dark:hover:border-gray-600'
-                                            }`}
-                                    >
-                                        <div className="flex items-center justify-between">
-                                            <div className="flex items-center gap-3 min-w-0">
-                                                <span className={`shrink-0 px-2 py-1 rounded border text-sm font-medium ${getScoreBg(item.score)} ${getScoreColor(item.score)}`}>
-                                                    {(item.score * 100).toFixed(0)}%
-                                                </span>
-                                                <div className="min-w-0">
-                                                    <p className="text-gray-900 dark:text-white text-sm font-medium truncate">
-                                                        {getDisplayName(item, 'a')} ↔ {getDisplayName(item, 'b')}
-                                                    </p>
-                                                    <p className="text-gray-500 dark:text-gray-400 text-xs mt-1">
-                                                        {item.signals.length} signal{item.signals.length === 1 ? '' : 's'} hit
-                                                    </p>
-                                                </div>
-                                            </div>
-                                            {item.has_ai_explanation && (
-                                                <span className="shrink-0 text-purple-500 dark:text-purple-400 text-sm" title="AI Explanation Available">
-                                                    🤖
-                                                </span>
-                                            )}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-
-                            <div className="flex items-center justify-between pt-4 mt-4 border-t border-gray-200 dark:border-gray-700">
-                                <button
-                                    onClick={() => setPage(p => Math.max(1, p - 1))}
-                                    disabled={page <= 1 || isLoading}
-                                    className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-800"
-                                >
-                                    Previous
-                                </button>
-                                <span className="text-sm text-gray-500 dark:text-gray-400">
-                                    Page {page} of {totalPages.toLocaleString()}
-                                </span>
-                                <button
-                                    onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                                    disabled={page >= totalPages || isLoading}
-                                    className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-800"
-                                >
-                                    Next
-                                </button>
-                            </div>
+                            <DetailField label="Name" value={detail.name_norm} />
+                            <DetailField label="Date of birth" value={detail.dob_iso} />
+                            <DetailField label="Segment" value={detail.segment} />
+                            <DetailField label="Mobile" value={(detail.identifiers?.mobile || []).join(', ')} />
+                            <DetailField label="Email" value={(detail.identifiers?.email || []).join(', ')} />
+                            <DetailField label="Document / NID" value={(detail.identifiers?.document || []).join(', ')} />
+                            <DetailField label="Address" value={(detail.identifiers?.address || []).join(' | ')} />
                         </>
                     )}
                 </div>
+            )}
+        </div>
+    );
+}
 
-                {/* Detail Panel */}
-                <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-6 shadow-sm dark:shadow-none">
-                    <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Review Details</h2>
+const MATCH_DECISION_COLOR: Record<string, string> = {
+    AUTO_LINK: 'text-emerald-600 dark:text-emerald-400',
+    REVIEW: 'text-amber-600 dark:text-amber-400',
+    REJECT: 'text-gray-500 dark:text-gray-400',
+};
 
-                    {!selectedItem ? (
-                        <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-                            <p className="text-4xl mb-4">👆</p>
-                            <p>Select an item from the queue to review</p>
-                        </div>
-                    ) : (
-                        <div className="space-y-6">
-                            {/* Records being compared */}
-                            <div className="grid grid-cols-2 gap-3">
-                                <div className="p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800">
-                                    <p className="text-xs text-blue-600 dark:text-blue-400 font-medium mb-1">Record A</p>
-                                    <p className="text-gray-900 dark:text-white text-sm font-medium truncate">{getDisplayName(selectedItem, 'a')}</p>
-                                    <p className="text-gray-500 dark:text-gray-400 text-xs font-mono mt-1">{selectedItem.a_key}</p>
-                                </div>
-                                <div className="p-3 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-100 dark:border-purple-800">
-                                    <p className="text-xs text-purple-600 dark:text-purple-400 font-medium mb-1">Record B</p>
-                                    <p className="text-gray-900 dark:text-white text-sm font-medium truncate">{getDisplayName(selectedItem, 'b')}</p>
-                                    <p className="text-gray-500 dark:text-gray-400 text-xs font-mono mt-1">{selectedItem.b_key}</p>
-                                </div>
-                            </div>
+// One direct, scored edge between two of an entity's members -- the actual
+// evidence a union-find over these edges collapsed into this one cluster.
+// Expands to the same rule-by-rule ScoreBreakdown a pair gets in the
+// REVIEW/AUTO_LINK/REJECT lists, so "why is this one entity" is answered
+// with real scores, not just a member list.
+function EntityMatchRow({ item, runId, expanded, onToggle }: {
+    item: { a_key: string; b_key: string; a_name?: string | null; b_name?: string | null; confidence_pct: number; has_veto: boolean; decision: string };
+    runId: string;
+    expanded: boolean;
+    onToggle: () => void;
+}) {
+    const { data: breakdown, isFetching } = useQuery({
+        queryKey: ['wb-entity-match-breakdown', runId, item.a_key, item.b_key],
+        queryFn: () => api.wbPairBreakdown(item.a_key, item.b_key, runId),
+        enabled: expanded,
+    });
 
-                            {/* Score */}
-                            <div className="text-center">
-                                <div className={`inline-flex items-center justify-center w-24 h-24 rounded-full border-4 ${getScoreBg(selectedItem.score)}`}>
-                                    <span className={`text-3xl font-bold ${getScoreColor(selectedItem.score)}`}>
-                                        {(selectedItem.score * 100).toFixed(0)}%
-                                    </span>
-                                </div>
-                                <p className="text-gray-500 dark:text-gray-400 mt-2">Match Score</p>
-                            </div>
+    return (
+        <div className="rounded-lg bg-gray-50 dark:bg-gray-900/40 text-xs overflow-hidden">
+            <div className="flex items-center justify-between p-2 cursor-pointer gap-2" onClick={onToggle}>
+                <div className="flex items-center gap-1.5 min-w-0">
+                    <ChevronRight size={12} className={`text-gray-400 shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+                    <span className="text-gray-900 dark:text-white truncate">
+                        {item.a_name || item.a_key} ↔ {item.b_name || item.b_key}
+                    </span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                    {item.has_veto && <ShieldAlert size={12} className="text-red-500" />}
+                    <span className={`font-semibold ${MATCH_DECISION_COLOR[item.decision] || 'text-gray-500'}`}>{item.decision.replace('_', ' ')}</span>
+                    <span className={`font-mono ${item.has_veto ? 'text-red-500' : 'text-gray-600 dark:text-gray-300'}`}>{item.confidence_pct.toFixed(0)}%</span>
+                </div>
+            </div>
+            {expanded && (
+                <div className="px-2 pb-2 pt-1 border-t border-gray-200 dark:border-gray-700">
+                    <ScoreBreakdown breakdown={breakdown || null} loading={isFetching} />
+                </div>
+            )}
+        </div>
+    );
+}
 
-                            {/* AI Explanation */}
-                            {(selectedItem.has_ai_explanation || explanation) && (
-                                <div className="bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-700/50 rounded-lg p-4">
-                                    <h3 className="text-lg font-medium text-purple-700 dark:text-purple-300 mb-2 flex items-center gap-2">
-                                        <span>🤖</span> AI Analysis
-                                    </h3>
-                                    {isExplanationLoading ? (
-                                        <div className="text-gray-500 dark:text-gray-400 text-sm animate-pulse">
-                                            Generating explanation...
-                                        </div>
-                                    ) : explanation ? (
-                                        <div className="whitespace-pre-wrap font-sans text-sm text-gray-700 dark:text-gray-300 bg-white/60 dark:bg-black/20 p-3 rounded border border-purple-100 dark:border-purple-900/30">
-                                            {explanation}
-                                        </div>
-                                    ) : (
-                                        <div className="text-gray-500 dark:text-gray-500 text-sm">
-                                            Explanation details not available
-                                        </div>
-                                    )}
-                                </div>
-                            )}
+const EMPTY_PAIR_FILTERS: PairFilters = { q: '', recordType: 'ALL', minConf: undefined, maxConf: undefined, hasVeto: undefined };
+const EMPTY_ENTITY_FILTERS: EntityFilters = { q: '', recordType: 'ALL', hasGlobalRef: undefined };
 
-                            {/* Evidence */}
-                            <div>
-                                <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-3">Evidence</h3>
-                                <div className="space-y-2">
-                                    {selectedItem.evidence.length > 0 ? (
-                                        selectedItem.evidence.map((ev, idx) => (
-                                            <div key={idx} className="p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-transparent">
-                                                <div className="flex items-center justify-between">
-                                                    <div className="flex items-center gap-2 min-w-0">
-                                                        <span className="text-gray-700 dark:text-gray-300 font-medium">{ev.field}</span>
-                                                        <span className={`text-xs px-2 py-0.5 rounded ${ev.type === 'exact_set_intersection' && (ev.similarity ?? 0) > 0 ? 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-400' :
-                                                            ev.type === 'rare_token_jaccard' && (ev.similarity ?? 0) > 0 ? 'bg-yellow-100 dark:bg-yellow-900/50 text-yellow-700 dark:text-yellow-400' :
-                                                                'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
-                                                            }`}>
-                                                            {ev.type || 'unknown'}
-                                                        </span>
-                                                    </div>
-                                                    {ev.similarity !== undefined && (
-                                                        <span className="text-gray-500 dark:text-gray-400 shrink-0">
-                                                            {(ev.similarity * 100).toFixed(0)}%
-                                                        </span>
-                                                    )}
-                                                </div>
-                                                {(ev.value_a || ev.value_b) && (
-                                                    <div className="mt-1.5 text-xs text-gray-500 dark:text-gray-400 font-mono truncate">
-                                                        {ev.value_a || '—'} vs {ev.value_b || '—'}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        ))
-                                    ) : (
-                                        <p className="text-gray-500 dark:text-gray-500 text-sm">No evidence details available</p>
-                                    )}
-                                </div>
-                            </div>
+export default function WorkbenchPage() {
+    const queryClient = useQueryClient();
 
-                            {/* Signals */}
-                            <div>
-                                <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-3">Signals Hit</h3>
-                                <div className="flex flex-wrap gap-2">
-                                    {selectedItem.signals.map((signal, idx) => (
-                                        <span key={idx} className="px-3 py-1 bg-purple-100 dark:bg-purple-900/30 border border-purple-200 dark:border-purple-700 text-purple-700 dark:text-purple-400 rounded-full text-sm">
-                                            {signal}
-                                        </span>
-                                    ))}
-                                    {selectedItem.signals.length === 0 && (
-                                        <span className="text-gray-500 dark:text-gray-500 text-sm">No signals</span>
-                                    )}
-                                </div>
-                            </div>
+    const { data: runsData } = useQuery({ queryKey: ['wb-runs'], queryFn: () => api.wbListRuns(1, 50) });
+    const completedRuns = useMemo(() => (runsData?.runs || []).filter((r: any) => r.status === 'COMPLETED'), [runsData]);
+    const [runId, setRunId] = useState<string>('');
+    useEffect(() => {
+        if (!runId && completedRuns.length > 0) setRunId(completedRuns[0].run_id);
+    }, [completedRuns, runId]);
 
-                            {/* Reviewer Input */}
-                            <div className="border-t border-gray-200 dark:border-gray-700 pt-4 space-y-4">
-                                <div>
-                                    <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">Reviewer Name</label>
-                                    <input
-                                        type="text"
-                                        value={reviewerName}
-                                        onChange={(e) => setReviewerName(e.target.value)}
-                                        className="w-full px-4 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white focus:border-blue-500 focus:outline-none"
-                                        placeholder="Your name"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">Reason (Required)</label>
-                                    <textarea
-                                        value={reviewReason}
-                                        onChange={(e) => setReviewReason(e.target.value)}
-                                        className="w-full px-4 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white focus:border-blue-500 focus:outline-none resize-none"
-                                        rows={3}
-                                        placeholder="Explain your decision..."
-                                    />
-                                </div>
-                            </div>
+    const { data: populations } = useQuery({
+        queryKey: ['wb-populations', runId],
+        queryFn: () => api.wbPopulations(runId),
+        enabled: !!runId,
+    });
 
-                            {/* Action Buttons */}
-                            <div className="flex gap-4">
-                                <button
-                                    onClick={handleApprove}
-                                    disabled={actionLoading || !reviewReason.trim()}
-                                    className="flex-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-3 rounded-lg font-semibold transition-colors"
-                                >
-                                    ✓ Approve Match
-                                </button>
-                                <button
-                                    onClick={handleReject}
-                                    disabled={actionLoading || !reviewReason.trim()}
-                                    className="flex-1 bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-3 rounded-lg font-semibold transition-colors"
-                                >
-                                    ✗ Reject Match
-                                </button>
-                            </div>
+    const { data: auditStatus } = useQuery({
+        queryKey: ['wb-audit-verify'],
+        queryFn: () => api.wbAuditVerify(),
+        refetchInterval: 60000,
+    });
+
+    const [population, setPopulation] = useState<Population>('REVIEW');
+    const [page, setPage] = useState(1);
+    const PAGE_SIZE = 20;
+
+    const [pairFilters, setPairFilters] = useState<PairFilters>(EMPTY_PAIR_FILTERS);
+    const [entityFilters, setEntityFilters] = useState<EntityFilters>(EMPTY_ENTITY_FILTERS);
+    const debouncedPairQ = useDebounced(pairFilters.q, 400);
+    const debouncedEntityQ = useDebounced(entityFilters.q, 400);
+
+    useEffect(() => setPage(1), [population, runId, debouncedPairQ, pairFilters.recordType, pairFilters.minConf, pairFilters.maxConf, pairFilters.hasVeto, debouncedEntityQ, entityFilters.recordType, entityFilters.hasGlobalRef]);
+
+    const [selectedPair, setSelectedPair] = useState<{ a_key: string; b_key: string } | null>(null);
+    const [selectedEntity, setSelectedEntity] = useState<string | null>(null);
+    const [expandedMember, setExpandedMember] = useState<string | null>(null);
+    useEffect(() => setExpandedMember(null), [selectedEntity]);
+
+    // Navigation history -- jumping to an entity (from a pair's "part of an
+    // existing entity" link, or a global search hit) changes population and
+    // selection out from under whatever the officer was looking at, with no
+    // way back. Each jump pushes a snapshot of where it came from; "Back"
+    // pops it and restores population + selection so the officer can hop
+    // entity -> entity -> pair and always retrace their steps.
+    interface NavSnapshot { population: Population; selectedPair: { a_key: string; b_key: string } | null; selectedEntity: string | null; label: string }
+    const [navStack, setNavStack] = useState<NavSnapshot[]>([]);
+
+    // Bulk selection -- scoped to the current population/run, survives
+    // pagination within it (an officer filtering then paging shouldn't lose
+    // their picks), cleared on population/run switch.
+    const [selectedPairKeys, setSelectedPairKeys] = useState<Set<string>>(new Set());
+    const [selectedEntityIds, setSelectedEntityIds] = useState<Set<string>>(new Set());
+    useEffect(() => { setSelectedPairKeys(new Set()); setSelectedEntityIds(new Set()); }, [population, runId]);
+    useEffect(() => { setNavStack([]); }, [runId]);
+
+    const { data: pairsData, isFetching: pairsLoading } = useQuery({
+        queryKey: ['wb-pairs', runId, population, page, debouncedPairQ, pairFilters.recordType, pairFilters.minConf, pairFilters.maxConf, pairFilters.hasVeto],
+        queryFn: () => api.wbListPairs({
+            runId, decision: population, page, pageSize: PAGE_SIZE,
+            q: debouncedPairQ || undefined, recordType: pairFilters.recordType,
+            minConf: pairFilters.minConf, maxConf: pairFilters.maxConf, hasVeto: pairFilters.hasVeto,
+        }),
+        enabled: !!runId && population !== 'ENTITIES' && population !== 'APPROVED',
+    });
+
+    const { data: entitiesData, isFetching: entitiesLoading } = useQuery({
+        queryKey: ['wb-entities', runId, page, debouncedEntityQ, entityFilters.recordType, entityFilters.hasGlobalRef],
+        queryFn: () => api.wbListEntities({
+            page, pageSize: PAGE_SIZE, runId,
+            q: debouncedEntityQ || undefined, recordType: entityFilters.recordType, hasGlobalRef: entityFilters.hasGlobalRef,
+        }),
+        enabled: population === 'ENTITIES',
+    });
+
+    // "Approved" tab -- the durable ledger of every officer decision
+    // (resolution_overrides), independent of any single run's own pair
+    // populations. Toggle between MUST_LINK (approved) and MUST_NOT_LINK
+    // (rejected) for full traceability, not just approvals.
+    const [overrideVerdict, setOverrideVerdict] = useState<'MUST_LINK' | 'MUST_NOT_LINK'>('MUST_LINK');
+    useEffect(() => setPage(1), [overrideVerdict]);
+    const { data: overridesData, isFetching: overridesLoading } = useQuery({
+        queryKey: ['wb-overrides', runId, page, overrideVerdict],
+        queryFn: () => api.wbListOverrides({ page, pageSize: PAGE_SIZE, verdict: overrideVerdict, runId }),
+        enabled: population === 'APPROVED',
+    });
+    const { data: approvedCountData } = useQuery({
+        queryKey: ['wb-overrides-count', runId],
+        queryFn: () => api.wbListOverrides({ page: 1, pageSize: 1, verdict: 'MUST_LINK', runId }),
+        enabled: !!runId,
+    });
+
+    const { data: breakdown, isFetching: breakdownLoading } = useQuery({
+        queryKey: ['wb-breakdown', runId, selectedPair?.a_key, selectedPair?.b_key],
+        queryFn: () => api.wbPairBreakdown(selectedPair!.a_key, selectedPair!.b_key, runId),
+        enabled: !!selectedPair && !!runId,
+    });
+
+    const { data: recordA } = useQuery({
+        queryKey: ['wb-record', runId, selectedPair?.a_key],
+        queryFn: () => api.wbGetRecord(selectedPair!.a_key, runId),
+        enabled: !!selectedPair && !!runId,
+    });
+    const { data: recordB } = useQuery({
+        queryKey: ['wb-record', runId, selectedPair?.b_key],
+        queryFn: () => api.wbGetRecord(selectedPair!.b_key, runId),
+        enabled: !!selectedPair && !!runId,
+    });
+
+    const { data: entityDetail, isFetching: entityDetailLoading } = useQuery({
+        queryKey: ['wb-entity-detail', selectedEntity, runId],
+        queryFn: () => api.wbGetEntity(selectedEntity!, runId),
+        enabled: !!selectedEntity,
+    });
+
+    const { data: entityMatches, isFetching: entityMatchesLoading } = useQuery({
+        queryKey: ['wb-entity-matches', selectedEntity, runId],
+        queryFn: () => api.wbEntityMatches(selectedEntity!, runId),
+        enabled: !!selectedEntity,
+    });
+    const [expandedMatchKey, setExpandedMatchKey] = useState<string | null>(null);
+    useEffect(() => setExpandedMatchKey(null), [selectedEntity]);
+
+    const jumpToEntity = (entityId: string) => {
+        setNavStack((prev) => [...prev, {
+            population, selectedPair, selectedEntity,
+            label: population === 'ENTITIES' && selectedEntity ? `entity ${selectedEntity.slice(0, 8)}` : population.replace('_', ' '),
+        }]);
+        setPopulation('ENTITIES');
+        setSelectedEntity(entityId);
+        setSelectedPair(null);
+    };
+
+    const goBack = () => {
+        setNavStack((prev) => {
+            if (prev.length === 0) return prev;
+            const last = prev[prev.length - 1];
+            setPopulation(last.population);
+            setSelectedPair(last.selectedPair);
+            setSelectedEntity(last.selectedEntity);
+            return prev.slice(0, -1);
+        });
+    };
+
+    // ---- Global search ----
+    const [globalQuery, setGlobalQuery] = useState('');
+    const debouncedGlobalQuery = useDebounced(globalQuery, 400);
+    const { data: searchResults, isFetching: searching } = useQuery({
+        queryKey: ['wb-search', debouncedGlobalQuery, runId],
+        queryFn: () => api.wbSearch(debouncedGlobalQuery, runId, 1, 10),
+        enabled: debouncedGlobalQuery.length >= 2 && !!runId,
+    });
+
+    // ---- Single-item actions ----
+    const [dialog, setDialog] = useState<null | { action: 'approve' | 'reject' | 'merge' | 'split'; title: string; bulk?: boolean }>(null);
+    const [actionError, setActionError] = useState<string | null>(null);
+    const [mergeTarget, setMergeTarget] = useState<string>('');
+    const [splitCode, setSplitCode] = useState<string>('');
+    const [globalRefInput, setGlobalRefInput] = useState('');
+
+    // ---- Bulk actions ----
+    const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number; failures: string[] } | null>(null);
+
+    const invalidateAll = () => {
+        queryClient.invalidateQueries({ queryKey: ['wb-populations'] });
+        queryClient.invalidateQueries({ queryKey: ['wb-pairs'] });
+        queryClient.invalidateQueries({ queryKey: ['wb-breakdown'] });
+        queryClient.invalidateQueries({ queryKey: ['wb-entities'] });
+        queryClient.invalidateQueries({ queryKey: ['wb-entity-detail'] });
+        queryClient.invalidateQueries({ queryKey: ['wb-entity-matches'] });
+        queryClient.invalidateQueries({ queryKey: ['wb-audit-verify'] });
+    };
+
+    const runBulkPairAction = async (action: 'approve' | 'reject', result: ReasonDialogResult) => {
+        const keys = Array.from(selectedPairKeys);
+        const failures: string[] = [];
+        setBulkProgress({ done: 0, total: keys.length, failures: [] });
+        for (let i = 0; i < keys.length; i++) {
+            const [a, b] = keys[i].split(':::');
+            try {
+                if (action === 'approve') await api.wbApprove(runId, a, b, result.reasonCode, result.reason, result.actor);
+                else await api.wbReject(runId, a, b, result.reasonCode, result.reason, result.actor);
+            } catch (e: any) {
+                failures.push(`${a} : ${b} -- ${e.message || e}`);
+            }
+            setBulkProgress({ done: i + 1, total: keys.length, failures: [...failures] });
+        }
+        setSelectedPairKeys(new Set());
+        invalidateAll();
+    };
+
+    // Bulk merge folds selected entities pairwise into a running survivor.
+    // merge_entities() doesn't always keep the first argument -- it picks
+    // whichever entity has more members -- so the next call's anchor must
+    // be the `kept_entity_id` the previous call actually returned. Halts
+    // (rather than skipping) on the first conflict so the officer sees
+    // exactly which pair needs a manual decision.
+    const runBulkMerge = async (result: ReasonDialogResult) => {
+        const ids = Array.from(selectedEntityIds);
+        if (ids.length < 2) return;
+        const failures: string[] = [];
+        setBulkProgress({ done: 0, total: ids.length - 1, failures: [] });
+        let survivor = ids[0];
+        for (let i = 1; i < ids.length; i++) {
+            try {
+                const res = await api.wbMerge(runId, survivor, ids[i], result.reasonCode, result.reason, result.actor);
+                survivor = res.kept_entity_id;
+            } catch (e: any) {
+                failures.push(`${ids[i]} -- ${e.message || e}`);
+                setBulkProgress({ done: i, total: ids.length - 1, failures: [...failures] });
+                break;
+            }
+            setBulkProgress({ done: i, total: ids.length - 1, failures: [...failures] });
+        }
+        setSelectedEntityIds(new Set());
+        invalidateAll();
+    };
+
+    const runDialogAction = async (result: ReasonDialogResult) => {
+        setActionError(null);
+        try {
+            if (dialog?.bulk && (dialog.action === 'approve' || dialog.action === 'reject')) {
+                await runBulkPairAction(dialog.action, result);
+            } else if (dialog?.bulk && dialog.action === 'merge') {
+                await runBulkMerge(result);
+            } else if (dialog?.action === 'approve' && selectedPair) {
+                await api.wbApprove(runId, selectedPair.a_key, selectedPair.b_key, result.reasonCode, result.reason, result.actor);
+                // Deliberately NOT clearing selectedPair here -- staying on the
+                // pair after approving is what lets the officer actually SEE
+                // their decision took effect (the "Approved by ..." banner and
+                // list badge), instead of the panel just going blank.
+                invalidateAll();
+            } else if (dialog?.action === 'reject' && selectedPair) {
+                await api.wbReject(runId, selectedPair.a_key, selectedPair.b_key, result.reasonCode, result.reason, result.actor);
+                invalidateAll();
+            } else if (dialog?.action === 'merge' && selectedEntity && mergeTarget) {
+                await api.wbMerge(runId, selectedEntity, mergeTarget, result.reasonCode, result.reason, result.actor);
+                setMergeTarget('');
+                invalidateAll();
+            } else if (dialog?.action === 'split' && selectedEntity && splitCode) {
+                await api.wbSplit(runId, selectedEntity, splitCode, result.reasonCode, result.reason, result.actor);
+                setSplitCode('');
+                invalidateAll();
+            }
+        } catch (e: any) {
+            setActionError(String(e.message || e));
+        } finally {
+            setDialog(null);
+        }
+    };
+
+    const assignGlobalRef = async () => {
+        if (!selectedEntity || !globalRefInput.trim()) return;
+        const actor = localStorage.getItem('wb_actor') || 'officer';
+        try {
+            setActionError(null);
+            await api.wbAssignGlobalRef(selectedEntity, globalRefInput.trim(), 'CONFIRMED', 'Assigned via workbench', actor);
+            setGlobalRefInput('');
+            invalidateAll();
+        } catch (e: any) {
+            setActionError(String(e.message || e));
+        }
+    };
+
+    const totalPairs = pairsData?.total ?? 0;
+    const totalEntities = entitiesData?.total ?? 0;
+    const totalOverrides = overridesData?.total ?? 0;
+    const totalPages = Math.max(1, Math.ceil(
+        (population === 'ENTITIES' ? totalEntities : population === 'APPROVED' ? totalOverrides : totalPairs) / PAGE_SIZE
+    ));
+
+    return (
+        <div className="space-y-6">
+            <div className="flex flex-wrap justify-between items-center gap-4">
+                <div>
+                    <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Entity Resolution Workbench</h1>
+                    <p className="text-gray-600 dark:text-gray-400 mt-1 text-sm">
+                        Every population, one place -- rule-by-rule scoring, durable Global IDs, full audit trail.
+                    </p>
+                </div>
+                <div className="flex items-center gap-3">
+                    {auditStatus && (
+                        <span className={`badge gap-1 ${auditStatus.valid ? 'badge-success' : 'badge-danger'}`} title={auditStatus.error || 'Audit chain integrity'}>
+                            {auditStatus.valid ? <ShieldCheck size={12} /> : <ShieldAlert size={12} />}
+                            {auditStatus.valid ? 'Audit chain verified' : 'Audit chain FAILED'}
+                        </span>
+                    )}
+                    <select value={runId} onChange={(e) => setRunId(e.target.value)} className="text-sm py-2">
+                        <option value="">Select a run...</option>
+                        {completedRuns.map((r: any) => (
+                            <option key={r.run_id} value={r.run_id}>
+                                {r.engine} · {r.run_id.slice(0, 8)} · {new Date(r.started_at).toLocaleString()}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+            </div>
+
+            {/* Global search */}
+            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-4">
+                <div className="relative">
+                    <SearchIcon size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input
+                        value={globalQuery} onChange={(e) => setGlobalQuery(e.target.value)}
+                        placeholder="Search by name, identifier, customer code, or Global ID..."
+                        className="w-full text-sm" style={{ paddingLeft: '2.25rem' }}
+                    />
+                </div>
+                {searching && <p className="text-xs text-gray-400 mt-2">Searching...</p>}
+                {searchResults && searchResults.results?.length > 0 && (
+                    <div className="mt-3 space-y-1 max-h-56 overflow-y-auto">
+                        {searchResults.results.map((r: any) => (
+                            <button
+                                key={r.customer_code}
+                                onClick={async () => {
+                                    const rec = await api.wbGetRecord(r.customer_code, runId);
+                                    if (rec.entity_id) jumpToEntity(rec.entity_id);
+                                }}
+                                className="w-full flex justify-between text-xs p-2 rounded bg-gray-50 dark:bg-gray-900/50 hover:bg-gray-100 dark:hover:bg-gray-800 text-left"
+                            >
+                                <span className="font-mono">{r.customer_code}</span>
+                                <span className="text-gray-600 dark:text-gray-300">{r.name_norm || '—'}</span>
+                            </button>
+                        ))}
+                    </div>
+                )}
+            </motion.div>
+
+            {navStack.length > 0 && (
+                <button
+                    onClick={goBack}
+                    className="flex items-center gap-1.5 text-sm text-blue-600 dark:text-blue-400 hover:underline w-fit"
+                >
+                    <ArrowLeft size={14} /> Back to {navStack[navStack.length - 1].label}
+                </button>
+            )}
+
+            {/* Population cards */}
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                <PopCard label="Needs Review" count={populations?.needs_review} active={population === 'REVIEW'} icon={AlertTriangle} accent="text-amber-500" onClick={() => { setNavStack([]); setPopulation('REVIEW'); }} />
+                <PopCard label="Auto-Linked" count={populations?.auto_linked} active={population === 'AUTO_LINK'} icon={GitMerge} accent="text-emerald-500" onClick={() => { setNavStack([]); setPopulation('AUTO_LINK'); }} />
+                <PopCard label="Rejected" count={populations?.rejected} active={population === 'REJECT'} icon={XCircle} accent="text-gray-400" onClick={() => { setNavStack([]); setPopulation('REJECT'); }} />
+                <PopCard label="Entities" count={populations?.entities} active={population === 'ENTITIES'} icon={Users} accent="text-blue-500" onClick={() => { setNavStack([]); setPopulation('ENTITIES'); }} />
+                <PopCard label="Approved" count={approvedCountData?.total} active={population === 'APPROVED'} icon={CheckCircle2} accent="text-emerald-500" onClick={() => { setNavStack([]); setPopulation('APPROVED'); }} />
+            </div>
+            <div className="grid grid-cols-3 gap-3 text-xs text-gray-500 dark:text-gray-400">
+                <div>Singletons: <span className="font-semibold text-gray-700 dark:text-gray-300">{populations?.singletons?.toLocaleString() ?? '…'}</span></div>
+                <div>With Global ID: <span className="font-semibold text-gray-700 dark:text-gray-300">{populations?.entities_with_global_ref?.toLocaleString() ?? '…'}</span></div>
+                <div className={populations?.global_ref_conflicts ? 'text-red-500 font-semibold' : ''}>Global ID conflicts: {populations?.global_ref_conflicts ?? '…'}</div>
+            </div>
+
+            {/* Filters */}
+            {population === 'ENTITIES' ? (
+                <FilterBar mode="entities" value={entityFilters} onChange={setEntityFilters} />
+            ) : population === 'APPROVED' ? (
+                <div className="flex gap-1.5">
+                    <button
+                        onClick={() => setOverrideVerdict('MUST_LINK')}
+                        className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${overrideVerdict === 'MUST_LINK' ? 'bg-blue-600 text-white shadow-sm' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
+                    >
+                        Approved
+                    </button>
+                    <button
+                        onClick={() => setOverrideVerdict('MUST_NOT_LINK')}
+                        className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${overrideVerdict === 'MUST_NOT_LINK' ? 'bg-blue-600 text-white shadow-sm' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
+                    >
+                        Rejected
+                    </button>
+                </div>
+            ) : (
+                <FilterBar mode="pairs" value={pairFilters} onChange={setPairFilters} />
+            )}
+
+            {actionError && (
+                <div className="text-sm p-3 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300">{actionError}</div>
+            )}
+            {!runId && (
+                <div className="flex items-center gap-2 text-sm p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300">
+                    <AlertTriangle size={16} /> Select a completed run above.
+                </div>
+            )}
+
+            {/* Bulk toolbar */}
+            {population !== 'ENTITIES' && selectedPairKeys.size > 0 && (
+                <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 text-sm">
+                    <span className="text-blue-700 dark:text-blue-300">
+                        {selectedPairKeys.size} selected{selectedPairKeys.size >= BULK_SELECTION_CAP ? ` (cap ${BULK_SELECTION_CAP})` : ''}
+                    </span>
+                    <div className="flex gap-2">
+                        <button onClick={() => setSelectedPairKeys(new Set())} className="btn btn-ghost !py-1 !px-2 text-xs">Clear</button>
+                        <button onClick={() => setDialog({ action: 'reject', title: `Reject ${selectedPairKeys.size} matches`, bulk: true })} className="btn btn-ghost !py-1 !px-2 text-xs text-red-600">Bulk reject</button>
+                        <button onClick={() => setDialog({ action: 'approve', title: `Approve ${selectedPairKeys.size} matches`, bulk: true })} className="btn btn-primary !py-1 !px-2 text-xs">Bulk approve</button>
+                    </div>
+                </div>
+            )}
+            {population === 'ENTITIES' && selectedEntityIds.size > 0 && (
+                <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 text-sm">
+                    <span className="text-blue-700 dark:text-blue-300">
+                        {selectedEntityIds.size} selected{selectedEntityIds.size >= BULK_SELECTION_CAP ? ` (cap ${BULK_SELECTION_CAP})` : ''}
+                    </span>
+                    <div className="flex gap-2">
+                        <button onClick={() => setSelectedEntityIds(new Set())} className="btn btn-ghost !py-1 !px-2 text-xs">Clear</button>
+                        <button
+                            onClick={() => setDialog({ action: 'merge', title: `Merge ${selectedEntityIds.size} entities`, bulk: true })}
+                            disabled={selectedEntityIds.size < 2}
+                            className="btn btn-primary !py-1 !px-2 text-xs disabled:opacity-40"
+                        >
+                            Merge selected
+                        </button>
+                    </div>
+                </div>
+            )}
+            {bulkProgress && (
+                <div className="p-3 rounded-lg bg-gray-50 dark:bg-gray-900/40 text-xs space-y-1">
+                    <div className="flex items-center justify-between">
+                        <span className="text-gray-600 dark:text-gray-300">
+                            {bulkProgress.done < bulkProgress.total ? 'Working...' : 'Done'} -- {bulkProgress.done}/{bulkProgress.total}
+                        </span>
+                        {bulkProgress.done >= bulkProgress.total && (
+                            <button onClick={() => setBulkProgress(null)} className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">Dismiss</button>
+                        )}
+                    </div>
+                    {bulkProgress.failures.length > 0 && (
+                        <div className="text-red-500">
+                            {bulkProgress.failures.length} failed:
+                            <ul className="list-disc list-inside">
+                                {bulkProgress.failures.map((f, i) => <li key={i}>{f}</li>)}
+                            </ul>
                         </div>
                     )}
                 </div>
+            )}
+
+            <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+                {/* List */}
+                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-6 lg:col-span-2">
+                    <div className="flex items-center justify-between mb-4">
+                        <h2 className="font-semibold text-gray-900 dark:text-white">
+                            {population === 'ENTITIES' ? 'Entities' : population.replace('_', ' ')}
+                        </h2>
+                        {population !== 'ENTITIES' && population !== 'APPROVED' && (pairsData?.items || []).length > 0 && (
+                            <label className="flex items-center gap-1.5 text-[11px] text-gray-400 cursor-pointer select-none">
+                                <input
+                                    type="checkbox"
+                                    className="w-3.5 h-3.5"
+                                    checked={(pairsData!.items as any[]).every((p) => selectedPairKeys.has(`${p.a_key}:::${p.b_key}`))}
+                                    onChange={(e) => {
+                                        const keys = (pairsData!.items as any[]).map((p) => `${p.a_key}:::${p.b_key}`);
+                                        setSelectedPairKeys((prev) => {
+                                            const next = new Set(prev);
+                                            if (e.target.checked) keys.forEach((k) => next.size < BULK_SELECTION_CAP && next.add(k));
+                                            else keys.forEach((k) => next.delete(k));
+                                            return next;
+                                        });
+                                    }}
+                                />
+                                Select page
+                            </label>
+                        )}
+                        {population === 'ENTITIES' && (entitiesData?.items || []).length > 0 && (
+                            <label className="flex items-center gap-1.5 text-[11px] text-gray-400 cursor-pointer select-none">
+                                <input
+                                    type="checkbox"
+                                    className="w-3.5 h-3.5"
+                                    checked={(entitiesData!.items as any[]).every((e) => selectedEntityIds.has(e.entity_id))}
+                                    onChange={(e) => {
+                                        const ids = (entitiesData!.items as any[]).map((it) => it.entity_id);
+                                        setSelectedEntityIds((prev) => {
+                                            const next = new Set(prev);
+                                            if (e.target.checked) ids.forEach((id) => next.size < BULK_SELECTION_CAP && next.add(id));
+                                            else ids.forEach((id) => next.delete(id));
+                                            return next;
+                                        });
+                                    }}
+                                />
+                                Select page
+                            </label>
+                        )}
+                    </div>
+
+                    {population === 'APPROVED' ? (
+                        <div className="space-y-1.5 max-h-[520px] overflow-y-auto">
+                            {overridesLoading && <p className="text-xs text-gray-400">Loading...</p>}
+                            {!overridesLoading && (overridesData?.items || []).length === 0 && (
+                                <p className="text-xs text-gray-400">No {overrideVerdict === 'MUST_LINK' ? 'approved' : 'rejected'} decisions yet.</p>
+                            )}
+                            {(overridesData?.items || []).map((it: any) => {
+                                const isSelected = selectedPair?.a_key === it.a_code && selectedPair?.b_key === it.b_code;
+                                return (
+                                    <div
+                                        key={it.override_id}
+                                        role="button"
+                                        tabIndex={0}
+                                        onClick={() => setSelectedPair({ a_key: it.a_code, b_key: it.b_code })}
+                                        className={`w-full text-left p-2.5 rounded-lg border text-xs transition-colors cursor-pointer ${
+                                            isSelected ? 'border-blue-400 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900/40'
+                                        }`}
+                                    >
+                                        <div className="flex justify-between items-center">
+                                            <span className="font-medium text-gray-900 dark:text-white truncate">{it.a_name || it.a_code} ↔ {it.b_name || it.b_code}</span>
+                                            {it.verdict === 'MUST_LINK' ? (
+                                                <span className="flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400 shrink-0"><CheckCircle2 size={11} /> Approved</span>
+                                            ) : (
+                                                <span className="flex items-center gap-0.5 text-red-500 shrink-0"><XCircle size={11} /> Rejected</span>
+                                            )}
+                                        </div>
+                                        <div className="text-gray-400 font-mono mt-0.5">{it.a_code} · {it.b_code}</div>
+                                        <div className="text-gray-500 dark:text-gray-400 mt-0.5">
+                                            by {it.actor} · {new Date(it.created_at).toLocaleDateString()}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    ) : population !== 'ENTITIES' ? (
+                        <div className="space-y-1.5 max-h-[520px] overflow-y-auto">
+                            {pairsLoading && <p className="text-xs text-gray-400">Loading...</p>}
+                            {!pairsLoading && (pairsData?.items || []).length === 0 && <p className="text-xs text-gray-400">No pairs match these filters.</p>}
+                            {(pairsData?.items || []).map((p: any) => {
+                                const key = `${p.a_key}:::${p.b_key}`;
+                                const isSelected = selectedPair?.a_key === p.a_key && selectedPair?.b_key === p.b_key;
+                                return (
+                                    <div
+                                        key={key}
+                                        role="button"
+                                        tabIndex={0}
+                                        onClick={() => setSelectedPair({ a_key: p.a_key, b_key: p.b_key })}
+                                        className={`w-full text-left p-2.5 rounded-lg border text-xs transition-colors cursor-pointer flex items-start gap-2 ${
+                                            isSelected ? 'border-blue-400 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900/40'
+                                        }`}
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            className="mt-0.5 w-3.5 h-3.5 shrink-0"
+                                            checked={selectedPairKeys.has(key)}
+                                            onClick={(e) => e.stopPropagation()}
+                                            onChange={() => setSelectedPairKeys((prev) => toggleInSet(prev, key))}
+                                        />
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex justify-between items-center">
+                                                <span className="font-medium text-gray-900 dark:text-white truncate">{p.a_name || p.a_key} ↔ {p.b_name || p.b_key}</span>
+                                                <span className={`font-mono ${p.has_veto ? 'text-red-500' : 'text-gray-600 dark:text-gray-300'}`}>{p.confidence_pct.toFixed(0)}%</span>
+                                            </div>
+                                            <div className="flex items-center justify-between mt-0.5">
+                                                <span className="text-gray-400 font-mono">{p.a_key} · {p.b_key}</span>
+                                                {p.officer_verdict === 'MUST_LINK' && (
+                                                    <span className="flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400"><CheckCircle2 size={11} /> Approved</span>
+                                                )}
+                                                {p.officer_verdict === 'MUST_NOT_LINK' && (
+                                                    <span className="flex items-center gap-0.5 text-red-500"><XCircle size={11} /> Rejected</span>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    ) : (
+                        <div className="space-y-1.5 max-h-[520px] overflow-y-auto">
+                            {entitiesLoading && <p className="text-xs text-gray-400">Loading...</p>}
+                            {!entitiesLoading && (entitiesData?.items || []).length === 0 && <p className="text-xs text-gray-400">No entities match these filters.</p>}
+                            {(entitiesData?.items || []).map((e: any) => {
+                                const TypeIcon = e.record_type_preview === 'COMPANY' ? Building2 : UserIcon;
+                                return (
+                                    <div
+                                        key={e.entity_id}
+                                        role="button"
+                                        tabIndex={0}
+                                        onClick={() => setSelectedEntity(e.entity_id)}
+                                        className={`w-full text-left p-2.5 rounded-lg border text-xs transition-colors cursor-pointer flex items-start gap-2 ${
+                                            selectedEntity === e.entity_id ? 'border-blue-400 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900/40'
+                                        }`}
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            className="mt-0.5 w-3.5 h-3.5 shrink-0"
+                                            checked={selectedEntityIds.has(e.entity_id)}
+                                            onClick={(ev) => ev.stopPropagation()}
+                                            onChange={() => setSelectedEntityIds((prev) => toggleInSet(prev, e.entity_id))}
+                                        />
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex justify-between items-center gap-2">
+                                                <span className="font-medium text-gray-900 dark:text-white truncate">
+                                                    {(e.member_names_preview || []).join(', ') || `(${e.entity_id.slice(0, 8)})`}
+                                                    {e.member_count > (e.member_names_preview || []).length && (
+                                                        <span className="text-gray-400"> +{e.member_count - e.member_names_preview.length} more</span>
+                                                    )}
+                                                </span>
+                                                {e.record_type_preview && <TypeIcon size={12} className="text-gray-400 shrink-0" />}
+                                            </div>
+                                            <div className="flex justify-between items-center mt-0.5">
+                                                <span className="font-mono text-gray-400">{e.entity_id.slice(0, 8)}</span>
+                                                <span className="text-gray-500 dark:text-gray-400">{e.member_count} member{e.member_count === 1 ? '' : 's'}</span>
+                                            </div>
+                                            {e.global_ref && (
+                                                <div className="flex items-center gap-1 mt-1 text-emerald-600 dark:text-emerald-400">
+                                                    <IdCard size={11} /> {e.global_ref} <span className="text-gray-400">({e.global_ref_state})</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+
+                    <div className="flex justify-between items-center mt-4 pt-3 border-t border-gray-200 dark:border-gray-700 text-xs">
+                        <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1} className="btn btn-ghost !py-1 !px-2 disabled:opacity-30">Previous</button>
+                        <span className="text-gray-400">Page {page} of {totalPages.toLocaleString()}</span>
+                        <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages} className="btn btn-ghost !py-1 !px-2 disabled:opacity-30">Next</button>
+                    </div>
+                </motion.div>
+
+                {/* Detail */}
+                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }} className="glass-card p-6 lg:col-span-3">
+                    {population !== 'ENTITIES' ? (
+                        selectedPair ? (
+                            <>
+                                <div className="flex items-center justify-between mb-4">
+                                    <h2 className="font-semibold text-gray-900 dark:text-white">Side-by-side comparison</h2>
+                                    {!breakdown?.officer_verdict && (
+                                        <div className="flex gap-2">
+                                            <button onClick={() => setDialog({ action: 'reject', title: 'Reject this match' })} className="btn btn-ghost !py-1.5 !px-3 text-xs gap-1 text-red-600">
+                                                <XCircle size={14} /> Reject
+                                            </button>
+                                            <button onClick={() => setDialog({ action: 'approve', title: 'Approve this match' })} className="btn btn-primary !py-1.5 !px-3 text-xs gap-1">
+                                                <CheckCircle2 size={14} /> Approve
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                                {breakdown?.officer_verdict && (
+                                    <div className={`flex items-start gap-2 p-3 rounded-lg text-xs mb-4 ${
+                                        breakdown.officer_verdict === 'MUST_LINK' ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300' : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300'
+                                    }`}>
+                                        {breakdown.officer_verdict === 'MUST_LINK' ? <CheckCircle2 size={14} className="mt-0.5 shrink-0" /> : <XCircle size={14} className="mt-0.5 shrink-0" />}
+                                        <div className="flex-1">
+                                            <div className="font-semibold">
+                                                {breakdown.officer_verdict === 'MUST_LINK' ? 'Approved' : 'Rejected'} by {breakdown.officer_actor} on {new Date(breakdown.officer_decided_at).toLocaleString()}
+                                            </div>
+                                            <div className="opacity-90">"{breakdown.officer_reason}"</div>
+                                            {breakdown.officer_verdict === 'MUST_LINK' && (
+                                                <div className="opacity-90 mt-1">
+                                                    Both records have already been merged into one entity{breakdown.officer_entity_id ? ' -- ready for a Global ID.' : '.'}
+                                                </div>
+                                            )}
+                                            <div className="opacity-75 mt-1">
+                                                This run's own stored score/decision above is never rewritten (that would falsify history) -- but the entity registry and clustering are already updated, and this verdict is re-applied on every future pipeline run too.
+                                            </div>
+                                            {breakdown.officer_entity_id && (
+                                                <button
+                                                    onClick={() => jumpToEntity(breakdown.officer_entity_id)}
+                                                    className="flex items-center gap-1 mt-2 font-semibold hover:underline"
+                                                >
+                                                    View merged entity <ArrowLeft size={11} className="rotate-180" />
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+                                <RecordCompare recordA={recordA || null} recordB={recordB || null} contributions={breakdown?.contributions || []} onViewEntity={jumpToEntity} />
+                                <h3 className="font-semibold text-gray-900 dark:text-white mt-6 mb-3 text-sm">Why this score</h3>
+                                <ScoreBreakdown breakdown={breakdown || null} loading={breakdownLoading} />
+                            </>
+                        ) : (
+                            <p className="text-xs text-gray-400">Select a pair to compare both records and see the score breakdown.</p>
+                        )
+                    ) : entityDetail ? (
+                        <div className="space-y-5">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <h2 className="font-semibold text-gray-900 dark:text-white font-mono text-sm">{entityDetail.entity_id}</h2>
+                                    <span className="badge badge-info !text-[10px] mt-1">{entityDetail.status}</span>
+                                </div>
+                                {entityDetail.status === 'MERGED' && (
+                                    <span className="text-xs text-gray-400">Merged into {entityDetail.merged_into_entity_id?.slice(0, 8)}</span>
+                                )}
+                            </div>
+
+                            <div>
+                                <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Global ID</h3>
+                                {entityDetail.global_ref ? (
+                                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-900/20">
+                                        <span className="font-mono text-emerald-700 dark:text-emerald-300">{entityDetail.global_ref}</span>
+                                        <span className="badge badge-success !text-[10px]">{entityDetail.global_ref_state}</span>
+                                    </div>
+                                ) : (
+                                    <div className="flex gap-2">
+                                        <input value={globalRefInput} onChange={(e) => setGlobalRefInput(e.target.value)} placeholder="e.g. CIF-0012345" className="flex-1 text-xs py-1.5" />
+                                        <button onClick={assignGlobalRef} disabled={!globalRefInput.trim()} className="btn btn-primary !py-1.5 !px-3 text-xs disabled:opacity-40">Assign</button>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div>
+                                <div className="flex items-center justify-between mb-2">
+                                    <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Match evidence -- why this is one cluster</h3>
+                                    {entityMatches && (
+                                        <span className="text-[10px] text-gray-400">
+                                            {entityMatches.directly_evidenced_pairs} of {entityMatches.possible_pairs} possible pairs directly compared
+                                        </span>
+                                    )}
+                                </div>
+                                {entityMatchesLoading && <p className="text-xs text-gray-400">Loading match evidence...</p>}
+                                {entityMatches && entityMatches.items.length === 0 && (
+                                    <p className="text-xs text-gray-400">No directly-scored pairs found for this run -- this entity was likely carried forward from an earlier run.</p>
+                                )}
+                                {entityMatches && entityMatches.items.length > 0 && (
+                                    <>
+                                        {entityMatches.possible_pairs > entityMatches.directly_evidenced_pairs && (
+                                            <p className="text-[11px] text-amber-600 dark:text-amber-400 mb-2">
+                                                {entityMatches.possible_pairs - entityMatches.directly_evidenced_pairs} member pair(s) were never directly compared -- connected only transitively through another member.
+                                            </p>
+                                        )}
+                                        <div className="space-y-1 max-h-64 overflow-y-auto">
+                                            {entityMatches.items.map((it: any) => {
+                                                const key = `${it.a_key}:::${it.b_key}`;
+                                                return (
+                                                    <EntityMatchRow
+                                                        key={key}
+                                                        item={it}
+                                                        runId={runId}
+                                                        expanded={expandedMatchKey === key}
+                                                        onToggle={() => setExpandedMatchKey((prev) => (prev === key ? null : key))}
+                                                    />
+                                                );
+                                            })}
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+
+                            <div>
+                                <div className="flex items-center justify-between mb-2">
+                                    <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Members ({entityDetail.members.length})</h3>
+                                    <span className="text-[10px] text-gray-400">Click a member to see full details</span>
+                                </div>
+                                <div className="space-y-1">
+                                    {entityDetail.members.map((m: any) => (
+                                        <MemberRow
+                                            key={m.customer_code}
+                                            member={m}
+                                            runId={runId}
+                                            expanded={expandedMember === m.customer_code}
+                                            onToggle={() => setExpandedMember((prev) => (prev === m.customer_code ? null : m.customer_code))}
+                                            canSplit={entityDetail.members.length > 1}
+                                            onSplit={() => { setSplitCode(m.customer_code); setDialog({ action: 'split', title: `Split ${m.customer_code} out` }); }}
+                                        />
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div>
+                                <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Merge with another entity</h3>
+                                <div className="flex gap-2">
+                                    <input value={mergeTarget} onChange={(e) => setMergeTarget(e.target.value)} placeholder="Target entity ID" className="flex-1 text-xs py-1.5 font-mono" />
+                                    <button
+                                        onClick={() => setDialog({ action: 'merge', title: 'Merge entities' })}
+                                        disabled={!mergeTarget.trim()}
+                                        className="btn btn-ghost !py-1.5 !px-3 text-xs gap-1 disabled:opacity-40"
+                                    >
+                                        <GitBranch size={13} /> Merge
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div>
+                                <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-1">
+                                    <History size={12} /> Lineage
+                                </h3>
+                                <div className="space-y-1 max-h-48 overflow-y-auto">
+                                    {entityDetail.lineage.map((l: any, i: number) => (
+                                        <div key={i} className="text-[11px] p-2 rounded bg-gray-50 dark:bg-gray-900/40">
+                                            <span className="font-semibold text-gray-700 dark:text-gray-300">{l.event}</span>
+                                            {l.jaccard != null && <span className="text-gray-400"> · J={l.jaccard.toFixed(2)}</span>}
+                                            <span className="text-gray-400"> · {l.actor} · {new Date(l.created_at).toLocaleString()}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    ) : (
+                        <p className="text-xs text-gray-400">{entityDetailLoading ? 'Loading...' : 'Select an entity to see its detail.'}</p>
+                    )}
+                </motion.div>
             </div>
 
-            {/* Completed Reviews */}
-            <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-6 shadow-sm dark:shadow-none">
-                <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Recently Reviewed</h2>
-                <div className="overflow-x-auto">
-                    <table className="w-full">
-                        <thead>
-                            <tr className="text-left text-gray-500 dark:text-gray-400 text-sm border-b border-gray-200 dark:border-gray-700">
-                                <th className="pb-3">Pair</th>
-                                <th className="pb-3">Score</th>
-                                <th className="pb-3">Decision</th>
-                                <th className="pb-3">Reviewer</th>
-                                <th className="pb-3">Reason</th>
-                            </tr>
-                        </thead>
-                        <tbody className="text-gray-700 dark:text-gray-300">
-                            {recentlyReviewed.map((item) => (
-                                <tr key={item.review_id} className="border-b border-gray-100 dark:border-gray-800">
-                                    <td className="py-3 text-sm truncate max-w-[220px]">
-                                        {getDisplayName(item, 'a')} ↔ {getDisplayName(item, 'b')}
-                                    </td>
-                                    <td className="py-3">
-                                        <span className={getScoreColor(item.score)}>
-                                            {(item.score * 100).toFixed(0)}%
-                                        </span>
-                                    </td>
-                                    <td className="py-3">
-                                        <span className={`px-2 py-1 rounded text-xs ${item.status === 'APPROVED'
-                                            ? 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-400'
-                                            : 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-400'
-                                            }`}>
-                                            {item.status}
-                                        </span>
-                                    </td>
-                                    <td className="py-3">{item.reviewer || '—'}</td>
-                                    <td className="py-3 text-gray-500 dark:text-gray-400 text-sm max-w-[200px] truncate">
-                                        {item.review_reason || '—'}
-                                    </td>
-                                </tr>
-                            ))}
-                            {recentlyReviewed.length === 0 && (
-                                <tr>
-                                    <td colSpan={5} className="py-8 text-center text-gray-500 dark:text-gray-500">
-                                        No reviews completed yet
-                                    </td>
-                                </tr>
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+            {dialog && (
+                <ReasonDialog
+                    title={dialog.title}
+                    action={dialog.action}
+                    onCancel={() => setDialog(null)}
+                    onConfirm={runDialogAction}
+                />
+            )}
         </div>
     );
 }

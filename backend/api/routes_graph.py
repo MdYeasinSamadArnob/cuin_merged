@@ -307,89 +307,75 @@ async def preview_clustering(request: PreviewRequest):
     )
 
 
-# Real Data Lookup (Neo4j + Orchestrator + CSV Fallback)
-def get_record_profile(rid: str, run_records: Optional[dict] = None, run_id: Optional[str] = None):
-    # 1. Try In-Memory Run Records (Fastest, most accurate for current run)
-    if run_records and rid in run_records:
-        r = run_records[rid]
-        # Ensure flat structure for frontend
-        return {
-            "customer_key": rid,
-            "source_customer_id": r.get('source_customer_id', rid),
-            "name": r.get('name_norm', r.get('name', 'Unknown')),
-            "name_norm": r.get('name_norm', ''),
-            "product": r.get('product', 'Unknown'), # Might not be in norm
-            "riskLevel": r.get('risk_level', 'Low'),
-            "balance": r.get('balance', '0.00'),
-            "email": r.get('email_norm', r.get('email', 'N/A')),
-            "email_norm": r.get('email_norm', ''),
-            "phone": r.get('phone_norm', r.get('phone', 'N/A')),
-            "phone_norm": r.get('phone_norm', ''),
-            "dob_norm": r.get('dob_norm', ''),
-            "address_norm": r.get('address_norm', ''),
-            "city": r.get('city_norm', r.get('city', '')),
-            "status": r.get('status', 'ACT'),
-            "kycStatus": "VERIFIED" if r.get('status', 'ACT') == 'ACT' else "PENDING",
-            "metadata": r.get('metadata', {})
-        }
-    
-    # 1.5 Try Disk (Persistence Fallback)
-    # If run_records is missing or empty, try to load from file
-    if run_id and (not run_records or rid not in run_records):
+# Cache of {run_id: {customer_key: record_dict}} loaded from
+# data/runs/{run_id}_records.json, so the tier-2 disk fallback below
+# (used by every get_record_profile() call whose caller didn't already
+# preload run_records) reads each run's file at most once per process,
+# not once per record in a loop -- the exact performance concern the
+# previous version of this function's comments raised, but never
+# actually implemented. Unbounded but small in practice: one entry per
+# run touched this process's lifetime, a few tens of MB each.
+_run_records_disk_cache: dict = {}
+
+
+def _load_run_records_from_disk(run_id: str) -> dict:
+    if run_id in _run_records_disk_cache:
+        return _run_records_disk_cache[run_id]
+    records = {}
+    file_path = f"data/runs/{run_id}_records.json"
+    if os.path.exists(file_path):
         try:
-            file_path = f'data/runs/{run_id}_records.json'
-            if os.path.exists(file_path):
-                # We don't want to load the whole file for every record call if we can avoid it.
-                # Ideally, the caller should have loaded it.
-                # But as a fallback, we can try to load it into a cache or just read it.
-                # Since we can't easily cache here without global state, we'll rely on the caller
-                # to populate run_records if possible.
-                # However, if the caller failed, we can try to load it ONCE.
-                # NOTE: This function is called in a loop. Loading file here is bad performance.
-                # We will rely on the caller to load the file into run_records.
-                pass
+            with open(file_path) as f:
+                records = json.load(f)
         except Exception:
-            pass
+            logger.warning(f"Failed to load run records from {file_path}", exc_info=True)
+    _run_records_disk_cache[run_id] = records
+    return records
 
-    # 2. Try Mock Data (0005xxxx)
-    if rid.startswith('0005') or rid.startswith('50') or rid.startswith('DUP'):
-        # Deterministic Mock Data
-        import random
-        # Seed with ID for consistency
-        random.seed(rid)
-        
-        # Base names
-        names = ["GOLAM MOHD ZUBAYED A SHRAF", "SK MAHBUBLLAH KAISA", "MD MOHI UDDIN", "KAZI MASIHUR RAHMAN"]
-        # Assign name based on ID hash
-        name_idx = hash(rid) % len(names)
-        base_name = names[name_idx]
-        
-        # Introduce slight variations for duplicates
-        if "DUP" in rid:
-            # Simple typo or extra space
-            if random.random() > 0.5:
-                base_name = base_name.replace("A ", "A")
-            else:
-                base_name = base_name + " "
-        
-        return {
-            "customer_key": rid,
-            "source_customer_id": rid,
-            "name": base_name,
-            "name_norm": base_name.upper().strip(), # Normalized version
-            "product": random.choice(["Savings", "Current", "Credit Card"]),
-            "riskLevel": random.choice(["Low", "Medium", "High"]),
-            "balance": f"{random.randint(1000, 50000)}.00",
-            "email": f"user_{rid}@example.com",
-            "email_norm": f"user_{rid}@example.com".upper(),
-            "phone": f"+8801{random.randint(10000000, 99999999)}",
-            "phone_norm": f"8801{random.randint(10000000, 99999999)}", # Normalized
-            "status": "ACT",
-            "kycStatus": "VERIFIED",
-            "metadata": {"generated": True}
-        }
 
-    # 3. Fallback to Neo4j (Placeholder)
+def _format_record_profile(rid: str, r: dict) -> dict:
+    return {
+        "customer_key": rid,
+        "source_customer_id": r.get('source_customer_id', rid),
+        "name": r.get('name_norm', r.get('name', 'Unknown')),
+        "name_norm": r.get('name_norm', ''),
+        "product": r.get('product', 'Unknown'), # Might not be in norm
+        "riskLevel": r.get('risk_level', 'Low'),
+        "balance": r.get('balance', '0.00'),
+        "email": r.get('email_norm', r.get('email', 'N/A')),
+        "email_norm": r.get('email_norm', ''),
+        "phone": r.get('phone_norm', r.get('phone', 'N/A')),
+        "phone_norm": r.get('phone_norm', ''),
+        "dob_norm": r.get('dob_norm', ''),
+        "address_norm": r.get('address_norm', ''),
+        "city": r.get('city_norm', r.get('city', '')),
+        "status": r.get('status', 'ACT'),
+        "kycStatus": "VERIFIED" if r.get('status', 'ACT') == 'ACT' else "PENDING",
+        "metadata": r.get('metadata', {}),
+        "resolved": True,
+    }
+
+
+# Real Data Lookup (in-memory run records -> per-run disk cache -> explicit "not found").
+#
+# A mock-data branch used to live here: any record id starting
+# "0005"/"50"/"DUP" got a randomly-generated fake name/balance/product,
+# seeded by rid so it looked "deterministic". Verified live against
+# production data that 9,059 REAL customers match that pattern (e.g.
+# "00050002" is genuinely "MDTANVIR RAHMAN") -- meaning a bank officer
+# reviewing those records could have merged entities based on entirely
+# invented identity data. Deleted outright: this function must never
+# return data it did not read from somewhere real.
+def get_record_profile(rid: str, run_records: Optional[dict] = None, run_id: Optional[str] = None):
+    if run_records and rid in run_records:
+        return _format_record_profile(rid, run_records[rid])
+
+    if run_id:
+        disk_records = _load_run_records_from_disk(run_id)
+        if rid in disk_records:
+            return _format_record_profile(rid, disk_records[rid])
+
+    # Genuinely not found in this run's records -- explicit, not fabricated.
     short_id = rid[:8] + "..." if len(rid) > 8 else rid
     return {
         "customer_key": rid,
@@ -397,7 +383,8 @@ def get_record_profile(rid: str, run_records: Optional[dict] = None, run_id: Opt
         "name": f"Unknown ({short_id})",
         "name_norm": f"UNKNOWN ({short_id})",
         "status": "Incomplete",
-        "kycStatus": "PENDING"
+        "kycStatus": "PENDING",
+        "resolved": False,
     }
 
 

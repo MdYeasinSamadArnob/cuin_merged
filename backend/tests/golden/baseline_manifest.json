@@ -1,15 +1,34 @@
 {
-  "captured_from_run_id": "f926c7c2-7e0b-4e39-8182-d13febfa7154",
-  "captured_from_engine": "duckdb",
-  "captured_at": "2026-07-31T08:22:51.946190+00:00",
-  "note": "Stage 0: canonical fingerprint after sorting evidence.py's arrays to match evidence_dialect.py -- first cross-engine-equal baseline",
-  "counts": {
-    "candidate_pairs": 549879,
-    "auto_link": 80809,
-    "review": 190182,
-    "reject": 278888,
-    "clusters": 53910
-  },
-  "output_fingerprint": "5e79284a16943e17fe0c6152309ece19b8ea9571407b072ae32a435e77ae9f1b",
-  "ruleset_version": "er-2026.07.1"
+  "baselines": {
+    "segmentation_off": {
+      "captured_from_run_id": "f926c7c2-7e0b-4e39-8182-d13febfa7154",
+      "captured_from_engine": "duckdb",
+      "captured_at": "2026-07-31T14:08:58.448345+00:00",
+      "note": "Stage 0 of workbench plan: re-migrated to named-baseline manifest schema; unchanged from the original single-baseline capture",
+      "counts": {
+        "candidate_pairs": 549879,
+        "auto_link": 80809,
+        "review": 190182,
+        "reject": 278888,
+        "clusters": 53910
+      },
+      "output_fingerprint": "5e79284a16943e17fe0c6152309ece19b8ea9571407b072ae32a435e77ae9f1b",
+      "ruleset_version": "er-2026.07.1"
+    },
+    "active_policy_v4": {
+      "captured_from_run_id": "93d88bc8-ff2e-4bf3-97ef-a250463f7dab",
+      "captured_from_engine": "duckdb",
+      "captured_at": "2026-07-31T14:09:11.227495+00:00",
+      "note": "Active policy_versions v4: default 6 rules + a custom-weighted SPONSOR_NAME field (Stage 5.1 verification), segmentation off",
+      "counts": {
+        "candidate_pairs": 549879,
+        "auto_link": 83817,
+        "review": 187177,
+        "reject": 278885,
+        "clusters": 55673
+      },
+      "output_fingerprint": "70519e7f2b52287e2f159a7889bf489fbb9ab0943450e5e1c8cc6df9c13c46e9",
+      "ruleset_version": "er-2026.07.1"
+    }
+  }
 }

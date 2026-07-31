@@ -27,8 +27,9 @@ SegmentationConfig.enabled and the compile-time elision this enables
 in the callers below.
 """
 
+import re
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # Default keyword list -- verified against this deployment's real data
 # (grep for LTD/LIMITED/COMPANY/CORP/BANK/ENTERPRISE/TRADERS/etc. found
@@ -85,6 +86,39 @@ class SegmentationConfig:
 DEFAULT_SEGMENTATION_CONFIG = SegmentationConfig()
 
 
+_BOUNDARY_PATTERN_CACHE: Dict[Tuple[str, ...], str] = {}
+_BOUNDARY_REGEX_CACHE: Dict[Tuple[str, ...], "re.Pattern"] = {}
+
+
+def _company_keyword_pattern_str(company_keywords: Tuple[str, ...]) -> str:
+    """
+    A single alternation regex requiring each keyword to be a whole
+    "word" (bounded by start/end-of-string or a non-alphanumeric
+    character on both sides), not merely a substring. Plain `kw in
+    upper` false-positives badly on short keywords: "INC" matches
+    inside "PRINCE", "TINCO", "VINCENT", "INCOME"; "STORE" matches
+    inside "STOREKEEPER" -- all real individual-customer names in this
+    dataset that a naive substring check mislabels COMPANY. Shared by
+    both classify_segment_python and segment_sql_expr so the two stay
+    provably identical (see test_sql_matches_python_oracle) rather than
+    hand-maintaining two boundary implementations that could drift.
+    """
+    pattern = _BOUNDARY_PATTERN_CACHE.get(company_keywords)
+    if pattern is None:
+        alternation = "|".join(re.escape(kw) for kw in company_keywords)
+        pattern = rf"(^|[^A-Za-z0-9])({alternation})([^A-Za-z0-9]|$)"
+        _BOUNDARY_PATTERN_CACHE[company_keywords] = pattern
+    return pattern
+
+
+def _company_keyword_regex(company_keywords: Tuple[str, ...]) -> "re.Pattern":
+    compiled = _BOUNDARY_REGEX_CACHE.get(company_keywords)
+    if compiled is None:
+        compiled = re.compile(_company_keyword_pattern_str(company_keywords))
+        _BOUNDARY_REGEX_CACHE[company_keywords] = compiled
+    return compiled
+
+
 def classify_segment_python(name_norm: Optional[str], config: SegmentationConfig) -> str:
     """
     Python oracle -- mirrors the SQL expression built by
@@ -96,9 +130,8 @@ def classify_segment_python(name_norm: Optional[str], config: SegmentationConfig
     if not name_norm:
         return SEGMENT_INDIVIDUAL
     upper = name_norm.upper()
-    for kw in config.company_keywords:
-        if kw in upper:
-            return SEGMENT_COMPANY
+    if _company_keyword_regex(config.company_keywords).search(upper):
+        return SEGMENT_COMPANY
     return SEGMENT_INDIVIDUAL
 
 
@@ -106,8 +139,9 @@ def segment_sql_expr(name_column: str, config: SegmentationConfig, dialect) -> s
     """
     SQL CASE expression computing the same classification as
     classify_segment_python(), portable across DuckDB/Doris via the
-    same dialect.quote_str() every other compiler module uses. Callers
-    should short-circuit around this entirely when
+    dialect's regexp_matches() (RE2 on DuckDB, REGEXP on Doris -- both
+    support the plain alternation/character-class/group syntax used
+    here). Callers should short-circuit around this entirely when
     `not config.enabled` (see build_customer_segments below) rather
     than emit a CASE that always evaluates to 'ALL' -- both are
     correct, but skipping the computation is cheaper and makes the
@@ -115,13 +149,11 @@ def segment_sql_expr(name_column: str, config: SegmentationConfig, dialect) -> s
     """
     if not config.enabled:
         return dialect.quote_str(SEGMENT_ALL)
-    checks = " OR ".join(
-        f"POSITION({dialect.quote_str(kw)} IN UPPER({name_column})) > 0"
-        for kw in config.company_keywords
-    )
+    pattern = _company_keyword_pattern_str(config.company_keywords)
+    match_expr = dialect.regexp_matches(f"UPPER({name_column})", pattern)
     return (
         f"CASE WHEN {name_column} IS NULL THEN {dialect.quote_str(SEGMENT_INDIVIDUAL)} "
-        f"WHEN {checks} THEN {dialect.quote_str(SEGMENT_COMPANY)} "
+        f"WHEN {match_expr} THEN {dialect.quote_str(SEGMENT_COMPANY)} "
         f"ELSE {dialect.quote_str(SEGMENT_INDIVIDUAL)} END"
     )
 

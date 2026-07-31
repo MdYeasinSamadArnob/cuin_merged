@@ -159,20 +159,38 @@
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
 }
 
-/* Form inputs */
+/* Form inputs -- these previously had no light-mode variant at all: a
+   hardcoded dark translucent background + near-white text applied
+   unconditionally, which is fine on the dark theme's own dark background
+   but produces near-invisible (light-gray-on-light-gray) text once the
+   surrounding page/glass-card switches to its light-mode (white-ish)
+   background. Base rule is now light-mode-correct; .dark overrides it. */
 input,
 select,
 textarea {
-  background-color: rgba(31, 41, 55, 0.5);
-  border: 1px solid #374151;
+  background-color: rgba(255, 255, 255, 0.8);
+  border: 1px solid #d1d5db;
   border-radius: 0.5rem;
   padding: 0.5rem 1rem;
-  color: #f3f4f6;
+  color: #111827;
   transition: all 0.2s ease;
+}
+
+.dark input,
+.dark select,
+.dark textarea {
+  background-color: rgba(31, 41, 55, 0.5);
+  border-color: #374151;
+  color: #f3f4f6;
 }
 
 input::placeholder,
 textarea::placeholder {
+  color: #9ca3af;
+}
+
+.dark input::placeholder,
+.dark textarea::placeholder {
   color: #6b7280;
 }
 

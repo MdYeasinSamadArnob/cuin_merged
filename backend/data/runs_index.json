@@ -646,5 +646,177 @@
       "cluster": 4179,
       "persist": 220646
     }
+  },
+  "9201fca5-d743-4c98-b17b-dcd26a6db16f": {
+    "run_id": "9201fca5-d743-4c98-b17b-dcd26a6db16f",
+    "mode": "FULL",
+    "policy_version": 1,
+    "status": "COMPLETED",
+    "ruleset_version": "er-2026.07.1",
+    "output_fingerprint": "70519e7f2b52287e2f159a7889bf489fbb9ab0943450e5e1c8cc6df9c13c46e9",
+    "description": "Datasource Demo (duckdb)",
+    "counters": {
+      "records_in": 1567782,
+      "records_normalized": 1567782,
+      "blocks_created": 549879,
+      "candidates_generated": 549879,
+      "pairs_scored": 549879,
+      "auto_links": 83817,
+      "review_items": 187177,
+      "rejected": 278885,
+      "clusters_created": 55673
+    },
+    "started_at": "2026-07-31T14:17:11.973204",
+    "ended_at": "2026-07-31T14:24:05.674471",
+    "duration_seconds": 413.701267,
+    "error_message": null,
+    "current_stage": "complete",
+    "engine": "duckdb",
+    "stage_timings_ms": {
+      "ingest": 29,
+      "normalize": 38596,
+      "block": 7618,
+      "score": 89398,
+      "cluster": 1270,
+      "persist": 257588
+    }
+  },
+  "cba0c740-066d-4634-9ae9-71975c4d3616": {
+    "run_id": "cba0c740-066d-4634-9ae9-71975c4d3616",
+    "mode": "FULL",
+    "policy_version": 1,
+    "status": "COMPLETED",
+    "ruleset_version": "er-2026.07.1",
+    "output_fingerprint": "70519e7f2b52287e2f159a7889bf489fbb9ab0943450e5e1c8cc6df9c13c46e9",
+    "description": "Datasource Demo (doris)",
+    "counters": {
+      "records_in": 1567782,
+      "records_normalized": 1567782,
+      "blocks_created": 549879,
+      "candidates_generated": 549879,
+      "pairs_scored": 549879,
+      "auto_links": 83817,
+      "review_items": 187177,
+      "rejected": 278885,
+      "clusters_created": 55673
+    },
+    "started_at": "2026-07-31T14:28:10.273734",
+    "ended_at": "2026-07-31T14:33:55.245993",
+    "duration_seconds": 344.972259,
+    "error_message": null,
+    "current_stage": "complete",
+    "engine": "doris",
+    "stage_timings_ms": {
+      "ingest": 99,
+      "normalize": 21676,
+      "block": 4384,
+      "candidates": 4384,
+      "score": 101678,
+      "cluster": 1366,
+      "persist": 215545
+    }
+  },
+  "3a2f26f2-5918-455a-aa96-ddff258ec801": {
+    "run_id": "3a2f26f2-5918-455a-aa96-ddff258ec801",
+    "mode": "FULL",
+    "policy_version": 1,
+    "status": "RUNNING",
+    "ruleset_version": null,
+    "output_fingerprint": null,
+    "description": "Datasource Demo (duckdb)",
+    "counters": {
+      "records_in": 1567782,
+      "records_normalized": 0,
+      "blocks_created": 0,
+      "candidates_generated": 549879,
+      "pairs_scored": 0,
+      "auto_links": 0,
+      "review_items": 0,
+      "rejected": 0,
+      "clusters_created": 55673
+    },
+    "started_at": "2026-07-31T14:35:18.800328",
+    "ended_at": null,
+    "duration_seconds": null,
+    "error_message": null,
+    "current_stage": "complete",
+    "engine": "duckdb",
+    "stage_timings_ms": {
+      "ingest": 30,
+      "normalize": 38661,
+      "block": 7703,
+      "score": 89749,
+      "cluster": 1214,
+      "persist": 376580
+    }
+  },
+  "0bf7644c-3dad-473e-b190-848fcbcff895": {
+    "run_id": "0bf7644c-3dad-473e-b190-848fcbcff895",
+    "mode": "FULL",
+    "policy_version": 1,
+    "status": "COMPLETED",
+    "ruleset_version": "er-2026.07.1",
+    "output_fingerprint": "70519e7f2b52287e2f159a7889bf489fbb9ab0943450e5e1c8cc6df9c13c46e9",
+    "description": "Datasource Demo (duckdb)",
+    "counters": {
+      "records_in": 1567782,
+      "records_normalized": 1567782,
+      "blocks_created": 549879,
+      "candidates_generated": 549879,
+      "pairs_scored": 549879,
+      "auto_links": 83817,
+      "review_items": 187177,
+      "rejected": 278885,
+      "clusters_created": 55673
+    },
+    "started_at": "2026-07-31T14:44:20.113029",
+    "ended_at": "2026-07-31T14:54:30.730911",
+    "duration_seconds": 610.617882,
+    "error_message": null,
+    "current_stage": "complete",
+    "engine": "duckdb",
+    "stage_timings_ms": {
+      "ingest": 28,
+      "normalize": 38715,
+      "block": 7670,
+      "score": 90218,
+      "cluster": 1373,
+      "persist": 453426
+    }
+  },
+  "27984f0e-491b-4e73-961e-0fa9054cee81": {
+    "run_id": "27984f0e-491b-4e73-961e-0fa9054cee81",
+    "mode": "FULL",
+    "policy_version": 1,
+    "status": "COMPLETED",
+    "ruleset_version": "er-2026.07.1",
+    "output_fingerprint": "70519e7f2b52287e2f159a7889bf489fbb9ab0943450e5e1c8cc6df9c13c46e9",
+    "description": "Datasource Demo (doris)",
+    "counters": {
+      "records_in": 1567782,
+      "records_normalized": 1567782,
+      "blocks_created": 549879,
+      "candidates_generated": 549879,
+      "pairs_scored": 549879,
+      "auto_links": 83817,
+      "review_items": 187177,
+      "rejected": 278885,
+      "clusters_created": 55673
+    },
+    "started_at": "2026-07-31T14:55:44.772434",
+    "ended_at": "2026-07-31T15:07:50.699578",
+    "duration_seconds": 725.927144,
+    "error_message": null,
+    "current_stage": "complete",
+    "engine": "doris",
+    "stage_timings_ms": {
+      "ingest": 109,
+      "normalize": 21131,
+      "block": 4274,
+      "candidates": 4274,
+      "score": 112952,
+      "cluster": 1517,
+      "persist": 585759
+    }
   }
 }
