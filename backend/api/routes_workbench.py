@@ -724,6 +724,14 @@ class RetireGlobalRefRequest(BaseModel):
     actor: str
 
 
+class RecordGlobalRefRequest(BaseModel):
+    run_id: Optional[str] = None
+    global_ref: str
+    state: str = "CONFIRMED"
+    reason: str
+    actor: str
+
+
 def _handle_workbench_error(fn, *args):
     try:
         return fn(*args)
@@ -791,6 +799,25 @@ async def action_retire_global_ref(entity_id: str, request: RetireGlobalRefReque
     pg_conn = _pg()
     try:
         return _handle_workbench_error(wb.retire_global_ref, pg_conn, entity_id, request.reason, request.actor)
+    finally:
+        pg_conn.close()
+
+
+@router.post("/records/{customer_code}/global-ref")
+async def action_assign_global_ref_to_record(customer_code: str, request: RecordGlobalRefRequest):
+    """
+    Same as POST /entities/{entity_id}/global-ref, but keyed by
+    customer_code instead of an existing entity_id -- the path a
+    singleton (never clustered, no entity_id yet) needs to get a
+    Global ID assigned at all. Mints a one-member entity on demand; see
+    services.workbench_service.assign_global_ref_to_record.
+    """
+    pg_conn = _pg()
+    try:
+        return _handle_workbench_error(
+            wb.assign_global_ref_to_record, pg_conn, request.run_id, customer_code,
+            request.global_ref, request.state, request.reason, request.actor,
+        )
     finally:
         pg_conn.close()
 

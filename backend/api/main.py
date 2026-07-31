@@ -254,6 +254,13 @@ app.include_router(schema_router, prefix="/datasource/schema", tags=["Schema"])
 from api.routes_workbench import router as workbench_router
 app.include_router(workbench_router, prefix="/workbench", tags=["Workbench"])
 
+# Identity Graph 360 v2 -- purely additive, mounted at /graph/v2 (never
+# collides with the legacy /graph/* router below it, which stays
+# untouched for /explorer, /pipeline, and /runs/[id]). See
+# api/routes_graph_v2.py's module docstring.
+from api.routes_graph_v2 import router as graph_v2_router
+app.include_router(graph_v2_router, prefix="/graph/v2", tags=["Graph V2"])
+
 
 # ============================================
 # WebSocket Endpoint

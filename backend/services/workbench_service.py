@@ -475,6 +475,26 @@ def assign_global_ref(pg_conn, entity_id: str, global_ref: str, state: str, reas
         raise
 
 
+def assign_global_ref_to_record(pg_conn, run_id: Optional[str], customer_code: str, global_ref: str, state: str, reason: str, actor: str) -> dict:
+    """
+    Lets an officer assign a Global ID directly to a single RECORD
+    (customer_code) rather than an existing entity_id -- the path a
+    singleton (never clustered, so it never earned an entity through
+    resolve_entities' "only accepted, multi-member components" rule,
+    see engine.clustering.entity_resolver's module docstring) needs to
+    get a Global ID at all. Mints a fresh one-member entity on demand
+    (_ensure_entity_for_code) in the SAME transaction as the global_ref
+    assignment via assign_global_ref, so a rejected assignment (e.g. a
+    global_ref collision) rolls back the entity mint too -- no orphan
+    one-member entities left behind by a failed attempt. If the code
+    already belongs to an entity (not actually a singleton), this is
+    just an ordinary assign against that existing entity_id.
+    """
+    cur = pg_conn.cursor()
+    entity_id = _ensure_entity_for_code(cur, customer_code, run_id, actor)
+    return assign_global_ref(pg_conn, entity_id, global_ref, state, reason, actor)
+
+
 def retire_global_ref(pg_conn, entity_id: str, reason: str, actor: str) -> dict:
     cur = pg_conn.cursor()
     try:

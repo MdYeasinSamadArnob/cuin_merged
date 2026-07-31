@@ -402,6 +402,16 @@ class ApiClient {
         });
     }
 
+    // Same as wbAssignGlobalRef, but for a record with no entity yet (a
+    // singleton -- never clustered, so it never earned one automatically).
+    // Mints a one-member entity on demand server-side.
+    async wbAssignGlobalRefToRecord(customerCode: string, runId: string | undefined, globalRef: string, state: string, reason: string, actor: string) {
+        return this.request(`/workbench/records/${encodeURIComponent(customerCode)}/global-ref`, {
+            method: 'POST',
+            body: JSON.stringify({ run_id: runId, global_ref: globalRef, state, reason, actor }),
+        });
+    }
+
     async wbRetireGlobalRef(entityId: string, reason: string, actor: string) {
         return this.request(`/workbench/entities/${entityId}/global-ref`, {
             method: 'DELETE',
@@ -426,6 +436,89 @@ class ApiClient {
         if (params.verdict) q.set('verdict', params.verdict);
         if (params.runId) q.set('run_id', params.runId);
         return this.request(`/workbench/overrides?${q.toString()}`);
+    }
+
+    // ------------------------------------------------------------------
+    // Identity Graph 360 v2 -- purely additive, does not touch /graph's
+    // legacy methods above (getGraphData, getClusterEntities, etc.).
+    // ------------------------------------------------------------------
+
+    async graphOverview(params: {
+        runId?: string; page?: number; pageSize?: number; sort?: 'size_desc' | 'size_asc';
+        minSize?: number; maxSize?: number; recordType?: string; hasGlobalRef?: boolean; q?: string;
+    }) {
+        const p = new URLSearchParams();
+        if (params.runId) p.set('run_id', params.runId);
+        p.set('page', String(params.page ?? 1));
+        p.set('page_size', String(params.pageSize ?? 100));
+        p.set('sort', params.sort ?? 'size_desc');
+        if (params.minSize !== undefined) p.set('min_size', String(params.minSize));
+        if (params.maxSize !== undefined) p.set('max_size', String(params.maxSize));
+        if (params.recordType && params.recordType !== 'ALL') p.set('record_type', params.recordType);
+        if (params.hasGlobalRef !== undefined) p.set('has_global_ref', String(params.hasGlobalRef));
+        if (params.q) p.set('q', params.q);
+        return this.request(`/graph/v2/overview?${p.toString()}`);
+    }
+
+    async graphStats(runId?: string) {
+        const q = runId ? `?run_id=${runId}` : '';
+        return this.request(`/graph/v2/stats${q}`);
+    }
+
+    async graphCluster(entityId: string, runId?: string) {
+        const q = runId ? `?run_id=${runId}` : '';
+        return this.request(`/graph/v2/cluster/${entityId}${q}`);
+    }
+
+    async graphHops(params: { customerCode?: string; entityId?: string; runId?: string; hops?: number; maxNodes?: number }) {
+        const p = new URLSearchParams();
+        if (params.customerCode) p.set('customer_code', params.customerCode);
+        if (params.entityId) p.set('entity_id', params.entityId);
+        if (params.runId) p.set('run_id', params.runId);
+        p.set('hops', String(params.hops ?? 2));
+        p.set('max_nodes', String(params.maxNodes ?? 300));
+        return this.request(`/graph/v2/hops?${p.toString()}`);
+    }
+
+    async graphCanvas(params: {
+        runId?: string; page?: number; pageSize?: number; sort?: 'size_desc' | 'size_asc';
+        minSize?: number; maxSize?: number; recordType?: string; hasGlobalRef?: boolean; q?: string;
+    }) {
+        const p = new URLSearchParams();
+        if (params.runId) p.set('run_id', params.runId);
+        p.set('page', String(params.page ?? 1));
+        p.set('page_size', String(params.pageSize ?? 20));
+        p.set('sort', params.sort ?? 'size_desc');
+        if (params.minSize !== undefined) p.set('min_size', String(params.minSize));
+        if (params.maxSize !== undefined) p.set('max_size', String(params.maxSize));
+        if (params.recordType && params.recordType !== 'ALL') p.set('record_type', params.recordType);
+        if (params.hasGlobalRef !== undefined) p.set('has_global_ref', String(params.hasGlobalRef));
+        if (params.q) p.set('q', params.q);
+        return this.request(`/graph/v2/canvas?${p.toString()}`);
+    }
+
+    async graphSingletons(params: { runId?: string; page?: number; pageSize?: number; recordType?: string; q?: string }) {
+        const p = new URLSearchParams();
+        if (params.runId) p.set('run_id', params.runId);
+        p.set('page', String(params.page ?? 1));
+        p.set('page_size', String(params.pageSize ?? 60));
+        if (params.recordType && params.recordType !== 'ALL') p.set('record_type', params.recordType);
+        if (params.q) p.set('q', params.q);
+        return this.request(`/graph/v2/singletons?${p.toString()}`);
+    }
+
+    async graphClusterBridges(entityId: string, runId?: string) {
+        const q = runId ? `?run_id=${runId}` : '';
+        return this.request(`/graph/v2/cluster/${entityId}/bridges${q}`);
+    }
+
+    async graphBridges(params: { runId?: string; page?: number; pageSize?: number; minConfidence?: number }) {
+        const p = new URLSearchParams();
+        if (params.runId) p.set('run_id', params.runId);
+        p.set('page', String(params.page ?? 1));
+        p.set('page_size', String(params.pageSize ?? 30));
+        if (params.minConfidence !== undefined) p.set('min_confidence', String(params.minConfidence));
+        return this.request(`/graph/v2/bridges?${p.toString()}`);
     }
 }
 

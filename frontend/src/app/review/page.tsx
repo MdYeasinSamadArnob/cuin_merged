@@ -175,6 +175,72 @@ function EntityMatchRow({ item, runId, expanded, onToggle }: {
     );
 }
 
+// A singleton -- zero candidate_pairs edges, so it never earned an entity
+// through the normal pipeline path (see engine.clustering.entity_resolver's
+// module docstring: "only accepted, multi-member components... an entity
+// is minted lazily, when a cluster earns one or an officer assigns a
+// Global ID directly to a record"). This is that direct-assignment path:
+// no entity to select, just the raw record plus a form that mints a
+// fresh one-member entity the moment a Global ID is confirmed.
+function SingletonPanel({
+    customerCode, record, loading, globalRefInput, onGlobalRefInputChange, onAssign, assigning,
+}: {
+    customerCode: string;
+    record: any | null;
+    loading: boolean;
+    globalRefInput: string;
+    onGlobalRefInputChange: (v: string) => void;
+    onAssign: () => void;
+    assigning: boolean;
+}) {
+    if (loading) return <p className="text-xs text-gray-400">Loading record...</p>;
+    if (!record || record.resolved === false) return <p className="text-xs text-amber-500">Record not found for this run.</p>;
+
+    const TypeIcon = record.segment === 'COMPANY' ? Building2 : UserIcon;
+
+    return (
+        <div className="space-y-5">
+            <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                    <h2 className="font-semibold text-gray-900 dark:text-white truncate">{record.name_norm || customerCode}</h2>
+                    <span className="font-mono text-xs text-gray-400">{customerCode}</span>
+                </div>
+                <span className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 shrink-0">
+                    <TypeIcon size={13} /> {record.segment || '—'}
+                </span>
+            </div>
+
+            <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 text-xs text-amber-700 dark:text-amber-300">
+                <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                <div>
+                    Singleton -- no candidate match was found for this record in this run, so it has no entity yet. Assigning a Global ID below creates a one-member entity for it.
+                </div>
+            </div>
+
+            <div className="space-y-1 text-xs">
+                <DetailField label="Date of birth" value={record.dob_iso} />
+                <DetailField label="Mobile" value={(record.identifiers?.mobile || []).join(', ')} />
+                <DetailField label="Email" value={(record.identifiers?.email || []).join(', ')} />
+                <DetailField label="Document / NID" value={(record.identifiers?.document || []).join(', ')} />
+                <DetailField label="Address" value={(record.identifiers?.address || []).join(' | ')} />
+            </div>
+
+            <div>
+                <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Global ID</h3>
+                <div className="flex gap-2">
+                    <input
+                        value={globalRefInput} onChange={(e) => onGlobalRefInputChange(e.target.value)}
+                        placeholder="e.g. CIF-0012345" className="flex-1 text-xs py-1.5"
+                    />
+                    <button onClick={onAssign} disabled={!globalRefInput.trim() || assigning} className="btn btn-primary !py-1.5 !px-3 text-xs disabled:opacity-40">
+                        {assigning ? 'Assigning...' : 'Assign'}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 const EMPTY_PAIR_FILTERS: PairFilters = { q: '', recordType: 'ALL', minConf: undefined, maxConf: undefined, hasVeto: undefined };
 const EMPTY_ENTITY_FILTERS: EntityFilters = { q: '', recordType: 'ALL', hasGlobalRef: undefined };
 
@@ -215,6 +281,20 @@ export default function WorkbenchPage() {
     const [selectedEntity, setSelectedEntity] = useState<string | null>(null);
     const [expandedMember, setExpandedMember] = useState<string | null>(null);
     useEffect(() => setExpandedMember(null), [selectedEntity]);
+
+    // A singleton picked from global search -- no entity_id exists yet, so
+    // it can't route through selectedEntity/jumpToEntity like everything
+    // else. Cleared whenever a pair/entity gets explicitly selected
+    // elsewhere so the detail panel never shows a stale singleton over a
+    // fresh selection.
+    const [selectedSingleton, setSelectedSingleton] = useState<string | null>(null);
+    const [assigningSingletonRef, setAssigningSingletonRef] = useState(false);
+
+    const { data: singletonRecord, isFetching: singletonRecordLoading } = useQuery({
+        queryKey: ['wb-singleton-record', selectedSingleton, runId],
+        queryFn: () => api.wbGetRecord(selectedSingleton!, runId),
+        enabled: !!selectedSingleton,
+    });
 
     // Navigation history -- jumping to an entity (from a pair's "part of an
     // existing entity" link, or a global search hit) changes population and
@@ -308,9 +388,11 @@ export default function WorkbenchPage() {
         setPopulation('ENTITIES');
         setSelectedEntity(entityId);
         setSelectedPair(null);
+        setSelectedSingleton(null);
     };
 
     const goBack = () => {
+        setSelectedSingleton(null);
         setNavStack((prev) => {
             if (prev.length === 0) return prev;
             const last = prev[prev.length - 1];
@@ -336,6 +418,7 @@ export default function WorkbenchPage() {
     const [mergeTarget, setMergeTarget] = useState<string>('');
     const [splitCode, setSplitCode] = useState<string>('');
     const [globalRefInput, setGlobalRefInput] = useState('');
+    useEffect(() => setGlobalRefInput(''), [selectedSingleton]);
 
     // ---- Bulk actions ----
     const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number; failures: string[] } | null>(null);
@@ -441,6 +524,28 @@ export default function WorkbenchPage() {
         }
     };
 
+    // Assigning to a singleton mints a fresh one-member entity server-side
+    // (see POST /workbench/records/{code}/global-ref) -- once that
+    // succeeds, jump straight to viewing it as a real entity so the officer
+    // sees the result of their action (lineage, member list, the Global ID
+    // now attached) rather than a banner asking them to trust it worked.
+    const assignGlobalRefToSingleton = async () => {
+        if (!selectedSingleton || !globalRefInput.trim()) return;
+        const actor = localStorage.getItem('wb_actor') || 'officer';
+        setAssigningSingletonRef(true);
+        try {
+            setActionError(null);
+            const res = await api.wbAssignGlobalRefToRecord(selectedSingleton, runId, globalRefInput.trim(), 'CONFIRMED', 'Assigned via workbench', actor);
+            setGlobalRefInput('');
+            invalidateAll();
+            jumpToEntity(res.entity_id);
+        } catch (e: any) {
+            setActionError(String(e.message || e));
+        } finally {
+            setAssigningSingletonRef(false);
+        }
+    };
+
     const totalPairs = pairsData?.total ?? 0;
     const totalEntities = entitiesData?.total ?? 0;
     const totalOverrides = overridesData?.total ?? 0;
@@ -493,7 +598,16 @@ export default function WorkbenchPage() {
                                 key={r.customer_code}
                                 onClick={async () => {
                                     const rec = await api.wbGetRecord(r.customer_code, runId);
-                                    if (rec.entity_id) jumpToEntity(rec.entity_id);
+                                    if (rec.entity_id) {
+                                        jumpToEntity(rec.entity_id);
+                                    } else {
+                                        // A singleton -- no entity_id yet. Show the raw
+                                        // record with a Global ID form instead of a dead
+                                        // click (this used to silently do nothing).
+                                        setSelectedPair(null);
+                                        setSelectedEntity(null);
+                                        setSelectedSingleton(r.customer_code);
+                                    }
                                 }}
                                 className="w-full flex justify-between text-xs p-2 rounded bg-gray-50 dark:bg-gray-900/50 hover:bg-gray-100 dark:hover:bg-gray-800 text-left"
                             >
@@ -516,11 +630,11 @@ export default function WorkbenchPage() {
 
             {/* Population cards */}
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                <PopCard label="Needs Review" count={populations?.needs_review} active={population === 'REVIEW'} icon={AlertTriangle} accent="text-amber-500" onClick={() => { setNavStack([]); setPopulation('REVIEW'); }} />
-                <PopCard label="Auto-Linked" count={populations?.auto_linked} active={population === 'AUTO_LINK'} icon={GitMerge} accent="text-emerald-500" onClick={() => { setNavStack([]); setPopulation('AUTO_LINK'); }} />
-                <PopCard label="Rejected" count={populations?.rejected} active={population === 'REJECT'} icon={XCircle} accent="text-gray-400" onClick={() => { setNavStack([]); setPopulation('REJECT'); }} />
-                <PopCard label="Entities" count={populations?.entities} active={population === 'ENTITIES'} icon={Users} accent="text-blue-500" onClick={() => { setNavStack([]); setPopulation('ENTITIES'); }} />
-                <PopCard label="Approved" count={approvedCountData?.total} active={population === 'APPROVED'} icon={CheckCircle2} accent="text-emerald-500" onClick={() => { setNavStack([]); setPopulation('APPROVED'); }} />
+                <PopCard label="Needs Review" count={populations?.needs_review} active={population === 'REVIEW'} icon={AlertTriangle} accent="text-amber-500" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('REVIEW'); }} />
+                <PopCard label="Auto-Linked" count={populations?.auto_linked} active={population === 'AUTO_LINK'} icon={GitMerge} accent="text-emerald-500" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('AUTO_LINK'); }} />
+                <PopCard label="Rejected" count={populations?.rejected} active={population === 'REJECT'} icon={XCircle} accent="text-gray-400" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('REJECT'); }} />
+                <PopCard label="Entities" count={populations?.entities} active={population === 'ENTITIES'} icon={Users} accent="text-blue-500" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('ENTITIES'); }} />
+                <PopCard label="Approved" count={approvedCountData?.total} active={population === 'APPROVED'} icon={CheckCircle2} accent="text-emerald-500" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('APPROVED'); }} />
             </div>
             <div className="grid grid-cols-3 gap-3 text-xs text-gray-500 dark:text-gray-400">
                 <div>Singletons: <span className="font-semibold text-gray-700 dark:text-gray-300">{populations?.singletons?.toLocaleString() ?? '…'}</span></div>
@@ -670,7 +784,7 @@ export default function WorkbenchPage() {
                                         key={it.override_id}
                                         role="button"
                                         tabIndex={0}
-                                        onClick={() => setSelectedPair({ a_key: it.a_code, b_key: it.b_code })}
+                                        onClick={() => { setSelectedSingleton(null); setSelectedPair({ a_key: it.a_code, b_key: it.b_code }); }}
                                         className={`w-full text-left p-2.5 rounded-lg border text-xs transition-colors cursor-pointer ${
                                             isSelected ? 'border-blue-400 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900/40'
                                         }`}
@@ -703,7 +817,7 @@ export default function WorkbenchPage() {
                                         key={key}
                                         role="button"
                                         tabIndex={0}
-                                        onClick={() => setSelectedPair({ a_key: p.a_key, b_key: p.b_key })}
+                                        onClick={() => { setSelectedSingleton(null); setSelectedPair({ a_key: p.a_key, b_key: p.b_key }); }}
                                         className={`w-full text-left p-2.5 rounded-lg border text-xs transition-colors cursor-pointer flex items-start gap-2 ${
                                             isSelected ? 'border-blue-400 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900/40'
                                         }`}
@@ -745,7 +859,7 @@ export default function WorkbenchPage() {
                                         key={e.entity_id}
                                         role="button"
                                         tabIndex={0}
-                                        onClick={() => setSelectedEntity(e.entity_id)}
+                                        onClick={() => { setSelectedSingleton(null); setSelectedEntity(e.entity_id); }}
                                         className={`w-full text-left p-2.5 rounded-lg border text-xs transition-colors cursor-pointer flex items-start gap-2 ${
                                             selectedEntity === e.entity_id ? 'border-blue-400 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900/40'
                                         }`}
@@ -792,7 +906,17 @@ export default function WorkbenchPage() {
 
                 {/* Detail */}
                 <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }} className="glass-card p-6 lg:col-span-3">
-                    {population !== 'ENTITIES' ? (
+                    {selectedSingleton ? (
+                        <SingletonPanel
+                            customerCode={selectedSingleton}
+                            record={singletonRecord || null}
+                            loading={singletonRecordLoading}
+                            globalRefInput={globalRefInput}
+                            onGlobalRefInputChange={setGlobalRefInput}
+                            onAssign={assignGlobalRefToSingleton}
+                            assigning={assigningSingletonRef}
+                        />
+                    ) : population !== 'ENTITIES' ? (
                         selectedPair ? (
                             <>
                                 <div className="flex items-center justify-between mb-4">
