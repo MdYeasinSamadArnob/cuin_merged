@@ -17,7 +17,9 @@ and 006) via services.workbench_service, which owns write durability
 and the hash-chained audit log.
 """
 
+import json
 import logging
+from dataclasses import asdict
 from typing import Any, Dict, List, Optional
 
 import psycopg2
@@ -26,6 +28,7 @@ from pydantic import BaseModel
 
 from api.config import settings
 from engine.ports.run_session import open_run_readonly
+from engine.scoring.evidence import load_pair_evidence, evidence_to_field_evidence
 from engine.segments.classifier import classify_segment_python, segment_sql_expr, SegmentationConfig
 from services import workbench_service as wb
 from services.run_service import get_run_service, RunStatus
@@ -65,6 +68,47 @@ def _table_exists(session, name: str) -> bool:
     else:
         row = session.con.execute("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?", [name]).fetchone()
     return bool(row and row[0])
+
+
+def _parse_array_cell(v):
+    """
+    engine.scoring.evidence.load_pair_evidence was written and, until
+    now, exclusively called against real duckdb.DuckDBPyConnection
+    objects (see its own test suite and engine.scoring.tiers/confidence
+    -- every existing caller is DuckDB-only), where LIST-typed columns
+    deserialize to native Python lists. This is the first caller to run
+    it against a Doris session: DorisConnection is a thin pymysql
+    wrapper (engine/ports/doris_conn.py) with no array deserialization,
+    so Doris's ARRAY<STRING> columns come back as their JSON-text wire
+    representation (e.g. '["01713366500"]', or '[]' for an empty
+    array) -- a non-empty STRING even when the array itself is empty,
+    which silently corrupted has_intersection/similarity_score checks
+    that assume `len(value) > 0` means "list has elements". Normalizing
+    here (not inside engine.scoring.evidence itself, which every other,
+    DuckDB-only caller already works correctly against) keeps this fix
+    scoped to the one new call site that actually needs it.
+    """
+    if isinstance(v, list):
+        return v
+    if isinstance(v, str):
+        try:
+            parsed = json.loads(v)
+            if isinstance(parsed, list):
+                return parsed
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return [] if v is None else v
+
+
+def _normalize_evidence_arrays(evidence: Dict[str, Any]) -> Dict[str, Any]:
+    for id_ev in evidence.get("identifiers", []):
+        for key in ("values_a", "values_b", "intersection"):
+            id_ev[key] = _parse_array_cell(id_ev.get(key))
+    nd = evidence.get("name_dob") or {}
+    for key in ("tokens_a", "tokens_b", "token_intersection", "token_union"):
+        if key in nd:
+            nd[key] = _parse_array_cell(nd.get(key))
+    return evidence
 
 
 def _attach_officer_decisions(items: List[Dict[str, Any]]) -> None:
@@ -296,6 +340,31 @@ async def pair_breakdown(a_key: str, b_key: str, run_id: Optional[str] = None):
              "is_veto": bool(is_veto), "detail": detail}
             for rid_, ordinal, label, attr, sub, matched, awarded, configured, is_veto, detail in rows
         ]
+
+        # Field-level evidence (raw value A/B, comparison algorithm, raw
+        # similarity e.g. name token-Jaccard) -- purely supplementary
+        # context alongside `contributions` above, NEVER a substitute for
+        # it. Reuses engine.scoring.evidence's load_pair_evidence /
+        # evidence_to_field_evidence UNCHANGED against
+        # pair_identifier_evidence / pair_name_dob_evidence -- the exact
+        # tables the real pipeline run (DuckDB or Doris, same function on
+        # both via engine.scoring.evidence_dialect) persisted while
+        # computing THIS pair's actual, audited score. Never re-derives
+        # anything from scratch (that's what the legacy /matches/{pair_id}
+        # endpoint's _compute_pair_evidence_fresh does, via a DIFFERENT,
+        # simpler tier classifier -- its "99%"-style score is an
+        # approximation, not this run's real confidence_pct, which is why
+        # it's intentionally not reused here). A rule can legitimately
+        # award 0% (e.g. "Name is the same words") while the raw
+        # similarity is still high (e.g. 75% token overlap that didn't
+        # clear the rule's exact-match bar) -- both numbers are real and
+        # worth showing side by side, not merged into one.
+        field_evidence = []
+        if _table_exists(session, "pair_identifier_evidence") and _table_exists(session, "pair_name_dob_evidence"):
+            evidence = load_pair_evidence(session.con, a_key, b_key)
+            if session.engine == "doris":
+                evidence = _normalize_evidence_arrays(evidence)
+            field_evidence = [asdict(fe) for fe in evidence_to_field_evidence(evidence)]
     finally:
         session.close()
 
@@ -304,6 +373,7 @@ async def pair_breakdown(a_key: str, b_key: str, run_id: Optional[str] = None):
         "run_id": rid, "a_key": a_key, "b_key": b_key,
         "confidence_pct": float(confidence_pct), "has_veto": bool(has_veto), "decision": decision,
         "contributions": contributions,
+        "field_evidence": field_evidence,
     }
     _attach_officer_decisions([result])
     return result
@@ -472,10 +542,15 @@ async def list_entities(
             cur = pg_conn.cursor()
             where = ["e.status = 'ACTIVE'"]
             params: list = []
+            # RETIRED keeps global_ref's string for history (retire_global_ref
+            # never clears it, only flips global_ref_state) -- but that's not
+            # an ACTIVE assignment, so "has a Global ID" must exclude it or a
+            # retired entity looks indistinguishable from a confirmed one in
+            # this filter, and never shows up under "no Global ID" either.
             if has_global_ref is True:
-                where.append("e.global_ref IS NOT NULL")
+                where.append("e.global_ref IS NOT NULL AND e.global_ref_state != 'RETIRED'")
             elif has_global_ref is False:
-                where.append("e.global_ref IS NULL")
+                where.append("(e.global_ref IS NULL OR e.global_ref_state = 'RETIRED')")
             if q:
                 clause = "(upper(e.global_ref) LIKE upper(%s) OR EXISTS (SELECT 1 FROM entity_members em2 WHERE em2.entity_id = e.entity_id AND em2.customer_code LIKE %s AND em2.valid_to IS NULL)"
                 q_params = [f"%{q}%", f"%{q}%"]

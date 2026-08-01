@@ -39,10 +39,16 @@ export interface EntityFilters {
     hasGlobalRef?: boolean;
 }
 
+export interface SingletonFilters {
+    q: string;
+    recordType: RecordType;
+}
+
 export function FilterBar(
     props:
         | { mode: "pairs"; value: PairFilters; onChange: (v: PairFilters) => void }
         | { mode: "entities"; value: EntityFilters; onChange: (v: EntityFilters) => void }
+        | { mode: "singletons"; value: SingletonFilters; onChange: (v: SingletonFilters) => void }
 ) {
     const { mode, value, onChange } = props;
 
@@ -53,7 +59,7 @@ export function FilterBar(
                 <input
                     value={value.q}
                     onChange={(e) => onChange({ ...value, q: e.target.value } as any)}
-                    placeholder={mode === "pairs" ? "Search name, ID, or code..." : "Search name, ID, code, or Global ID..."}
+                    placeholder={mode === "pairs" ? "Search name, ID, or code..." : mode === "entities" ? "Search name, ID, code, or Global ID..." : "Search name or code..."}
                     className="w-full text-sm py-1.5"
                     style={{ paddingLeft: "1.75rem" }}
                 />

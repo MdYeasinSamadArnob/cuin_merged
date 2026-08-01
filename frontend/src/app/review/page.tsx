@@ -11,15 +11,15 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import {
     Users, GitMerge, GitBranch, XCircle, UserX, AlertTriangle, ShieldCheck, ShieldAlert,
-    Search as SearchIcon, CheckCircle2, IdCard, History, Building2, User as UserIcon, ArrowLeft, ChevronRight,
+    Search as SearchIcon, CheckCircle2, IdCard, History, Building2, User as UserIcon, ArrowLeft, ChevronRight, UserPlus,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { ScoreBreakdown } from '@/components/workbench/ScoreBreakdown';
 import { ReasonDialog, ReasonDialogResult } from '@/components/workbench/ReasonDialog';
 import { RecordCompare } from '@/components/workbench/RecordCompare';
-import { FilterBar, PairFilters, EntityFilters } from '@/components/workbench/FilterBar';
+import { FilterBar, PairFilters, EntityFilters, SingletonFilters } from '@/components/workbench/FilterBar';
 
-type Population = 'REVIEW' | 'AUTO_LINK' | 'REJECT' | 'ENTITIES' | 'APPROVED';
+type Population = 'REVIEW' | 'AUTO_LINK' | 'REJECT' | 'ENTITIES' | 'APPROVED' | 'SINGLETONS';
 
 const BULK_SELECTION_CAP = 100;
 
@@ -243,6 +243,7 @@ function SingletonPanel({
 
 const EMPTY_PAIR_FILTERS: PairFilters = { q: '', recordType: 'ALL', minConf: undefined, maxConf: undefined, hasVeto: undefined };
 const EMPTY_ENTITY_FILTERS: EntityFilters = { q: '', recordType: 'ALL', hasGlobalRef: undefined };
+const EMPTY_SINGLETON_FILTERS: SingletonFilters = { q: '', recordType: 'ALL' };
 
 export default function WorkbenchPage() {
     const queryClient = useQueryClient();
@@ -272,10 +273,15 @@ export default function WorkbenchPage() {
 
     const [pairFilters, setPairFilters] = useState<PairFilters>(EMPTY_PAIR_FILTERS);
     const [entityFilters, setEntityFilters] = useState<EntityFilters>(EMPTY_ENTITY_FILTERS);
+    const [singletonFilters, setSingletonFilters] = useState<SingletonFilters>(EMPTY_SINGLETON_FILTERS);
     const debouncedPairQ = useDebounced(pairFilters.q, 400);
     const debouncedEntityQ = useDebounced(entityFilters.q, 400);
+    const debouncedSingletonQ = useDebounced(singletonFilters.q, 400);
 
-    useEffect(() => setPage(1), [population, runId, debouncedPairQ, pairFilters.recordType, pairFilters.minConf, pairFilters.maxConf, pairFilters.hasVeto, debouncedEntityQ, entityFilters.recordType, entityFilters.hasGlobalRef]);
+    useEffect(() => setPage(1), [
+        population, runId, debouncedPairQ, pairFilters.recordType, pairFilters.minConf, pairFilters.maxConf, pairFilters.hasVeto,
+        debouncedEntityQ, entityFilters.recordType, entityFilters.hasGlobalRef, debouncedSingletonQ, singletonFilters.recordType,
+    ]);
 
     const [selectedPair, setSelectedPair] = useState<{ a_key: string; b_key: string } | null>(null);
     const [selectedEntity, setSelectedEntity] = useState<string | null>(null);
@@ -320,7 +326,7 @@ export default function WorkbenchPage() {
             q: debouncedPairQ || undefined, recordType: pairFilters.recordType,
             minConf: pairFilters.minConf, maxConf: pairFilters.maxConf, hasVeto: pairFilters.hasVeto,
         }),
-        enabled: !!runId && population !== 'ENTITIES' && population !== 'APPROVED',
+        enabled: !!runId && population !== 'ENTITIES' && population !== 'APPROVED' && population !== 'SINGLETONS',
     });
 
     const { data: entitiesData, isFetching: entitiesLoading } = useQuery({
@@ -330,6 +336,20 @@ export default function WorkbenchPage() {
             q: debouncedEntityQ || undefined, recordType: entityFilters.recordType, hasGlobalRef: entityFilters.hasGlobalRef,
         }),
         enabled: population === 'ENTITIES',
+    });
+
+    // Singletons -- records with zero candidate_pairs edges, so they never
+    // earned an entity through the normal pipeline path (see
+    // engine.clustering.entity_resolver's module docstring). Reuses the
+    // same /graph/v2/singletons endpoint the graph page already browses --
+    // it's the same underlying data (records with no entity yet), no
+    // reason to duplicate it as a workbench-specific endpoint.
+    const { data: singletonsListData, isFetching: singletonsListLoading } = useQuery({
+        queryKey: ['wb-singletons-list', runId, page, debouncedSingletonQ, singletonFilters.recordType],
+        queryFn: () => api.graphSingletons({
+            runId, page, pageSize: PAGE_SIZE, recordType: singletonFilters.recordType, q: debouncedSingletonQ || undefined,
+        }),
+        enabled: population === 'SINGLETONS',
     });
 
     // "Approved" tab -- the durable ledger of every officer decision
@@ -549,8 +569,12 @@ export default function WorkbenchPage() {
     const totalPairs = pairsData?.total ?? 0;
     const totalEntities = entitiesData?.total ?? 0;
     const totalOverrides = overridesData?.total ?? 0;
+    const totalSingletons = singletonsListData?.total ?? 0;
     const totalPages = Math.max(1, Math.ceil(
-        (population === 'ENTITIES' ? totalEntities : population === 'APPROVED' ? totalOverrides : totalPairs) / PAGE_SIZE
+        (population === 'ENTITIES' ? totalEntities
+            : population === 'APPROVED' ? totalOverrides
+            : population === 'SINGLETONS' ? totalSingletons
+            : totalPairs) / PAGE_SIZE
     ));
 
     return (
@@ -629,15 +653,15 @@ export default function WorkbenchPage() {
             )}
 
             {/* Population cards */}
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
                 <PopCard label="Needs Review" count={populations?.needs_review} active={population === 'REVIEW'} icon={AlertTriangle} accent="text-amber-500" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('REVIEW'); }} />
                 <PopCard label="Auto-Linked" count={populations?.auto_linked} active={population === 'AUTO_LINK'} icon={GitMerge} accent="text-emerald-500" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('AUTO_LINK'); }} />
                 <PopCard label="Rejected" count={populations?.rejected} active={population === 'REJECT'} icon={XCircle} accent="text-gray-400" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('REJECT'); }} />
                 <PopCard label="Entities" count={populations?.entities} active={population === 'ENTITIES'} icon={Users} accent="text-blue-500" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('ENTITIES'); }} />
                 <PopCard label="Approved" count={approvedCountData?.total} active={population === 'APPROVED'} icon={CheckCircle2} accent="text-emerald-500" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('APPROVED'); }} />
+                <PopCard label="Singletons" count={populations?.singletons} active={population === 'SINGLETONS'} icon={UserPlus} accent="text-purple-500" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('SINGLETONS'); }} />
             </div>
-            <div className="grid grid-cols-3 gap-3 text-xs text-gray-500 dark:text-gray-400">
-                <div>Singletons: <span className="font-semibold text-gray-700 dark:text-gray-300">{populations?.singletons?.toLocaleString() ?? '…'}</span></div>
+            <div className="grid grid-cols-2 gap-3 text-xs text-gray-500 dark:text-gray-400">
                 <div>With Global ID: <span className="font-semibold text-gray-700 dark:text-gray-300">{populations?.entities_with_global_ref?.toLocaleString() ?? '…'}</span></div>
                 <div className={populations?.global_ref_conflicts ? 'text-red-500 font-semibold' : ''}>Global ID conflicts: {populations?.global_ref_conflicts ?? '…'}</div>
             </div>
@@ -645,6 +669,8 @@ export default function WorkbenchPage() {
             {/* Filters */}
             {population === 'ENTITIES' ? (
                 <FilterBar mode="entities" value={entityFilters} onChange={setEntityFilters} />
+            ) : population === 'SINGLETONS' ? (
+                <FilterBar mode="singletons" value={singletonFilters} onChange={setSingletonFilters} />
             ) : population === 'APPROVED' ? (
                 <div className="flex gap-1.5">
                     <button
@@ -729,9 +755,9 @@ export default function WorkbenchPage() {
                 <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-6 lg:col-span-2">
                     <div className="flex items-center justify-between mb-4">
                         <h2 className="font-semibold text-gray-900 dark:text-white">
-                            {population === 'ENTITIES' ? 'Entities' : population.replace('_', ' ')}
+                            {population === 'ENTITIES' ? 'Entities' : population === 'SINGLETONS' ? 'Singletons' : population.replace('_', ' ')}
                         </h2>
-                        {population !== 'ENTITIES' && population !== 'APPROVED' && (pairsData?.items || []).length > 0 && (
+                        {population !== 'ENTITIES' && population !== 'APPROVED' && population !== 'SINGLETONS' && (pairsData?.items || []).length > 0 && (
                             <label className="flex items-center gap-1.5 text-[11px] text-gray-400 cursor-pointer select-none">
                                 <input
                                     type="checkbox"
@@ -801,6 +827,34 @@ export default function WorkbenchPage() {
                                         <div className="text-gray-500 dark:text-gray-400 mt-0.5">
                                             by {it.actor} · {new Date(it.created_at).toLocaleDateString()}
                                         </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    ) : population === 'SINGLETONS' ? (
+                        <div className="space-y-1.5 max-h-[520px] overflow-y-auto">
+                            {singletonsListLoading && <p className="text-xs text-gray-400">Loading...</p>}
+                            {!singletonsListLoading && (singletonsListData?.items || []).length === 0 && (
+                                <p className="text-xs text-gray-400">No singletons match these filters.</p>
+                            )}
+                            {(singletonsListData?.items || []).map((s: any) => {
+                                const TypeIcon = s.record_type === 'COMPANY' ? Building2 : UserIcon;
+                                const isSelected = selectedSingleton === s.customer_code;
+                                return (
+                                    <div
+                                        key={s.customer_code}
+                                        role="button"
+                                        tabIndex={0}
+                                        onClick={() => { setSelectedPair(null); setSelectedEntity(null); setSelectedSingleton(s.customer_code); }}
+                                        className={`w-full text-left p-2.5 rounded-lg border text-xs transition-colors cursor-pointer flex items-center justify-between gap-2 ${
+                                            isSelected ? 'border-blue-400 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900/40'
+                                        }`}
+                                    >
+                                        <div className="min-w-0">
+                                            <div className="font-medium text-gray-900 dark:text-white truncate">{s.name_norm || s.customer_code}</div>
+                                            <div className="text-gray-400 font-mono mt-0.5">{s.customer_code}</div>
+                                        </div>
+                                        <TypeIcon size={12} className="text-gray-400 shrink-0" />
                                     </div>
                                 );
                             })}
@@ -982,15 +1036,28 @@ export default function WorkbenchPage() {
 
                             <div>
                                 <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Global ID</h3>
-                                {entityDetail.global_ref ? (
+                                {/* A RETIRED ref keeps its string for history (retire_global_ref never
+                                    clears global_ref, only flips global_ref_state) -- but that's not an
+                                    ACTIVE assignment, so it must not be treated like one here. Checking
+                                    only global_ref's truthiness left retired entities permanently stuck
+                                    showing a confirmed-looking badge with no way to assign a fresh ID. */}
+                                {entityDetail.global_ref && entityDetail.global_ref_state !== 'RETIRED' ? (
                                     <div className="flex items-center justify-between p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-900/20">
                                         <span className="font-mono text-emerald-700 dark:text-emerald-300">{entityDetail.global_ref}</span>
                                         <span className="badge badge-success !text-[10px]">{entityDetail.global_ref_state}</span>
                                     </div>
                                 ) : (
-                                    <div className="flex gap-2">
-                                        <input value={globalRefInput} onChange={(e) => setGlobalRefInput(e.target.value)} placeholder="e.g. CIF-0012345" className="flex-1 text-xs py-1.5" />
-                                        <button onClick={assignGlobalRef} disabled={!globalRefInput.trim()} className="btn btn-primary !py-1.5 !px-3 text-xs disabled:opacity-40">Assign</button>
+                                    <div className="space-y-2">
+                                        {entityDetail.global_ref && entityDetail.global_ref_state === 'RETIRED' && (
+                                            <div className="flex items-center justify-between p-2.5 rounded-lg bg-gray-50 dark:bg-gray-900/40 text-xs">
+                                                <span className="font-mono text-gray-500 dark:text-gray-400">{entityDetail.global_ref}</span>
+                                                <span className="badge !text-[10px]">RETIRED</span>
+                                            </div>
+                                        )}
+                                        <div className="flex gap-2">
+                                            <input value={globalRefInput} onChange={(e) => setGlobalRefInput(e.target.value)} placeholder="e.g. CIF-0012345" className="flex-1 text-xs py-1.5" />
+                                            <button onClick={assignGlobalRef} disabled={!globalRefInput.trim()} className="btn btn-primary !py-1.5 !px-3 text-xs disabled:opacity-40">Assign</button>
+                                        </div>
                                     </div>
                                 )}
                             </div>
