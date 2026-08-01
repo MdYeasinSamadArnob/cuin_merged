@@ -228,5 +228,157 @@ def test_audit_chain_verifies_after_a_sequence_of_actions(pg_conn, prefix):
     assert checked >= 3  # genesis + the two actions above
 
 
+# ----------------------------------------------------------------------
+# Rollback: undo_merge / revert_global_ref / revoke_override
+# ----------------------------------------------------------------------
+
+def test_undo_merge_restores_exact_prior_state(pg_conn, prefix):
+    """The core promise: after undo_merge, membership/status/override state is
+    byte-for-byte what it was immediately before the merge -- not an approximation."""
+    result = wb.approve_pair(pg_conn, None, f"{prefix}A", f"{prefix}B", "CONFIRMED_MATCH", "seed", f"{prefix}officer_1")
+    keep_id = result["entity_id"]
+    cur = pg_conn.cursor()
+    # entity_a (A's entity) is always keep_id in approve_pair, entity_b (B's fresh entity) is absorbed.
+    cur.execute(
+        "SELECT payload_json->'merge_snapshot'->>'absorb_id' FROM audit_events WHERE audit_id = %s", (result["audit_id"],),
+    )
+    absorb_id = cur.fetchone()[0]
+    assert absorb_id != keep_id
+
+    undo_result = wb.undo_merge(pg_conn, absorb_id, "was wrong, different people", f"{prefix}officer_2")
+    assert undo_result["keep_id"] == keep_id
+    assert undo_result["restored_member_count"] == 1
+
+    cur.execute("SELECT status, merged_into_entity_id FROM entities WHERE entity_id = %s", (absorb_id,))
+    status, merged_into = cur.fetchone()
+    assert status == "ACTIVE"
+    assert merged_into is None
+
+    cur.execute("SELECT customer_code FROM entity_members WHERE entity_id = %s AND valid_to IS NULL", (absorb_id,))
+    assert {r[0] for r in cur.fetchall()} == {f"{prefix}B"}
+    cur.execute("SELECT customer_code FROM entity_members WHERE entity_id = %s AND valid_to IS NULL", (keep_id,))
+    assert {r[0] for r in cur.fetchall()} == {f"{prefix}A"}
+
+    cur.execute("SELECT revoked_at FROM resolution_overrides WHERE override_id = %s", (result["override_id"],))
+    assert cur.fetchone()[0] is not None  # revoked, so a future pipeline run won't re-apply the merge
+
+
+def test_undo_merge_refuses_when_not_currently_merged(pg_conn, prefix):
+    result = wb.approve_pair(pg_conn, None, f"{prefix}A", f"{prefix}B", "CONFIRMED_MATCH", "seed", f"{prefix}officer_1")
+    with pytest.raises(wb.WorkbenchError):
+        wb.undo_merge(pg_conn, result["entity_id"], "not actually merged", f"{prefix}officer_2")
+
+
+def test_undo_merge_refuses_when_member_moved_since(pg_conn, prefix):
+    """Safety net: if a later action (another merge, a split) touched the moved
+    member, undo must refuse rather than silently produce an inconsistent state."""
+    result = wb.approve_pair(pg_conn, None, f"{prefix}A", f"{prefix}B", "CONFIRMED_MATCH", "seed", f"{prefix}officer_1")
+    keep_id = result["entity_id"]
+    cur = pg_conn.cursor()
+    cur.execute("SELECT payload_json->'merge_snapshot'->>'absorb_id' FROM audit_events WHERE audit_id = %s", (result["audit_id"],))
+    absorb_id = cur.fetchone()[0]
+
+    wb.split_record(pg_conn, None, keep_id, f"{prefix}B", "INCORRECT_LINK", "moved away before undo attempted", f"{prefix}officer_2")
+
+    with pytest.raises(wb.WorkbenchError):
+        wb.undo_merge(pg_conn, absorb_id, "should be refused", f"{prefix}officer_3")
+
+
+def test_undo_merge_restores_carried_global_ref(pg_conn, prefix):
+    """When a merge carries the absorbed entity's CONFIRMED ref onto the
+    survivor (survivor had none), undo must put the survivor back to
+    unassigned -- not leave it holding a ref that came from an entity
+    that no longer absorbs it."""
+    res_a = wb.approve_pair(pg_conn, None, f"{prefix}A", f"{prefix}B", "CONFIRMED_MATCH", "seed keep", f"{prefix}officer_1")
+    keep_id = res_a["entity_id"]
+    res_c = wb.approve_pair(pg_conn, None, f"{prefix}C", f"{prefix}D", "CONFIRMED_MATCH", "seed absorb", f"{prefix}officer_1")
+    absorb_id_before_merge = res_c["entity_id"]
+    ref = f"CIF-{prefix}CARRIED"
+    wb.assign_global_ref(pg_conn, absorb_id_before_merge, ref, "CONFIRMED", "give absorb entity a ref", f"{prefix}officer_1")
+
+    merge_result = wb.merge_entities(pg_conn, None, keep_id, absorb_id_before_merge, "SAME_PERSON_VERIFIED", "merge", f"{prefix}officer_2")
+    survivor = merge_result["kept_entity_id"]
+    absorbed = merge_result["absorbed_entity_id"]
+    # Both components have 2 members, so merge_entities' tie-break falls to
+    # entity_id string comparison -- which of the two randomly-generated
+    # UUIDs wins isn't predictable, so this test handles either outcome
+    # rather than asserting one.
+
+    cur = pg_conn.cursor()
+    if absorbed == absorb_id_before_merge:
+        # The ref-holder was the one absorbed -- the merge must have carried
+        # its ref onto the survivor, so there's something for undo to revert.
+        cur.execute("SELECT global_ref, global_ref_state FROM entities WHERE entity_id = %s", (survivor,))
+        assert cur.fetchone() == (ref, "CONFIRMED")
+
+        wb.undo_merge(pg_conn, absorbed, "undo the ref-carrying merge", f"{prefix}officer_3")
+        cur.execute("SELECT global_ref, global_ref_state FROM entities WHERE entity_id = %s", (survivor,))
+        assert cur.fetchone() == (None, "UNASSIGNED")
+        cur.execute("SELECT global_ref, global_ref_state FROM entities WHERE entity_id = %s", (absorbed,))
+        assert cur.fetchone() == (ref, "CONFIRMED")  # the absorbed entity's own row was never touched, still has it
+    else:
+        # The ref-holder was the survivor -- nothing was carried, so
+        # undoing this merge should NOT touch its ref at all.
+        wb.undo_merge(pg_conn, absorbed, "undo a merge that never touched the ref", f"{prefix}officer_3")
+        cur.execute("SELECT global_ref, global_ref_state FROM entities WHERE entity_id = %s", (survivor,))
+        assert cur.fetchone() == (ref, "CONFIRMED")
+
+
+def test_revert_global_ref_restores_previous_value(pg_conn, prefix):
+    result = wb.approve_pair(pg_conn, None, f"{prefix}A", f"{prefix}B", "CONFIRMED_MATCH", "seed", f"{prefix}officer_1")
+    entity_id = result["entity_id"]
+    ref1 = f"CIF-{prefix}V1"
+    ref2 = f"CIF-{prefix}V2"
+    wb.assign_global_ref(pg_conn, entity_id, ref1, "CONFIRMED", "first assign", f"{prefix}officer_1")
+    wb.assign_global_ref(pg_conn, entity_id, ref2, "CONFIRMED", "edit to v2", f"{prefix}officer_1")
+
+    revert_result = wb.revert_global_ref(pg_conn, entity_id, "v2 was a mistake", f"{prefix}officer_2")
+    assert revert_result["restored_ref"] == ref1
+
+    cur = pg_conn.cursor()
+    cur.execute("SELECT global_ref, global_ref_state FROM entities WHERE entity_id = %s", (entity_id,))
+    assert cur.fetchone() == (ref1, "CONFIRMED")
+
+
+def test_revert_global_ref_with_no_history_raises(pg_conn, prefix):
+    result = wb.approve_pair(pg_conn, None, f"{prefix}A", f"{prefix}B", "CONFIRMED_MATCH", "seed", f"{prefix}officer_1")
+    with pytest.raises(wb.WorkbenchError):
+        wb.revert_global_ref(pg_conn, result["entity_id"], "nothing to revert", f"{prefix}officer_2")
+
+
+def test_revoke_override_marks_revoked_and_refuses_twice(pg_conn, prefix):
+    result = wb.approve_pair(pg_conn, None, f"{prefix}A", f"{prefix}B", "CONFIRMED_MATCH", "seed", f"{prefix}officer_1")
+    override_id = result["override_id"]
+
+    revoke_result = wb.revoke_override(pg_conn, override_id, "was incorrect", f"{prefix}officer_2")
+    assert revoke_result["override_id"] == override_id
+
+    cur = pg_conn.cursor()
+    cur.execute("SELECT revoked_at, revoked_by FROM resolution_overrides WHERE override_id = %s", (override_id,))
+    revoked_at, revoked_by = cur.fetchone()
+    assert revoked_at is not None
+    assert revoked_by == f"{prefix}officer_2"
+
+    with pytest.raises(wb.WorkbenchError):
+        wb.revoke_override(pg_conn, override_id, "double revoke", f"{prefix}officer_3")
+
+
+def test_audit_chain_verifies_after_rollback_actions(pg_conn, prefix):
+    result = wb.approve_pair(pg_conn, None, f"{prefix}A", f"{prefix}B", "CONFIRMED_MATCH", "seed", f"{prefix}officer_1")
+    cur = pg_conn.cursor()
+    cur.execute("SELECT payload_json->'merge_snapshot'->>'absorb_id' FROM audit_events WHERE audit_id = %s", (result["audit_id"],))
+    absorb_id = cur.fetchone()[0]
+    wb.undo_merge(pg_conn, absorb_id, "undo for chain test", f"{prefix}officer_2")
+
+    result2 = wb.approve_pair(pg_conn, None, f"{prefix}C", f"{prefix}D", "CONFIRMED_MATCH", "seed 2", f"{prefix}officer_1")
+    wb.assign_global_ref(pg_conn, result2["entity_id"], f"CIF-{prefix}CHAIN", "CONFIRMED", "assign", f"{prefix}officer_1")
+    wb.revert_global_ref(pg_conn, result2["entity_id"], "undo assign for chain test", f"{prefix}officer_2")
+    wb.revoke_override(pg_conn, result2["override_id"], "revoke for chain test", f"{prefix}officer_2")
+
+    is_valid, error, checked = wb.verify_audit_chain(pg_conn)
+    assert is_valid, error
+    assert checked >= 6
+
+
 if __name__ == "__main__":
     print("Run via pytest (requires a live Postgres connection).")

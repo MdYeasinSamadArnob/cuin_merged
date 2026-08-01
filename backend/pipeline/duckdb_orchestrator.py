@@ -125,6 +125,7 @@ class DuckDBPipelineOrchestrator:
         self.scoring_config = scoring_config
         self.progress_callback = progress_callback
         self.run_id = run_id
+        self._carry_forward = True
 
         # EffectiveRuleset resolves the 5 decision-affecting thresholds
         # from the ACTIVE rule catalog when one exists, falling back to
@@ -867,7 +868,7 @@ class DuckDBPipelineOrchestrator:
                 # step's isolation.
                 entity_result = _step(
                     "resolve_entities", entity_resolver.resolve_entities,
-                    pg_conn, self.run_id, clusters, set(clusters.keys()), "pipeline",
+                    pg_conn, self.run_id, clusters, set(clusters.keys()), "pipeline", self._carry_forward,
                 )
                 if entity_result:
                     pg_conn.commit()
@@ -914,8 +915,17 @@ class DuckDBPipelineOrchestrator:
         run_id: str,
         raw_records: list = None,
         mode: str = "FULL",
+        carry_forward: bool = True,
     ) -> PipelineResult:
         self.run_id = run_id
+        # "Run as new pipeline" from the Datasource UI -- see
+        # engine.clustering.entity_resolver.resolve_entities'
+        # carry_forward docstring. Default True (current, unchanged
+        # behavior): every run's clusters carry forward onto existing
+        # entities via Jaccard overlap, which is what makes a re-run
+        # against corrected source data "update the existing clusters"
+        # rather than create a disconnected parallel world.
+        self._carry_forward = carry_forward
         result = PipelineResult(
             run_id=run_id, success=False, mode=mode, stages=[],
             started_at=datetime.utcnow(),

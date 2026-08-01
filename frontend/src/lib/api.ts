@@ -24,7 +24,7 @@ function resolveApiBaseUrl(): string {
     return 'http://localhost:8000';
 }
 
-const API_BASE_URL = resolveApiBaseUrl();
+export const API_BASE_URL = resolveApiBaseUrl();
 
 class ApiClient {
     private baseUrl: string;
@@ -419,6 +419,31 @@ class ApiClient {
         });
     }
 
+    // Rollback -- undo a merge, revert a Global ID change, or revoke an
+    // approve/reject override. See backend/services/workbench_service.py's
+    // "Rollback" section: each of these is a NEW forward audit event that
+    // reverses a prior one, never a mutation of the original.
+    async wbUndoMerge(entityId: string, reason: string, actor: string) {
+        return this.request(`/workbench/entities/${entityId}/undo-merge`, {
+            method: 'POST',
+            body: JSON.stringify({ reason, actor }),
+        });
+    }
+
+    async wbRevertGlobalRef(entityId: string, reason: string, actor: string) {
+        return this.request(`/workbench/entities/${entityId}/revert-global-ref`, {
+            method: 'POST',
+            body: JSON.stringify({ reason, actor }),
+        });
+    }
+
+    async wbRevokeOverride(overrideId: string, reason: string, actor: string) {
+        return this.request(`/workbench/overrides/${overrideId}/revoke`, {
+            method: 'POST',
+            body: JSON.stringify({ reason, actor }),
+        });
+    }
+
     async wbAuditVerify() {
         return this.request('/workbench/audit/verify');
     }
@@ -519,6 +544,15 @@ class ApiClient {
         p.set('page_size', String(params.pageSize ?? 30));
         if (params.minConfidence !== undefined) p.set('min_confidence', String(params.minConfidence));
         return this.request(`/graph/v2/bridges?${p.toString()}`);
+    }
+
+    // -- Public Identity Recognition API (/api/v1) auth --
+    // Hits the INTERNAL admin router (/admin/api-token), not the public
+    // sub-app itself. Auth for /api/v1 is a single global bearer token
+    // (settings.PUBLIC_API_BEARER_TOKEN) -- this just reads back its
+    // current effective value so the Getting Started panel can show it.
+    async getApiToken() {
+        return this.request('/admin/api-token');
     }
 }
 

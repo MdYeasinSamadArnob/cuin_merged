@@ -13,30 +13,35 @@ import {
     Settings,
     ChevronLeft,
     ChevronRight,
-    Upload,
     Sun,
     Moon,
     Database,
-    SlidersHorizontal,
+    Webhook,
 } from "lucide-react";
 import { useState } from "react";
 import { clsx } from "clsx";
 import { useAppStore } from "@/stores/useAppStore";
 
+// "Upload" (ad-hoc Excel/CSV) is intentionally not in the nav -- it's a
+// legacy small-batch entry point, separate from the real Datasource
+// pipeline everything else here drives. The page and its backend route
+// still work if visited directly at /upload; only the nav link is
+// hidden, so nothing about that mechanism is broken. "Rules" no longer
+// gets its own entry either -- it's merged into "Settings" (a single
+// tabbed page now), see /settings/page.tsx.
 const navigation = [
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-    { name: "Upload", href: "/upload", icon: Upload },
     { name: "Datasource", href: "/datasource", icon: Database },
     { name: "Pipeline", href: "/pipeline", icon: GitBranch },
     { name: "Explorer", href: "/explorer", icon: Search },
     { name: "Review", href: "/review", icon: ClipboardCheck },
     { name: "Compliance", href: "/compliance", icon: Shield },
     { name: "Graph", href: "/graph", icon: Network },
+    { name: "API", href: "/api-docs", icon: Webhook },
 ];
 
 const secondaryNavigation = [
     { name: "Settings", href: "/settings", icon: Settings },
-    { name: "Rules", href: "/settings/rules", icon: SlidersHorizontal },
 ];
 
 export default function Sidebar() {

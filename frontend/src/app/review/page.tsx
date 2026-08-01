@@ -12,6 +12,7 @@ import { motion } from 'framer-motion';
 import {
     Users, GitMerge, GitBranch, XCircle, UserX, AlertTriangle, ShieldCheck, ShieldAlert,
     Search as SearchIcon, CheckCircle2, IdCard, History, Building2, User as UserIcon, ArrowLeft, ChevronRight, UserPlus,
+    RotateCcw,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { ScoreBreakdown } from '@/components/workbench/ScoreBreakdown';
@@ -433,12 +434,21 @@ export default function WorkbenchPage() {
     });
 
     // ---- Single-item actions ----
-    const [dialog, setDialog] = useState<null | { action: 'approve' | 'reject' | 'merge' | 'split'; title: string; bulk?: boolean }>(null);
+    const [dialog, setDialog] = useState<null | {
+        action: 'approve' | 'reject' | 'merge' | 'split' | 'undo-merge' | 'revert-global-ref' | 'revoke-override';
+        title: string; bulk?: boolean;
+    }>(null);
     const [actionError, setActionError] = useState<string | null>(null);
     const [mergeTarget, setMergeTarget] = useState<string>('');
     const [splitCode, setSplitCode] = useState<string>('');
     const [globalRefInput, setGlobalRefInput] = useState('');
     useEffect(() => setGlobalRefInput(''), [selectedSingleton]);
+    // Rollback targets -- which absorbed entity_id to resurrect, or
+    // which override_id to revoke. revert-global-ref always targets
+    // whichever entity is currently selected, so it needs no separate
+    // target state.
+    const [undoMergeTargetId, setUndoMergeTargetId] = useState<string | null>(null);
+    const [revokeOverrideTargetId, setRevokeOverrideTargetId] = useState<string | null>(null);
 
     // ---- Bulk actions ----
     const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number; failures: string[] } | null>(null);
@@ -451,6 +461,8 @@ export default function WorkbenchPage() {
         queryClient.invalidateQueries({ queryKey: ['wb-entity-detail'] });
         queryClient.invalidateQueries({ queryKey: ['wb-entity-matches'] });
         queryClient.invalidateQueries({ queryKey: ['wb-audit-verify'] });
+        queryClient.invalidateQueries({ queryKey: ['wb-overrides'] });
+        queryClient.invalidateQueries({ queryKey: ['wb-overrides-count'] });
     };
 
     const runBulkPairAction = async (action: 'approve' | 'reject', result: ReasonDialogResult) => {
@@ -522,6 +534,17 @@ export default function WorkbenchPage() {
             } else if (dialog?.action === 'split' && selectedEntity && splitCode) {
                 await api.wbSplit(runId, selectedEntity, splitCode, result.reasonCode, result.reason, result.actor);
                 setSplitCode('');
+                invalidateAll();
+            } else if (dialog?.action === 'undo-merge' && undoMergeTargetId) {
+                await api.wbUndoMerge(undoMergeTargetId, `${result.reasonCode}: ${result.reason}`, result.actor);
+                setUndoMergeTargetId(null);
+                invalidateAll();
+            } else if (dialog?.action === 'revert-global-ref' && selectedEntity) {
+                await api.wbRevertGlobalRef(selectedEntity, `${result.reasonCode}: ${result.reason}`, result.actor);
+                invalidateAll();
+            } else if (dialog?.action === 'revoke-override' && revokeOverrideTargetId) {
+                await api.wbRevokeOverride(revokeOverrideTargetId, `${result.reasonCode}: ${result.reason}`, result.actor);
+                setRevokeOverrideTargetId(null);
                 invalidateAll();
             }
         } catch (e: any) {
@@ -824,8 +847,17 @@ export default function WorkbenchPage() {
                                             )}
                                         </div>
                                         <div className="text-gray-400 font-mono mt-0.5">{it.a_code} · {it.b_code}</div>
-                                        <div className="text-gray-500 dark:text-gray-400 mt-0.5">
-                                            by {it.actor} · {new Date(it.created_at).toLocaleDateString()}
+                                        <div className="flex items-center justify-between mt-0.5">
+                                            <span className="text-gray-500 dark:text-gray-400">
+                                                by {it.actor} · {new Date(it.created_at).toLocaleDateString()}
+                                            </span>
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); setRevokeOverrideTargetId(it.override_id); setDialog({ action: 'revoke-override', title: 'Revoke this decision' }); }}
+                                                className="flex items-center gap-1 text-red-500 hover:underline shrink-0"
+                                                title="Stop this decision from being re-applied on future pipeline runs"
+                                            >
+                                                <RotateCcw size={11} /> Revoke
+                                            </button>
                                         </div>
                                     </div>
                                 );
@@ -1004,14 +1036,25 @@ export default function WorkbenchPage() {
                                             <div className="opacity-75 mt-1">
                                                 This run's own stored score/decision above is never rewritten (that would falsify history) -- but the entity registry and clustering are already updated, and this verdict is re-applied on every future pipeline run too.
                                             </div>
-                                            {breakdown.officer_entity_id && (
-                                                <button
-                                                    onClick={() => jumpToEntity(breakdown.officer_entity_id)}
-                                                    className="flex items-center gap-1 mt-2 font-semibold hover:underline"
-                                                >
-                                                    View merged entity <ArrowLeft size={11} className="rotate-180" />
-                                                </button>
-                                            )}
+                                            <div className="flex items-center gap-4 mt-2">
+                                                {breakdown.officer_verdict === 'MUST_LINK' && breakdown.officer_entity_id && (
+                                                    <button
+                                                        onClick={() => jumpToEntity(breakdown.officer_entity_id)}
+                                                        className="flex items-center gap-1 font-semibold hover:underline"
+                                                    >
+                                                        View merged entity <ArrowLeft size={11} className="rotate-180" />
+                                                    </button>
+                                                )}
+                                                {breakdown.officer_override_id && (
+                                                    <button
+                                                        onClick={() => { setRevokeOverrideTargetId(breakdown.officer_override_id); setDialog({ action: 'revoke-override', title: 'Revoke this decision' }); }}
+                                                        className="flex items-center gap-1 font-semibold hover:underline"
+                                                        title="A bank officer can make a mistake -- revoke this decision so the pair goes back to Needs Review and can be re-decided (e.g. approved instead of rejected)."
+                                                    >
+                                                        <RotateCcw size={11} /> Revoke -- send back to Needs Review
+                                                    </button>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
                                 )}
@@ -1059,6 +1102,15 @@ export default function WorkbenchPage() {
                                             <button onClick={assignGlobalRef} disabled={!globalRefInput.trim()} className="btn btn-primary !py-1.5 !px-3 text-xs disabled:opacity-40">Assign</button>
                                         </div>
                                     </div>
+                                )}
+                                {(entityDetail.lineage || []).some((l: any) => ['GLOBAL_REF_ASSIGNED', 'GLOBAL_REF_EDITED', 'GLOBAL_REF_RETIRED'].includes(l.event)) && (
+                                    <button
+                                        onClick={() => setDialog({ action: 'revert-global-ref', title: 'Revert last Global ID change' })}
+                                        className="flex items-center gap-1 mt-2 text-[11px] text-red-500 hover:underline"
+                                        title="Restore whatever this entity's Global ID was immediately before its most recent change"
+                                    >
+                                        <RotateCcw size={11} /> Revert last change
+                                    </button>
                                 )}
                             </div>
 
@@ -1139,13 +1191,29 @@ export default function WorkbenchPage() {
                                     <History size={12} /> Lineage
                                 </h3>
                                 <div className="space-y-1 max-h-48 overflow-y-auto">
-                                    {entityDetail.lineage.map((l: any, i: number) => (
-                                        <div key={i} className="text-[11px] p-2 rounded bg-gray-50 dark:bg-gray-900/40">
-                                            <span className="font-semibold text-gray-700 dark:text-gray-300">{l.event}</span>
-                                            {l.jaccard != null && <span className="text-gray-400"> · J={l.jaccard.toFixed(2)}</span>}
-                                            <span className="text-gray-400"> · {l.actor} · {new Date(l.created_at).toLocaleString()}</span>
-                                        </div>
-                                    ))}
+                                    {entityDetail.lineage.map((l: any, i: number) => {
+                                        const canUndo = l.event === 'MERGED_IN' && (l.from_entity_ids || []).length === 1;
+                                        return (
+                                            <div key={i} className="text-[11px] p-2 rounded bg-gray-50 dark:bg-gray-900/40">
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <span>
+                                                        <span className="font-semibold text-gray-700 dark:text-gray-300">{l.event}</span>
+                                                        {l.jaccard != null && <span className="text-gray-400"> · J={l.jaccard.toFixed(2)}</span>}
+                                                        <span className="text-gray-400"> · {l.actor} · {new Date(l.created_at).toLocaleString()}</span>
+                                                    </span>
+                                                    {canUndo && (
+                                                        <button
+                                                            onClick={() => { setUndoMergeTargetId(l.from_entity_ids[0]); setDialog({ action: 'undo-merge', title: 'Undo this merge' }); }}
+                                                            className="flex items-center gap-1 text-red-500 hover:underline shrink-0"
+                                                            title="Resurrect the absorbed entity and move its members back"
+                                                        >
+                                                            <RotateCcw size={11} /> Undo
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
                                 </div>
                             </div>
                         </div>

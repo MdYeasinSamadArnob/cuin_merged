@@ -675,9 +675,20 @@ class SparkPipelineOrchestrator:
         self,
         run_id: str,
         raw_records: list = None,
-        mode: str = "FULL"
+        mode: str = "FULL",
+        carry_forward: bool = True,
     ) -> PipelineResult:
-        """Execute the complete Spark-based ER pipeline."""
+        """
+        Execute the complete Spark-based ER pipeline.
+
+        `carry_forward` is accepted for interface parity with
+        DuckDBPipelineOrchestrator/DorisPipelineOrchestrator's
+        "run as new pipeline" option (api/routes_datasource.py) but has
+        no effect here -- this legacy/rollback path never calls
+        engine.clustering.entity_resolver.resolve_entities (no
+        durable entity registry participation), so there is no
+        carry-forward behavior to disable in the first place.
+        """
         result = PipelineResult(
             run_id=run_id,
             success=False,

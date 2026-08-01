@@ -10,21 +10,32 @@ router = APIRouter()
 
 class DatasourceStartRequest(BaseModel):
     mode: str = "FULL"
-    # "duckdb" is the deterministic Ruleset v2 engine and the default --
-    # zero-ops, in-process, used by every dev/CI environment.
-    # "doris" runs the SAME ruleset (engine.rules.* compiled through
-    # engine.ports.doris_dialect) against a Doris cluster instead --
-    # proven pair-for-pair identical to the duckdb engine on the same
-    # input (tests/integration/test_doris_cross_engine_parity.py).
-    # Requires DORIS_HOST/DORIS_MYSQL_PORT/DORIS_HTTP_PORT reachable
-    # (see api/config.py) -- the import is lazy so a deployment without
-    # a Doris cluster configured never pays for pymysql/httpx unless
+    # "doris" is the default -- distributed, colocated-join execution of
+    # the same ruleset, proven pair-for-pair identical to the duckdb
+    # engine on the same input (tests/integration/
+    # test_doris_cross_engine_parity.py), and what production/at-scale
+    # bank ingestion actually runs against. Requires DORIS_HOST/
+    # DORIS_MYSQL_PORT/DORIS_HTTP_PORT reachable (see api/config.py).
+    # "duckdb" remains available -- zero-ops, in-process, deterministic
+    # Ruleset v2, used by every dev/CI environment -- the import is lazy
+    # so a deployment without Doris configured never pays for it unless
     # this engine is actually requested.
-    # "spark" is kept available for comparison/rollback but is no longer
-    # the default -- it retrains Splink's m/u probabilities on every run
+    # "spark" is kept available for comparison/rollback but is not the
+    # default -- it retrains Splink's m/u probabilities on every run
     # with no fixed seed, so identical input can produce different
     # clusters between runs (see engine.ruleset for the replacement).
-    engine: str = "duckdb"
+    engine: str = "doris"
+    # A bank re-running ingestion after finding a mismatch in their
+    # source system (the actual, stated reason this option exists) wants
+    # the re-run to UPDATE the existing entity clusters/Global IDs, not
+    # spin up a disconnected parallel identity world -- which is exactly
+    # what carry_forward=True (the default, unchanged behavior) already
+    # does via engine.clustering.entity_resolver's Jaccard carry-forward,
+    # every run, automatically. Setting this False is the explicit
+    # opt-in "run as a new pipeline" escape hatch: every accepted
+    # cluster mints a brand-new entity_id regardless of overlap with
+    # prior entities. See entity_resolver.resolve_entities's docstring.
+    carry_forward: bool = True
 
 @router.post("/demo")
 async def start_datasource_demo(
@@ -116,7 +127,7 @@ async def start_datasource_demo(
                     'mode': run.mode.value
                 })
 
-                result = await orchestrator.run(run.run_id, mode=request.mode)
+                result = await orchestrator.run(run.run_id, mode=request.mode, carry_forward=request.carry_forward)
 
                 run_obj = run_service.get_run(run.run_id)
                 if run_obj:

@@ -14,13 +14,16 @@ const REASON_CODES: Record<string, string[]> = {
     reject: ["DIFFERENT_PEOPLE", "COINCIDENTAL_MATCH", "DATA_ERROR", "OTHER"],
     merge: ["SAME_PERSON_VERIFIED", "CONFIRMED_BY_OFFICER", "OTHER"],
     split: ["INCORRECT_LINK", "DIFFERENT_PERSON", "DATA_ERROR", "OTHER"],
+    "undo-merge": ["INCORRECT_MERGE", "OFFICER_ERROR", "OTHER"],
+    "revert-global-ref": ["INCORRECT_ASSIGNMENT", "OFFICER_ERROR", "OTHER"],
+    "revoke-override": ["INCORRECT_DECISION", "OFFICER_ERROR", "OTHER"],
 };
 
 export function ReasonDialog({
     title, action, onConfirm, onCancel,
 }: {
     title: string;
-    action: "approve" | "reject" | "merge" | "split";
+    action: "approve" | "reject" | "merge" | "split" | "undo-merge" | "revert-global-ref" | "revoke-override";
     onConfirm: (result: ReasonDialogResult) => void;
     onCancel: () => void;
 }) {

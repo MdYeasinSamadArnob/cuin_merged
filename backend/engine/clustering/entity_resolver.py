@@ -99,12 +99,28 @@ def resolve_entities(
     components: Dict[str, List[str]],
     accepted_roots: Set[str],
     actor: str = "pipeline",
+    carry_forward: bool = True,
 ) -> EntityResolutionResult:
     """
     components: root -> member list (from UnionFind.get_clusters()).
     accepted_roots: which roots in `components` passed cohesion and
         have >= 2 members -- everything else is skipped, matching the
         module docstring's "only accepted, multi-member components".
+
+    carry_forward: when False (a "run as new pipeline" / fresh-identity
+        request from a bank officer -- see api/routes_datasource.py's
+        DatasourceStartRequest.carry_forward), every accepted component
+        mints a brand-new entity_id unconditionally, regardless of
+        Jaccard overlap with prior entities -- achieved by simply never
+        populating pass 1's overlap counts, so _pick_candidate always
+        sees zero candidates and takes the CREATE branch. Membership
+        deltas (closing old memberships, opening new ones) still use
+        the REAL current membership snapshot either way -- codes moving
+        to a fresh entity still need their prior membership closed, or
+        ux_entity_members_current's one-current-entity-per-code
+        invariant breaks. This is the escape hatch from the normal
+        "update existing clusters" behavior every run has by default;
+        most runs should never set this.
 
     Writes entities/entity_members/entity_lineage on `pg_conn` in
     BULK (psycopg2.extras.execute_values, page_size=5000 -- this
@@ -138,10 +154,11 @@ def resolve_entities(
         if len(members) < 2:
             continue
         overlap_counts: Dict[str, int] = {}
-        for code in members:
-            eid = code_to_entity.get(code)
-            if eid:
-                overlap_counts[eid] = overlap_counts.get(eid, 0) + 1
+        if carry_forward:
+            for code in members:
+                eid = code_to_entity.get(code)
+                if eid:
+                    overlap_counts[eid] = overlap_counts.get(eid, 0) + 1
         root_overlap[root] = overlap_counts
         _, best_j = _pick_candidate(overlap_counts, len(members), entity_size, entity_info)
         root_best_jaccard[root] = best_j

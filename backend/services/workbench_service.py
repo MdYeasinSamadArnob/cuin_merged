@@ -147,13 +147,20 @@ def _ensure_entity_for_code(cur, customer_code: str, run_id: Optional[str], acto
     return entity_id
 
 
-def _merge_entities_tx(cur, run_id: Optional[str], keep_id: str, absorb_id: str, reason_code: str, reason: str, actor: str) -> None:
+def _merge_entities_tx(cur, run_id: Optional[str], keep_id: str, absorb_id: str, reason_code: str, reason: str, actor: str) -> dict:
     """
     Moves every member of absorb_id into keep_id, marks absorb_id
     MERGED. Global Ref conflict handling: if BOTH entities carry a
     CONFIRMED Global Ref, this is a business decision no software
     should make silently -- raises WorkbenchError rather than
     guessing which ID survives (see the plan's risk register).
+
+    Returns a reversal snapshot dict -- the caller embeds this (plus
+    the resolution_overrides override_id it separately creates) into
+    its audit_events payload under "merge_snapshot", which is the ONLY
+    place this data survives after commit (previously just a local
+    Python variable, discarded -- meaning a merge could never be
+    precisely undone at all; see undo_merge's docstring).
     """
     cur.execute("SELECT global_ref, global_ref_state FROM entities WHERE entity_id = %s", (keep_id,))
     keep_ref, keep_state = cur.fetchone()
@@ -167,7 +174,6 @@ def _merge_entities_tx(cur, run_id: Optional[str], keep_id: str, absorb_id: str,
         )
 
     members = _entity_members(cur, absorb_id)
-    now_ts_codes = [(keep_id, c, run_id, "OFFICER") for c in members]
     for code in members:
         cur.execute(
             "UPDATE entity_members SET valid_to = NOW() WHERE entity_id = %s AND customer_code = %s AND valid_to IS NULL",
@@ -179,7 +185,27 @@ def _merge_entities_tx(cur, run_id: Optional[str], keep_id: str, absorb_id: str,
         )
 
     # If the absorbed entity had a Global Ref and the survivor doesn't, carry it forward.
-    if absorb_state == "CONFIRMED" and keep_state != "CONFIRMED":
+    # Must ALSO clear it off the absorbed entity's own row -- and in THIS
+    # order, clear-then-set, not set-then-clear. ux_entities_global_ref is
+    # a non-deferred unique index (checked at the end of each statement,
+    # not at commit), so setting keep_id's ref FIRST while absorb_id still
+    # holds the identical string is a real (if transient) duplicate and
+    # raises UniqueViolation immediately -- confirmed live, this failed
+    # ~50% of the time (whichever side merge_entities' size/id tie-break
+    # happened to pick as the ref-carrying case) until the order was
+    # swapped. Found via test_undo_merge_restores_carried_global_ref -- a
+    # genuine pre-existing bug (this UPDATE predates this session's
+    # changes), not something the rollback work introduced: any merge
+    # where the absorbed side had a CONFIRMED ref and the survivor didn't
+    # would crash. undo_merge restores this row's ref/state from the
+    # snapshot's absorb_global_ref_before/absorb_global_ref_state_before,
+    # so clearing it here doesn't lose the data needed to reverse it.
+    keep_ref_changed = absorb_state == "CONFIRMED" and keep_state != "CONFIRMED"
+    if keep_ref_changed:
+        cur.execute(
+            "UPDATE entities SET global_ref = NULL, global_ref_state = 'UNASSIGNED', updated_at = NOW() WHERE entity_id = %s",
+            (absorb_id,),
+        )
         cur.execute(
             "UPDATE entities SET global_ref = %s, global_ref_state = 'CONFIRMED', updated_at = NOW() WHERE entity_id = %s",
             (absorb_ref, keep_id),
@@ -197,6 +223,13 @@ def _merge_entities_tx(cur, run_id: Optional[str], keep_id: str, absorb_id: str,
         "INSERT INTO entity_lineage (entity_id, run_id, event, from_entity_ids, member_count, actor) VALUES (%s,%s,'MERGED_IN',%s::uuid[],%s,%s)",
         (keep_id, run_id, [absorb_id], len(members), actor),
     )
+
+    return {
+        "keep_id": keep_id, "absorb_id": absorb_id, "moved_member_codes": members,
+        "keep_global_ref_changed": keep_ref_changed,
+        "keep_global_ref_before": keep_ref, "keep_global_ref_state_before": keep_state,
+        "absorb_global_ref_before": absorb_ref, "absorb_global_ref_state_before": absorb_state,
+    }
 
 
 def approve_pair(pg_conn, run_id: Optional[str], a_code: str, b_code: str, reason_code: str, reason: str, actor: str) -> dict:
@@ -222,15 +255,16 @@ def approve_pair(pg_conn, run_id: Optional[str], a_code: str, b_code: str, reaso
 
         entity_a = _ensure_entity_for_code(cur, a_code, run_id, actor)
         entity_b = _ensure_entity_for_code(cur, b_code, run_id, actor)
+        merge_snapshot = None
         if entity_a != entity_b:
-            _merge_entities_tx(cur, run_id, entity_a, entity_b, reason_code, reason, actor)
+            merge_snapshot = _merge_entities_tx(cur, run_id, entity_a, entity_b, reason_code, reason, actor)
+            merge_snapshot["override_id"] = override_id
         merged_entity_id = entity_a
 
-        audit_id, this_hash = _append_audit_event(
-            cur, "REVIEW_APPROVED",
-            {"a_code": a_code, "b_code": b_code, "reason_code": reason_code, "reason": reason, "entity_id": merged_entity_id},
-            actor, run_id,
-        )
+        audit_payload = {"a_code": a_code, "b_code": b_code, "reason_code": reason_code, "reason": reason, "entity_id": merged_entity_id}
+        if merge_snapshot:
+            audit_payload["merge_snapshot"] = merge_snapshot
+        audit_id, this_hash = _append_audit_event(cur, "REVIEW_APPROVED", audit_payload, actor, run_id)
 
         decision_id = str(uuid4())
         cur.execute(
@@ -304,7 +338,7 @@ def merge_entities(pg_conn, run_id: Optional[str], entity_id_a: str, entity_id_b
         # tie-break on entity_id for determinism.
         keep_id, absorb_id = (entity_id_a, entity_id_b) if (len(members_a), entity_id_a) >= (len(members_b), entity_id_b) else (entity_id_b, entity_id_a)
 
-        _merge_entities_tx(cur, run_id, keep_id, absorb_id, reason_code, reason, actor)
+        merge_snapshot = _merge_entities_tx(cur, run_id, keep_id, absorb_id, reason_code, reason, actor)
 
         # Representative MUST_LINK override so build_clusters() re-applies this merge on every future run.
         a_code, b_code = _order_pair(members_a[0], members_b[0])
@@ -314,9 +348,12 @@ def merge_entities(pg_conn, run_id: Optional[str], entity_id_a: str, entity_id_b
             "VALUES (%s,'MUST_LINK',%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING",
             (override_id, a_code, b_code, keep_id, reason_code, reason, actor, run_id),
         )
+        merge_snapshot["override_id"] = override_id
 
         audit_id, this_hash = _append_audit_event(
-            cur, "CLUSTER_MERGED", {"kept_entity_id": keep_id, "absorbed_entity_id": absorb_id, "reason_code": reason_code, "reason": reason}, actor, run_id,
+            cur, "CLUSTER_MERGED",
+            {"kept_entity_id": keep_id, "absorbed_entity_id": absorb_id, "reason_code": reason_code, "reason": reason, "merge_snapshot": merge_snapshot},
+            actor, run_id,
         )
 
         decision_id = str(uuid4())
@@ -441,11 +478,11 @@ def assign_global_ref(pg_conn, entity_id: str, global_ref: str, state: str, reas
         if conflict:
             raise WorkbenchError(f"Global Ref {global_ref!r} is already assigned to entity {conflict[0]}")
 
-        cur.execute("SELECT global_ref FROM entities WHERE entity_id = %s", (entity_id,))
+        cur.execute("SELECT global_ref, global_ref_state FROM entities WHERE entity_id = %s", (entity_id,))
         row = cur.fetchone()
         if row is None:
             raise WorkbenchError(f"Entity {entity_id} not found")
-        previous_ref = row[0]
+        previous_ref, previous_state = row
         event = "GLOBAL_REF_EDITED" if previous_ref else "GLOBAL_REF_ASSIGNED"
 
         cur.execute(
@@ -457,8 +494,14 @@ def assign_global_ref(pg_conn, entity_id: str, global_ref: str, state: str, reas
             (entity_id, event, actor),
         )
 
+        # previous_ref/previous_state let revert_global_ref restore the
+        # EXACT prior value (including back to no ref at all, if
+        # previous_ref is None) without an officer having to retype it.
         audit_id, this_hash = _append_audit_event(
-            cur, event, {"entity_id": entity_id, "global_ref": global_ref, "state": state, "previous_ref": previous_ref, "reason": reason}, actor,
+            cur, event,
+            {"entity_id": entity_id, "global_ref": global_ref, "state": state,
+             "previous_ref": previous_ref, "previous_state": previous_state, "reason": reason},
+            actor,
         )
 
         decision_id = str(uuid4())
@@ -499,11 +542,11 @@ def retire_global_ref(pg_conn, entity_id: str, reason: str, actor: str) -> dict:
     cur = pg_conn.cursor()
     try:
         _lock_audit_chain(cur)
-        cur.execute("SELECT global_ref FROM entities WHERE entity_id = %s", (entity_id,))
+        cur.execute("SELECT global_ref, global_ref_state FROM entities WHERE entity_id = %s", (entity_id,))
         row = cur.fetchone()
         if row is None:
             raise WorkbenchError(f"Entity {entity_id} not found")
-        previous_ref = row[0]
+        previous_ref, previous_state = row
 
         cur.execute(
             "UPDATE entities SET global_ref_state = 'RETIRED', updated_at = NOW(), updated_by = %s WHERE entity_id = %s",
@@ -512,7 +555,9 @@ def retire_global_ref(pg_conn, entity_id: str, reason: str, actor: str) -> dict:
         cur.execute("INSERT INTO entity_lineage (entity_id, event, actor) VALUES (%s,'GLOBAL_REF_RETIRED',%s)", (entity_id, actor))
 
         audit_id, this_hash = _append_audit_event(
-            cur, "GLOBAL_REF_RETIRED", {"entity_id": entity_id, "previous_ref": previous_ref, "reason": reason}, actor,
+            cur, "GLOBAL_REF_RETIRED",
+            {"entity_id": entity_id, "previous_ref": previous_ref, "previous_state": previous_state, "reason": reason},
+            actor,
         )
         decision_id = str(uuid4())
         cur.execute(
@@ -522,6 +567,274 @@ def retire_global_ref(pg_conn, entity_id: str, reason: str, actor: str) -> dict:
         )
         pg_conn.commit()
         return {"decision_id": decision_id, "entity_id": entity_id, "audit_id": audit_id, "this_hash": this_hash}
+    except Exception:
+        pg_conn.rollback()
+        raise
+
+
+# ----------------------------------------------------------------------
+# Rollback -- undo a merge, revert a Global Ref change, or revoke an
+# approve/reject override. Every action here is a NEW forward audit
+# event whose effect cancels a prior one -- never a mutation/deletion
+# of the original event or entities/entity_members row. The hash chain
+# (_append_audit_event/verify_audit_chain) is append-only by design;
+# "rollback" for a bank-grade audit trail has to mean "prove what was
+# undone and when", not erase history.
+# ----------------------------------------------------------------------
+
+def undo_merge(pg_conn, entity_id: str, reason: str, actor: str) -> dict:
+    """
+    Reverses the most recent merge that absorbed `entity_id` into
+    another entity -- resurrects it (status back to ACTIVE), moves its
+    exact prior members back out of the survivor, restores any Global
+    Ref the merge overwrote on the survivor, and revokes the
+    resolution_overrides row the merge created so a future pipeline run
+    doesn't silently re-apply it and undo the undo.
+
+    Depends on `merge_snapshot` in the original merge's audit_events
+    payload (see _merge_entities_tx/approve_pair/merge_entities) --
+    before that was added, the exact member list an absorbed entity
+    had was only a transient Python variable, discarded after commit,
+    so no undo could ever be precise. Refuses (WorkbenchError) rather
+    than guessing when:
+      - entity_id isn't currently MERGED (nothing to undo).
+      - No audit_events row for this specific merge carries a
+        merge_snapshot -- true for every merge made before this
+        capability existed; there's no other durable record of which
+        codes moved.
+      - Any of the merge's moved member codes are no longer under the
+        surviving entity (a later merge or split touched them since)
+        -- reversing here could not restore a consistent state.
+    """
+    cur = pg_conn.cursor()
+    try:
+        _lock_audit_chain(cur)
+
+        cur.execute("SELECT status, merged_into_entity_id FROM entities WHERE entity_id = %s", (entity_id,))
+        row = cur.fetchone()
+        if row is None:
+            raise WorkbenchError(f"Entity {entity_id} not found")
+        status, merged_into = row
+        if status != "MERGED" or not merged_into:
+            raise WorkbenchError(f"Entity {entity_id} is not currently merged -- nothing to undo")
+
+        cur.execute(
+            "SELECT audit_id, payload_json FROM audit_events "
+            "WHERE event_type IN ('REVIEW_APPROVED','CLUSTER_MERGED') "
+            "AND payload_json->'merge_snapshot'->>'absorb_id' = %s "
+            "ORDER BY created_at DESC LIMIT 1",
+            (entity_id,),
+        )
+        found = cur.fetchone()
+        if not found:
+            raise WorkbenchError(
+                f"No reversible merge record found for entity {entity_id} -- it may predate rollback support."
+            )
+        merge_audit_id, payload = found
+        snapshot = payload["merge_snapshot"]
+        keep_id = snapshot["keep_id"]
+        moved_codes = snapshot["moved_member_codes"]
+        override_id = snapshot.get("override_id")
+
+        if keep_id != merged_into:
+            raise WorkbenchError(
+                f"Entity {entity_id} was merged into {merged_into}, but the most recent merge record points to "
+                f"{keep_id} -- cannot safely undo (a later action likely changed where it went)."
+            )
+
+        cur.execute(
+            "SELECT customer_code FROM entity_members WHERE entity_id = %s AND valid_to IS NULL AND customer_code = ANY(%s::text[])",
+            (keep_id, moved_codes),
+        )
+        still_present = {r[0] for r in cur.fetchall()}
+        missing = sorted(set(moved_codes) - still_present)
+        if missing:
+            raise WorkbenchError(
+                f"Cannot safely undo -- {len(missing)} of {len(moved_codes)} member(s) moved by this merge are no "
+                f"longer under entity {keep_id} (a later action touched them): {missing[:5]}"
+            )
+
+        for code in moved_codes:
+            cur.execute(
+                "UPDATE entity_members SET valid_to = NOW() WHERE entity_id = %s AND customer_code = %s AND valid_to IS NULL",
+                (keep_id, code),
+            )
+            cur.execute(
+                "INSERT INTO entity_members (entity_id, customer_code, source) VALUES (%s,%s,'OFFICER')",
+                (entity_id, code),
+            )
+
+        cur.execute(
+            "UPDATE entities SET status = 'ACTIVE', merged_into_entity_id = NULL, updated_at = NOW(), updated_by = %s WHERE entity_id = %s",
+            (actor, entity_id),
+        )
+
+        if snapshot.get("keep_global_ref_changed"):
+            # Order matters: clear keep_id's (carried-forward) ref BEFORE
+            # restoring absorb_id's original one, or the two rows would
+            # transiently hold the identical ref string and hit
+            # ux_entities_global_ref -- same reason _merge_entities_tx
+            # clears absorb_id's ref when it carries it forward.
+            cur.execute(
+                "UPDATE entities SET global_ref = %s, global_ref_state = %s, updated_at = NOW(), updated_by = %s WHERE entity_id = %s",
+                (snapshot.get("keep_global_ref_before"), snapshot.get("keep_global_ref_state_before") or "UNASSIGNED", actor, keep_id),
+            )
+            cur.execute(
+                "UPDATE entities SET global_ref = %s, global_ref_state = %s, updated_at = NOW(), updated_by = %s WHERE entity_id = %s",
+                (snapshot.get("absorb_global_ref_before"), snapshot.get("absorb_global_ref_state_before") or "UNASSIGNED", actor, entity_id),
+            )
+
+        if override_id:
+            cur.execute(
+                "UPDATE resolution_overrides SET revoked_at = NOW(), revoked_by = %s, revoke_reason = %s "
+                "WHERE override_id = %s AND revoked_at IS NULL",
+                (actor, f"undone via UNDO_MERGE: {reason}", override_id),
+            )
+
+        cur.execute(
+            "INSERT INTO entity_lineage (entity_id, event, to_entity_ids, member_count, actor) VALUES (%s,'MERGE_REVERSED',%s::uuid[],%s,%s)",
+            (entity_id, [keep_id], len(moved_codes), actor),
+        )
+        cur.execute(
+            "INSERT INTO entity_lineage (entity_id, event, from_entity_ids, member_count, actor) VALUES (%s,'UNMERGED_FROM',%s::uuid[],%s,%s)",
+            (keep_id, [entity_id], len(moved_codes), actor),
+        )
+
+        audit_id, this_hash = _append_audit_event(
+            cur, "MERGE_REVERSED",
+            {"entity_id": entity_id, "keep_id": keep_id, "reversed_audit_id": merge_audit_id,
+             "restored_member_codes": moved_codes, "reason": reason},
+            actor,
+        )
+
+        decision_id = str(uuid4())
+        cur.execute(
+            "INSERT INTO review_decisions (decision_id, item_kind, entity_id, action, reason_code, reason, decided_by, audit_id) "
+            "VALUES (%s,'ENTITY',%s,'UNDO_MERGE','MANUAL',%s,%s,%s)",
+            (decision_id, entity_id, reason, actor, audit_id),
+        )
+
+        pg_conn.commit()
+        return {
+            "decision_id": decision_id, "entity_id": entity_id, "keep_id": keep_id,
+            "restored_member_count": len(moved_codes), "audit_id": audit_id, "this_hash": this_hash,
+        }
+    except Exception:
+        pg_conn.rollback()
+        raise
+
+
+def revert_global_ref(pg_conn, entity_id: str, reason: str, actor: str) -> dict:
+    """
+    Reverses this entity's most recent Global Ref action (assign, edit,
+    or retire) back to whatever it was immediately before -- using
+    previous_ref/previous_state captured in that action's own audit
+    payload (see assign_global_ref/retire_global_ref). If there was no
+    ref before (previous_ref is None), reverting clears it back to
+    UNASSIGNED rather than leaving a stale value.
+    """
+    cur = pg_conn.cursor()
+    try:
+        _lock_audit_chain(cur)
+
+        cur.execute(
+            "SELECT audit_id, payload_json FROM audit_events "
+            "WHERE event_type IN ('GLOBAL_REF_ASSIGNED','GLOBAL_REF_EDITED','GLOBAL_REF_RETIRED') "
+            "AND payload_json->>'entity_id' = %s "
+            "ORDER BY created_at DESC LIMIT 1",
+            (entity_id,),
+        )
+        found = cur.fetchone()
+        if not found:
+            raise WorkbenchError(f"No Global Ref history found for entity {entity_id} to revert")
+        source_audit_id, payload = found
+        previous_ref = payload.get("previous_ref")
+        previous_state = payload.get("previous_state") or "UNASSIGNED"
+
+        if previous_ref and previous_state != "RETIRED":
+            cur.execute(
+                "SELECT entity_id::text FROM entities WHERE upper(global_ref) = upper(%s) AND entity_id != %s AND global_ref_state != 'RETIRED'",
+                (previous_ref, entity_id),
+            )
+            conflict = cur.fetchone()
+            if conflict:
+                raise WorkbenchError(f"Cannot revert -- Global Ref {previous_ref!r} is now assigned to a different entity ({conflict[0]})")
+
+        cur.execute(
+            "UPDATE entities SET global_ref = %s, global_ref_state = %s, updated_at = NOW(), updated_by = %s WHERE entity_id = %s",
+            (previous_ref, previous_state, actor, entity_id),
+        )
+        cur.execute("INSERT INTO entity_lineage (entity_id, event, actor) VALUES (%s,'GLOBAL_REF_REVERTED',%s)", (entity_id, actor))
+
+        audit_id, this_hash = _append_audit_event(
+            cur, "GLOBAL_REF_REVERTED",
+            {"entity_id": entity_id, "reverted_audit_id": source_audit_id, "restored_ref": previous_ref,
+             "restored_state": previous_state, "reason": reason},
+            actor,
+        )
+        decision_id = str(uuid4())
+        cur.execute(
+            "INSERT INTO review_decisions (decision_id, item_kind, entity_id, action, reason_code, reason, decided_by, audit_id) "
+            "VALUES (%s,'ENTITY',%s,'REVERT_GLOBAL_REF','MANUAL',%s,%s,%s)",
+            (decision_id, entity_id, reason, actor, audit_id),
+        )
+        pg_conn.commit()
+        return {
+            "decision_id": decision_id, "entity_id": entity_id, "restored_ref": previous_ref,
+            "restored_state": previous_state, "audit_id": audit_id, "this_hash": this_hash,
+        }
+    except Exception:
+        pg_conn.rollback()
+        raise
+
+
+def revoke_override(pg_conn, override_id: str, reason: str, actor: str) -> dict:
+    """
+    Retracts a resolution_overrides row (an approve/reject verdict) so
+    engine.clustering.build_clusters no longer re-applies it on future
+    pipeline runs. Does NOT retroactively undo any merge that already
+    happened as a result of the original approve -- if the pair is
+    currently merged into one entity, use undo_merge separately for
+    that; revoking here only stops FUTURE re-application.
+    """
+    cur = pg_conn.cursor()
+    try:
+        _lock_audit_chain(cur)
+
+        cur.execute(
+            "SELECT a_code, b_code, verdict, revoked_at FROM resolution_overrides WHERE override_id = %s",
+            (override_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise WorkbenchError(f"Override {override_id} not found")
+        a_code, b_code, verdict, revoked_at = row
+        if revoked_at is not None:
+            raise WorkbenchError(f"Override {override_id} is already revoked")
+
+        cur.execute(
+            "UPDATE resolution_overrides SET revoked_at = NOW(), revoked_by = %s, revoke_reason = %s WHERE override_id = %s",
+            (actor, reason, override_id),
+        )
+
+        audit_id, this_hash = _append_audit_event(
+            cur, "OVERRIDE_REVOKED",
+            {"override_id": override_id, "a_code": a_code, "b_code": b_code, "verdict": verdict, "reason": reason},
+            actor,
+        )
+        decision_id = str(uuid4())
+        cur.execute(
+            "INSERT INTO review_decisions (decision_id, item_kind, a_code, b_code, action, reason_code, reason, decided_by, override_id, audit_id) "
+            "VALUES (%s,'PAIR',%s,%s,'REVOKE_OVERRIDE','MANUAL',%s,%s,%s,%s)",
+            (decision_id, a_code, b_code, reason, actor, override_id, audit_id),
+        )
+        pg_conn.commit()
+        return {
+            "decision_id": decision_id, "override_id": override_id, "verdict": verdict,
+            "note": "This stops the decision from being re-applied on future pipeline runs. It does NOT undo any "
+                    "merge or split that already happened as a result -- use Undo Merge on the entity separately if needed.",
+            "audit_id": audit_id, "this_hash": this_hash,
+        }
     except Exception:
         pg_conn.rollback()
         raise

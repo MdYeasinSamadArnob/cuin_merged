@@ -135,11 +135,11 @@ def _attach_officer_decisions(items: List[Dict[str, Any]]) -> None:
     try:
         cur = pg_conn.cursor()
         cur.execute(
-            f"SELECT a_code, b_code, verdict, actor, reason, created_at FROM resolution_overrides "
+            f"SELECT a_code, b_code, override_id::text, verdict, actor, reason, created_at FROM resolution_overrides "
             f"WHERE revoked_at IS NULL AND (a_code, b_code) IN ({placeholders})",
             flat_params,
         )
-        by_pair = {(a, b): (verdict, actor, reason, ts) for a, b, verdict, actor, reason, ts in cur.fetchall()}
+        by_pair = {(a, b): (oid, verdict, actor, reason, ts) for a, b, oid, verdict, actor, reason, ts in cur.fetchall()}
 
         codes = sorted({c for pair in pairs for c in pair})
         cur.execute(
@@ -153,12 +153,13 @@ def _attach_officer_decisions(items: List[Dict[str, Any]]) -> None:
     for it, key in zip(items, pairs):
         found = by_pair.get(key)
         if found:
-            verdict, actor, reason, ts = found
+            override_id, verdict, actor, reason, ts = found
             it["officer_verdict"] = verdict
             it["officer_actor"] = actor
             it["officer_reason"] = reason
             it["officer_decided_at"] = ts.isoformat() if ts else None
             it["officer_entity_id"] = entity_by_code.get(key[0]) or entity_by_code.get(key[1])
+            it["officer_override_id"] = override_id
         else:
             it["officer_verdict"] = None
 
@@ -893,6 +894,45 @@ async def action_assign_global_ref_to_record(customer_code: str, request: Record
             wb.assign_global_ref_to_record, pg_conn, request.run_id, customer_code,
             request.global_ref, request.state, request.reason, request.actor,
         )
+    finally:
+        pg_conn.close()
+
+
+# ----------------------------------------------------------------------
+# Rollback -- undo a merge, revert a Global Ref change, revoke an
+# approve/reject override. See services.workbench_service's "Rollback"
+# section docstring for why these are each a NEW forward audit event,
+# never a mutation of the original one.
+# ----------------------------------------------------------------------
+
+class ReasonActorRequest(BaseModel):
+    reason: str
+    actor: str
+
+
+@router.post("/entities/{entity_id}/undo-merge")
+async def action_undo_merge(entity_id: str, request: ReasonActorRequest):
+    pg_conn = _pg()
+    try:
+        return _handle_workbench_error(wb.undo_merge, pg_conn, entity_id, request.reason, request.actor)
+    finally:
+        pg_conn.close()
+
+
+@router.post("/entities/{entity_id}/revert-global-ref")
+async def action_revert_global_ref(entity_id: str, request: ReasonActorRequest):
+    pg_conn = _pg()
+    try:
+        return _handle_workbench_error(wb.revert_global_ref, pg_conn, entity_id, request.reason, request.actor)
+    finally:
+        pg_conn.close()
+
+
+@router.post("/overrides/{override_id}/revoke")
+async def action_revoke_override(override_id: str, request: ReasonActorRequest):
+    pg_conn = _pg()
+    try:
+        return _handle_workbench_error(wb.revoke_override, pg_conn, override_id, request.reason, request.actor)
     finally:
         pg_conn.close()
 

@@ -261,6 +261,14 @@ app.include_router(workbench_router, prefix="/workbench", tags=["Workbench"])
 from api.routes_graph_v2 import router as graph_v2_router
 app.include_router(graph_v2_router, prefix="/graph/v2", tags=["Graph V2"])
 
+# Public, bank-facing Identity Recognition API -- a SEPARATE
+# sub-application (own Swagger UI at /api/v1/docs, own OpenAPI schema),
+# not another include_router() on this app. A bank integration partner
+# should only ever see this one contract, never the ~20 internal
+# admin/workbench routers above. See api/public_api.py.
+from api.public_api import create_public_api
+app.mount("/api/v1", create_public_api())
+
 
 # ============================================
 # WebSocket Endpoint

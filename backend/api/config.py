@@ -5,9 +5,11 @@ Centralized configuration using Pydantic Settings.
 Loads from environment variables with .env file support.
 """
 
+import secrets
 from functools import lru_cache
 from typing import List
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -44,7 +46,17 @@ class Settings(BaseSettings):
     # ----------------------------------------
     SECRET_KEY: str = "change-this-to-a-secure-random-string-in-production"
     CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
-    
+
+    # Single global bearer token guarding the public Identity Recognition
+    # API (/api/v1 -- see api/routes_public_identity_api.py). If
+    # PUBLIC_API_BEARER_TOKEN is not set in .env, default_factory
+    # auto-generates a random one at process startup -- good enough to
+    # try the API immediately, but it changes on every restart until you
+    # pin a real value in .env (the Getting Started panel on the /api
+    # page always shows the CURRENT effective token either way).
+    PUBLIC_API_BEARER_TOKEN: str = Field(default_factory=lambda: f"cuin_{secrets.token_urlsafe(32)}")
+    PUBLIC_API_RATE_LIMIT_PER_MIN: int = 120
+
     @property
     def cors_origins_list(self) -> List[str]:
         """Parse CORS origins from comma-separated string."""

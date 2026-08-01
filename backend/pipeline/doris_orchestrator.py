@@ -104,6 +104,7 @@ class DorisPipelineOrchestrator:
         self.scoring_config = scoring_config
         self.progress_callback = progress_callback
         self.run_id = run_id
+        self._carry_forward = True
 
         # See pipeline.duckdb_orchestrator's identical comment --
         # EffectiveRuleset resolves decision thresholds from the active
@@ -782,7 +783,7 @@ class DorisPipelineOrchestrator:
                 # engine.clustering.entity_resolver's module docstring.
                 entity_result = _step(
                     "resolve_entities", entity_resolver.resolve_entities,
-                    pg_conn, self.run_id, clusters, set(clusters.keys()), "pipeline",
+                    pg_conn, self.run_id, clusters, set(clusters.keys()), "pipeline", self._carry_forward,
                 )
                 if entity_result:
                     pg_conn.commit()
@@ -846,8 +847,10 @@ class DorisPipelineOrchestrator:
     # ------------------------------------------------------------------
     # Public run()
     # ------------------------------------------------------------------
-    async def run(self, run_id: str, raw_records: list = None, mode: str = "FULL") -> PipelineResult:
+    async def run(self, run_id: str, raw_records: list = None, mode: str = "FULL", carry_forward: bool = True) -> PipelineResult:
         self.run_id = run_id
+        # See pipeline.duckdb_orchestrator.run's identical comment.
+        self._carry_forward = carry_forward
         result = PipelineResult(run_id=run_id, success=False, mode=mode, stages=[], started_at=datetime.utcnow())
 
         try:

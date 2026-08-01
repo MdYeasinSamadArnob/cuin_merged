@@ -228,3 +228,54 @@ async def reset_all_data():
             status_code=500,
             detail=f"Failed to reset data: {str(e)}"
         )
+
+
+# ============================================
+# Bearer token for the public Identity Recognition API (/api/v1)
+# ============================================
+# One global token (settings.PUBLIC_API_BEARER_TOKEN), not a
+# per-caller DB-issued key -- see api/routes_public_identity_api.py's
+# require_bearer_token. This endpoint just reads back the CURRENT
+# effective value (auto-generated at process startup unless pinned via
+# PUBLIC_API_BEARER_TOKEN in .env) so the control plane's /api page can
+# show it to whoever needs to configure a bank integration partner.
+
+class ApiTokenResponse(BaseModel):
+    bearer_token: str
+    source: str  # "env" if pinned via .env or a real exported env var, "auto-generated" if not (changes on every restart)
+
+
+def _token_is_pinned() -> bool:
+    """
+    settings.PUBLIC_API_BEARER_TOKEN is loaded by pydantic-settings from
+    TWO possible places (SettingsConfigDict(env_file=".env")): a real
+    process env var, or a line in the .env file -- neither of which
+    populates os.environ (pydantic-settings parses .env itself, it
+    does not os.environ.setdefault it), so os.environ.get(...) alone
+    would always report "auto-generated" even when a value IS pinned
+    via .env. Check both actual sources directly, matching what
+    pydantic-settings itself considers "set".
+    """
+    import os
+    if os.environ.get("PUBLIC_API_BEARER_TOKEN"):
+        return True
+    try:
+        with open(".env") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                if line.split("=", 1)[0].strip() == "PUBLIC_API_BEARER_TOKEN":
+                    return True
+    except FileNotFoundError:
+        pass
+    return False
+
+
+@router.get("/api-token", response_model=ApiTokenResponse)
+async def get_api_token():
+    """Returns the current bearer token guarding /api/v1. Internal-only endpoint -- never exposed on the public sub-app itself."""
+    from api.config import settings
+
+    source = "env" if _token_is_pinned() else "auto-generated"
+    return ApiTokenResponse(bearer_token=settings.PUBLIC_API_BEARER_TOKEN, source=source)

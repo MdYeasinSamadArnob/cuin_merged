@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { Database, Zap, Cpu, Network, CheckCircle2, Boxes, HardDrive } from "lucide-react";
+import { Database, Zap, Cpu, Network, CheckCircle2, Boxes, HardDrive, RefreshCw, Sparkles, AlertTriangle } from "lucide-react";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -13,13 +13,13 @@ const ENGINES: { id: Engine; label: string; description: string; icon: any }[] =
     {
         id: "duckdb",
         label: "DuckDB",
-        description: "Default. Zero-ops, in-process, deterministic Ruleset v2.",
+        description: "Zero-ops, in-process, deterministic Ruleset v2.",
         icon: HardDrive,
     },
     {
         id: "doris",
         label: "Apache Doris",
-        description: "Distributed, colocated-join execution of the same ruleset -- for scale.",
+        description: "Default. Distributed, colocated-join execution of the same ruleset -- for scale.",
         icon: Boxes,
     },
     {
@@ -30,9 +30,35 @@ const ENGINES: { id: Engine; label: string; description: string; icon: any }[] =
     },
 ];
 
+// The actual mechanism behind "update existing" is engine.clustering.
+// entity_resolver's Jaccard carry-forward, which already runs on EVERY
+// pipeline run by default -- re-running against corrected source data
+// naturally updates existing entity clusters/Global IDs instead of
+// creating a disconnected parallel identity world. "Run as new
+// pipeline" is the explicit, rare opt-out: every resolved cluster
+// mints a brand-new identity regardless of overlap with what's already
+// there. See backend/api/routes_datasource.py's DatasourceStartRequest
+// and engine/clustering/entity_resolver.py's resolve_entities docstring.
+const RUN_MODES: { id: "update" | "new"; label: string; description: string; icon: any; warn?: boolean }[] = [
+    {
+        id: "update",
+        label: "Update Existing",
+        description: "Re-run against the current source data. Matches carry forward onto existing entity clusters and Global IDs -- corrections update what's already there.",
+        icon: RefreshCw,
+    },
+    {
+        id: "new",
+        label: "Run as New Pipeline",
+        description: "Every resolved cluster gets a brand-new identity, even where it overlaps with existing entities. Existing Global IDs and entity groupings are NOT reused.",
+        icon: Sparkles,
+        warn: true,
+    },
+];
+
 export default function DatasourcePage() {
     const [isStarting, setIsStarting] = useState(false);
-    const [engine, setEngine] = useState<Engine>("duckdb");
+    const [engine, setEngine] = useState<Engine>("doris");
+    const [runMode, setRunMode] = useState<"update" | "new">("update");
     const router = useRouter();
 
     const handleStartDemo = async () => {
@@ -41,7 +67,7 @@ export default function DatasourcePage() {
             const res = await fetch(`${API_BASE_URL}/datasource/demo`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ mode: "FULL", engine })
+                body: JSON.stringify({ mode: "FULL", engine, carry_forward: runMode === "update" })
             });
             const data = await res.json();
 
@@ -94,7 +120,7 @@ export default function DatasourcePage() {
                                 <span className={`font-semibold ${selected ? "text-blue-700 dark:text-blue-300" : "text-gray-900 dark:text-white"}`}>
                                     {e.label}
                                 </span>
-                                {e.id === "duckdb" && <span className="badge badge-info !text-[10px] !py-0">default</span>}
+                                {e.id === "doris" && <span className="badge badge-info !text-[10px] !py-0">default</span>}
                             </div>
                             <p className="text-xs text-gray-500 dark:text-gray-400">{e.description}</p>
                         </button>
@@ -202,6 +228,40 @@ export default function DatasourcePage() {
                 </motion.div>
             </div>
 
+            {/* Run Mode Selector */}
+            <div className="mb-4">
+                <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Run Mode</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {RUN_MODES.map((m) => {
+                        const Icon = m.icon;
+                        const selected = runMode === m.id;
+                        return (
+                            <button
+                                key={m.id}
+                                onClick={() => setRunMode(m.id)}
+                                className={`text-left p-4 rounded-xl border-2 transition-all ${
+                                    selected
+                                        ? m.warn
+                                            ? "border-amber-500 bg-amber-50 dark:bg-amber-950/20 shadow-lg"
+                                            : "border-blue-500 bg-blue-50 dark:bg-blue-950/30 shadow-lg"
+                                        : "border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 hover:border-gray-300 dark:hover:border-gray-700"
+                                }`}
+                            >
+                                <div className="flex items-center gap-2 mb-2">
+                                    <Icon size={18} className={selected ? (m.warn ? "text-amber-600 dark:text-amber-400" : "text-blue-600 dark:text-blue-400") : "text-gray-400"} />
+                                    <span className={`font-semibold ${selected ? (m.warn ? "text-amber-700 dark:text-amber-300" : "text-blue-700 dark:text-blue-300") : "text-gray-900 dark:text-white"}`}>
+                                        {m.label}
+                                    </span>
+                                    {m.id === "update" && <span className="badge badge-info !text-[10px] !py-0">default</span>}
+                                    {m.warn && selected && <AlertTriangle size={14} className="text-amber-500 ml-auto" />}
+                                </div>
+                                <p className="text-xs text-gray-500 dark:text-gray-400">{m.description}</p>
+                            </button>
+                        );
+                    })}
+                </div>
+            </div>
+
             {/* Action Bar */}
             <motion.div
                 initial={{ opacity: 0, scale: 0.95 }}
@@ -215,7 +275,9 @@ export default function DatasourcePage() {
                     </div>
                     <div>
                         <h3 className="text-lg font-bold text-gray-900 dark:text-white">Ready to Ingest</h3>
-                        <p className="text-sm text-gray-500">Trigger the {ENGINES.find((e) => e.id === engine)?.label} pipeline</p>
+                        <p className="text-sm text-gray-500">
+                            Trigger the {ENGINES.find((e) => e.id === engine)?.label} pipeline -- {RUN_MODES.find((m) => m.id === runMode)?.label}
+                        </p>
                     </div>
                 </div>
 
@@ -226,7 +288,9 @@ export default function DatasourcePage() {
                         flex items-center justify-center gap-2 px-8 py-4 rounded-xl font-bold text-white transition-all shadow-xl
                         ${isStarting
                             ? 'bg-gray-400 cursor-not-allowed'
-                            : 'bg-gradient-to-r from-blue-600 to-emerald-500 hover:from-blue-500 hover:to-emerald-400 hover:scale-105 active:scale-95'
+                            : runMode === 'new'
+                                ? 'bg-gradient-to-r from-amber-600 to-orange-500 hover:from-amber-500 hover:to-orange-400 hover:scale-105 active:scale-95'
+                                : 'bg-gradient-to-r from-blue-600 to-emerald-500 hover:from-blue-500 hover:to-emerald-400 hover:scale-105 active:scale-95'
                         }
                     `}
                 >
@@ -238,7 +302,7 @@ export default function DatasourcePage() {
                     ) : (
                         <>
                             <Zap size={20} />
-                            Start Demo Ingestion
+                            {runMode === "update" ? "Start Demo Ingestion" : "Start as New Pipeline"}
                         </>
                     )}
                 </button>
