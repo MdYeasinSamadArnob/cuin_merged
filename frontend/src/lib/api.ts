@@ -156,13 +156,6 @@ class ApiClient {
         });
     }
 
-    async reblock(runId: string, blockingRules: any[], matchRuleset?: any) {
-        return this.request(`/rules/runs/${runId}/reblock`, {
-            method: 'POST',
-            body: JSON.stringify({ blocking_rules: blockingRules, match_ruleset: matchRuleset }),
-        });
-    }
-
     async getComparators() {
         return this.request('/rules/comparators');
     }
@@ -179,40 +172,6 @@ class ApiClient {
         if (opts?.page) params.append('page', String(opts.page));
         if (opts?.pageSize) params.append('page_size', String(opts.pageSize));
         return this.request(`/search?${params.toString()}`);
-    }
-
-    // Review
-    async getReviewQueue(page: number = 1, pageSize: number = 20, status?: string) {
-        const params = new URLSearchParams({
-            page: page.toString(),
-            page_size: pageSize.toString(),
-        });
-        if (status) {
-            params.append('status', status);
-        }
-        return this.request(`/review/queue?${params.toString()}`);
-    }
-
-    async getReviewStats() {
-        return this.request('/review/stats');
-    }
-
-    async approveReview(pairId: string, reviewer: string, reason: string) {
-        return this.request(`/review/${pairId}/approve`, {
-            method: 'POST',
-            body: JSON.stringify({ reviewer, reason }),
-        });
-    }
-
-    async rejectReview(pairId: string, reviewer: string, reason: string) {
-        return this.request(`/review/${pairId}/reject`, {
-            method: 'POST',
-            body: JSON.stringify({ reviewer, reason }),
-        });
-    }
-
-    async getExplanation(pairId: string) {
-        return this.request(`/review/${pairId}/explanation`);
     }
 
     // Graph
@@ -234,10 +193,6 @@ class ApiClient {
             method: 'POST',
             body: JSON.stringify({ run_id: runId, scoring }),
         });
-    }
-
-    async getClusters(runId: string, page: number = 1, pageSize: number = 10) {
-        return this.request(`/graph/clusters?run_id=${runId}&page=${page}&page_size=${pageSize}`);
     }
 
     async getUniques(runId: string, page: number = 1, pageSize: number = 10) {
@@ -412,13 +367,6 @@ class ApiClient {
         });
     }
 
-    async wbRetireGlobalRef(entityId: string, reason: string, actor: string) {
-        return this.request(`/workbench/entities/${entityId}/global-ref`, {
-            method: 'DELETE',
-            body: JSON.stringify({ reason, actor }),
-        });
-    }
-
     // Rollback -- undo a merge, revert a Global ID change, or revoke an
     // approve/reject override. See backend/services/workbench_service.py's
     // "Rollback" section: each of these is a NEW forward audit event that
@@ -446,12 +394,6 @@ class ApiClient {
 
     async wbAuditVerify() {
         return this.request('/workbench/audit/verify');
-    }
-
-    async wbListAudit(entityId?: string, page: number = 1, pageSize: number = 50) {
-        const q = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
-        if (entityId) q.set('entity_id', entityId);
-        return this.request(`/workbench/audit?${q.toString()}`);
     }
 
     async wbListOverrides(params: { page?: number; pageSize?: number; verdict?: string; runId?: string }) {
