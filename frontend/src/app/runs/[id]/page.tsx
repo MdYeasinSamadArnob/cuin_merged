@@ -9,7 +9,7 @@ import {
     ArrowLeft, Terminal, Activity, Search, Network,
     Cpu, Database, Shield, Zap, FileText, CheckCircle, Share2, ArrowRight, Users
 } from "lucide-react";
-import { ClusterGraph } from '@/components/explorer/ClusterGraph';
+import { ClusterGraph } from '@/components/organisms/frozen/ClusterGraph';
 
 // --- Agents Config ---
 const AGENTS = {

@@ -5,7 +5,7 @@ import { api } from '@/lib/api';
 import { useWebSocket } from '@/lib/ws';
 import Link from "next/link";
 import { FileSpreadsheet, ArrowRight, Zap, Share2, Activity } from "lucide-react";
-import { ClusterGraph } from '@/components/explorer/ClusterGraph';
+import { ClusterGraph } from '@/components/organisms/frozen/ClusterGraph';
 
 // Hook for counting animation
 const useCounter = (end: number, duration: number = 1000) => {

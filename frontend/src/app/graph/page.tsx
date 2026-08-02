@@ -29,7 +29,7 @@ import { BridgesPanel } from '@/components/organisms/graph-explorer/BridgesPanel
 // what-if simulation feature, architecturally separate from "browse this
 // run's real persisted clusters fast" -- swapping its data source isn't
 // part of this work).
-import { TuningPanel } from '@/components/explorer/TuningPanel';
+import { TuningPanel } from '@/components/organisms/frozen/TuningPanel';
 
 function useDebounced<T>(value: T, delayMs: number): T {
     const [debounced, setDebounced] = useState(value);

@@ -2,7 +2,7 @@
 CUIN v2 - Identity Graph 360 v2 (paginated, entity-registry-backed)
 
 Purely additive: does not touch, redirect, or replace routes_graph.py,
-frontend/src/components/explorer/ClusterGraph.tsx, or TuningPanel.tsx --
+frontend/src/components/organisms/frozen/ClusterGraph.tsx, or TuningPanel.tsx --
 those stay exactly as they are, still serving /explorer, /pipeline, and
 /runs/[id] unmodified. Mounted at /graph/v2, a prefix that never collides
 with the legacy router's real paths (/graph/data, /graph/clusters, etc.

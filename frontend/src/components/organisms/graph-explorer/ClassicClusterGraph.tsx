@@ -1,6 +1,6 @@
 'use client';
 
-// Forked from frontend/src/components/explorer/ClusterGraph.tsx -- that
+// Forked from frontend/src/components/organisms/frozen/ClusterGraph.tsx -- that
 // file is shared by /explorer, /pipeline, and /runs/[id] and stays
 // completely untouched (see the Identity Graph 360 plan). Everything
 // here is copied verbatim (pan/zoom/drag mechanics, the canvas render

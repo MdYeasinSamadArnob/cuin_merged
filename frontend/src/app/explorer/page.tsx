@@ -4,8 +4,8 @@ import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { Search, CheckCircle, XCircle, LayoutGrid, List, FileText, Download, TrendingUp, Users, UserCheck, AlertCircle, Building2 } from 'lucide-react';
-import { TuningPanel } from '@/components/explorer/TuningPanel';
-import { ClusterGraph } from '@/components/explorer/ClusterGraph';
+import { TuningPanel } from '@/components/organisms/frozen/TuningPanel';
+import { ClusterGraph } from '@/components/organisms/frozen/ClusterGraph';
 
 interface MatchScore {
     pair_id: string;
