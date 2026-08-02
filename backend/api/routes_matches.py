@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException
 
 from services.run_service import get_run_service
 from engine.structures import MatchDecision
+from api import doris_run_reader
 
 router = APIRouter()
 
@@ -29,10 +30,24 @@ async def list_match_scores(
 ) -> dict:
     """
     List match scores for a run.
+
+    Reads from the run's own Doris database (pair_decisions/
+    pair_contributions) when one exists -- see api/doris_run_reader.py's
+    module docstring for why (Stage 6: candidate_pairs/match_scores/
+    match_decisions are no longer written to Postgres at all, and this
+    works regardless of whether the run's orchestrator instance is
+    still alive in RunService's registry). Falls back to the in-memory
+    orchestrator for non-Doris-backed runs (duckdb/spark engines,
+    which still populate self._scores the original way).
     """
     run_service = get_run_service()
+
+    if doris_run_reader.run_has_doris_data(run_id):
+        result = doris_run_reader.fetch_scores(run_id, page, page_size, min_score, max_score)
+        return {**result, "page": page, "page_size": page_size}
+
     orchestrator = run_service.get_orchestrator(run_id)
-    
+
     if not orchestrator:
         run = run_service.get_run(run_id)
         if not run:
@@ -44,24 +59,24 @@ async def list_match_scores(
             "page_size": page_size,
             "message": "Run not yet executed or scores not available"
         }
-    
+
     scores = list(orchestrator.get_scores().values())
-    
+
     # Filter by score range
     if min_score is not None:
         scores = [s for s in scores if s.score >= min_score]
     if max_score is not None:
         scores = [s for s in scores if s.score <= max_score]
-    
+
     # Sort by score descending
     scores.sort(key=lambda x: x.score, reverse=True)
-    
+
     # Paginate
     total = len(scores)
     start = (page - 1) * page_size
     end = start + page_size
     paged = scores[start:end]
-    
+
     return {
         "scores": [
             {
@@ -88,11 +103,30 @@ async def list_decisions(
     page_size: int = 50
 ) -> dict:
     """
-    List decisions for a run.
+    List decisions for a run. See list_match_scores' docstring -- same
+    Doris-first, in-memory-orchestrator-fallback pattern.
     """
     run_service = get_run_service()
+
+    if doris_run_reader.run_has_doris_data(run_id):
+        dec_filter = None
+        if decision:
+            try:
+                dec_filter = MatchDecision(decision.upper()).value
+            except ValueError:
+                pass
+        result = doris_run_reader.fetch_scores(run_id, page, page_size, decision=dec_filter)
+        # fetch_scores' rows already carry pair_id/a_key/b_key/score/
+        # decision/signals_hit/hard_conflicts -- exactly this route's shape.
+        return {
+            "decisions": result["scores"],
+            "total": result["total"],
+            "page": page,
+            "page_size": page_size,
+        }
+
     orchestrator = run_service.get_orchestrator(run_id)
-    
+
     if not orchestrator:
         run = run_service.get_run(run_id)
         if not run:
@@ -150,16 +184,36 @@ async def list_decisions(
 @router.get("/run/{run_id}/summary")
 async def get_decision_summary(run_id: str) -> dict:
     """
-    Get decision summary for a run.
+    Get decision summary for a run. See list_match_scores' docstring
+    -- same Doris-first, in-memory-orchestrator-fallback pattern (the
+    run.counters fallback beneath that, unchanged, still covers the
+    case where NEITHER Doris data nor a live orchestrator exists).
     """
     run_service = get_run_service()
     run = run_service.get_run(run_id)
-    
+
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
-    
+
+    if doris_run_reader.run_has_doris_data(run_id):
+        counts = doris_run_reader.fetch_decision_summary(run_id)
+        auto_link = counts.get("AUTO_LINK", 0)
+        review = counts.get("REVIEW", 0)
+        reject = counts.get("REJECT", 0)
+        total = auto_link + review + reject
+        return {
+            "run_id": run_id,
+            "status": run.status.value,
+            "auto_link": auto_link,
+            "review": review,
+            "reject": reject,
+            "total": total,
+            "auto_link_pct": (auto_link / total * 100) if total else 0,
+            "review_pct": (review / total * 100) if total else 0,
+        }
+
     orchestrator = run_service.get_orchestrator(run_id)
-    
+
     if not orchestrator:
         return {
             "run_id": run_id,
@@ -169,13 +223,13 @@ async def get_decision_summary(run_id: str) -> dict:
             "reject": run.counters.rejected,
             "total": run.counters.pairs_scored,
         }
-    
+
     decisions = orchestrator.get_decisions()
-    
+
     auto_link = sum(1 for d in decisions.values() if d == MatchDecision.AUTO_LINK)
     review = sum(1 for d in decisions.values() if d == MatchDecision.REVIEW)
     reject = sum(1 for d in decisions.values() if d == MatchDecision.REJECT)
-    
+
     return {
         "run_id": run_id,
         "status": run.status.value,

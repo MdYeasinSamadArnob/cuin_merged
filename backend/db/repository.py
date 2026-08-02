@@ -24,14 +24,34 @@ two, keyed by (source_customer_id, source_system) per the schema's
 UNIQUE constraint.
 """
 
+import csv
+import io
+import json
 import logging
 from typing import Dict, List, Tuple
+from uuid import uuid4
 
 import duckdb
 import psycopg2
 from psycopg2.extras import execute_values, Json
 
 logger = logging.getLogger(__name__)
+
+
+def _pg_text_array_literal(values: List[str]) -> str:
+    """
+    Postgres COPY's TEXT[] representation: `{"a","b"}`. Every element is
+    always double-quoted (technically only needed for elements
+    containing `,{}"\\` or whitespace, but always-quote is simpler and
+    unambiguous) with `\\` and `"` backslash-escaped inside. Used by
+    persist_candidate_pairs_and_decisions' COPY path -- execute_values
+    left this to psycopg2's list adapter; COPY is a raw text protocol
+    with no adapters, so array literals have to be built by hand.
+    """
+    if not values:
+        return "{}"
+    escaped = [v.replace("\\", "\\\\").replace('"', '\\"') for v in values]
+    return "{" + ",".join(f'"{v}"' for v in escaped) + "}"
 
 
 def _cluster_id_to_uuid(cluster_id: str) -> str:
@@ -111,6 +131,63 @@ def persist_identifier_frequency(pg_conn, con: duckdb.DuckDBPyConnection, run_id
     return len(rows)
 
 
+# (index_name, create_statement) -- exact mirrors of db/schema.sql's
+# definitions for candidate_pairs/match_scores/match_decisions' non-PK
+# indexes. Deliberately excludes their FK constraints: those are cheap
+# point-lookups against an already-indexed PK on the referenced table
+# (customers_norm.customer_key, runs.run_id, candidate_pairs.pair_id),
+# not where bulk-insert cost concentrates -- the expensive part is
+# building NEW B-tree entries for THIS table's own indexes on every
+# inserted row, which is what dropping and rebuilding these avoids.
+BULK_WRITE_INDEXES = [
+    ("idx_candidates_run", "CREATE INDEX idx_candidates_run ON candidate_pairs(run_id)"),
+    ("idx_candidates_a_key", "CREATE INDEX idx_candidates_a_key ON candidate_pairs(a_key)"),
+    ("idx_candidates_b_key", "CREATE INDEX idx_candidates_b_key ON candidate_pairs(b_key)"),
+    ("idx_scores_run", "CREATE INDEX idx_scores_run ON match_scores(run_id)"),
+    ("idx_scores_score", "CREATE INDEX idx_scores_score ON match_scores(score)"),
+    ("idx_decisions_run", "CREATE INDEX idx_decisions_run ON match_decisions(run_id)"),
+    ("idx_decisions_decision", "CREATE INDEX idx_decisions_decision ON match_decisions(decision)"),
+]
+
+
+def drop_bulk_write_indexes(pg_conn) -> None:
+    """
+    Call ONCE before a bulk backfill's persist phase starts (not per
+    batch -- see rebuild_bulk_write_indexes' docstring for why),
+    paired with rebuild_bulk_write_indexes after. These 3 tables are
+    live and shared with concurrent runs/API routes (routes_matches.py
+    etc query them directly) -- dropping their indexes mid-flight is
+    only safe for a deliberate, exclusive backfill window, not routine
+    per-run behavior. Every regular execute_values/COPY path still
+    works with these indexes present or absent (indexes only affect
+    read performance and write cost, never correctness), so this is
+    purely an opt-in performance lever, never required for correctness.
+    """
+    with pg_conn.cursor() as cur:
+        for name, _ in BULK_WRITE_INDEXES:
+            cur.execute(f"DROP INDEX IF EXISTS {name}")
+    pg_conn.commit()
+    logger.info(f"Dropped {len(BULK_WRITE_INDEXES)} bulk-write indexes ahead of backfill persist phase")
+
+
+def rebuild_bulk_write_indexes(pg_conn) -> None:
+    """
+    Rebuilds what drop_bulk_write_indexes dropped. Plain CREATE INDEX
+    (not CONCURRENTLY): CONCURRENTLY can't run inside a multi-statement
+    transaction, which pg_conn's explicit-commit usage throughout this
+    module already assumes -- doing it here would need a second,
+    separate autocommit connection, worth adding if this is ever run
+    against a table serving real concurrent write traffic during
+    rebuild, but not needed for a maintenance-window backfill where
+    nothing else is writing here at the same time.
+    """
+    with pg_conn.cursor() as cur:
+        for name, create_sql in BULK_WRITE_INDEXES:
+            cur.execute(create_sql)
+    pg_conn.commit()
+    logger.info(f"Rebuilt {len(BULK_WRITE_INDEXES)} bulk-write indexes after backfill persist phase")
+
+
 def persist_candidate_pairs_and_decisions(
     pg_conn,
     run_id: str,
@@ -124,8 +201,46 @@ def persist_candidate_pairs_and_decisions(
     (from pipeline.duckdb_orchestrator's get_scores()/get_decisions()).
     Only persists pairs where BOTH endpoints made it into code_to_uuid
     (i.e. were upserted -- callers should upsert first).
+
+    pair_id is generated client-side (uuid4) rather than left to
+    candidate_pairs' server-side default (uuid_generate_v4()). The
+    prior version relied on the server default plus `RETURNING pair_id,
+    a_key, b_key` to learn each inserted row's id -- correct, but at
+    ~270K audited pairs that means shipping every row's a_key/b_key
+    back over the wire a SECOND time just to read back an id we could
+    have chosen ourselves, plus a conditional fallback SELECT for any
+    row ON CONFLICT skipped. Measured as this function's dominant cost
+    (98s of a 322s Doris run). Choosing pair_id up front removes both
+    round trips entirely: candidate_pairs/match_scores/match_decisions
+    can all be bulk-inserted independently.
+
+    Independently profiled after that fix barely moved the number
+    (98s -> 89.6s) -- the real cost was never the round trip, it's the
+    per-row statement overhead `execute_values` still pays even at
+    page_size=5000 (confirmed evenly split across all 3 tables:
+    ~35s/25s/23s at ~271K rows each). Switched to COPY into a
+    session-scoped TEMP staging table per target table, then one
+    set-based `INSERT ... SELECT ... ON CONFLICT DO NOTHING` moves
+    staged rows into the real table -- COPY's wire protocol skips
+    per-row parse/plan entirely, and staging preserves the idempotency
+    ON CONFLICT gives that plain COPY-into-target can't express. Array
+    columns (TEXT[]) have no COPY-time adapter the way execute_values'
+    psycopg2 list-adaptation gave for free, so `_pg_text_array_literal`
+    hand-builds their `{"a","b"}` literal.
+
+    Dedups on (a_uuid, b_uuid) client-side (`seen_uuid_pairs`) rather
+    than leaning on candidate_pairs' ON CONFLICT (run_id, a_key,
+    b_key) DO NOTHING to drop a repeat: two DIFFERENT code-pairs could
+    in principle resolve to the same (a_uuid, b_uuid) if code_to_uuid
+    ever isn't injective, and a client-chosen pair_id makes that
+    dangerous instead of just redundant -- match_scores/match_decisions
+    would still try to insert a row against a pair_id that candidate_pairs'
+    conflict just silently dropped, an FK violation. Deduping before
+    any row is built sidesteps this the same way ON CONFLICT DO
+    NOTHING did, just without depending on the database to notice.
     """
     pair_rows, score_rows, decision_rows = [], [], []
+    seen_uuid_pairs = set()
 
     for pair_id, score in scores.items():
         a_uuid = code_to_uuid.get(score.a_key)
@@ -133,6 +248,10 @@ def persist_candidate_pairs_and_decisions(
         if not a_uuid or not b_uuid:
             continue
         a_uuid, b_uuid = sorted([a_uuid, b_uuid])
+        if (a_uuid, b_uuid) in seen_uuid_pairs:
+            continue
+        seen_uuid_pairs.add((a_uuid, b_uuid))
+        row_pair_id = str(uuid4())
 
         evidence_json = [
             {
@@ -143,68 +262,124 @@ def persist_candidate_pairs_and_decisions(
             for e in score.evidence
         ]
 
-        pair_rows.append((run_id, a_uuid, b_uuid, score.hard_conflicts or score.signals_hit or ["blocked"]))
-        score_rows.append((run_id, a_uuid, b_uuid, float(score.score), Json(evidence_json)))
+        pair_rows.append((row_pair_id, run_id, a_uuid, b_uuid, score.hard_conflicts or score.signals_hit or ["blocked"]))
+        score_rows.append((row_pair_id, run_id, float(score.score), evidence_json))
 
         decision = decisions.get(pair_id)
         if decision:
             decision_rows.append((
-                run_id, a_uuid, b_uuid, decision.value if hasattr(decision, "value") else str(decision),
+                row_pair_id, run_id, decision.value if hasattr(decision, "value") else str(decision),
                 float(score.score), score.signals_hit, score.hard_conflicts, ruleset_version,
             ))
 
     if not pair_rows:
         return 0, 0, 0
 
+    import time as _time
     with pg_conn.cursor() as cur:
-        inserted = execute_values(cur, """
-            INSERT INTO candidate_pairs (run_id, a_key, b_key, blocking_reasons)
-            VALUES %s
+        # SET LOCAL scopes to just this transaction (auto-reverts at
+        # commit) -- a durability/latency tradeoff, not a correctness
+        # one: the data written is identical either way, this only
+        # controls whether COMMIT waits for the WAL fsync to complete
+        # before returning. A hard crash in the following instant could
+        # lose this transaction, but never corrupt or half-write it.
+        # Tried after COPY-into-staging + dropped indexes still only
+        # bought a modest win, to test whether WAL fsync -- not
+        # indexes -- was the real remaining floor.
+        cur.execute("SET LOCAL synchronous_commit = OFF")
+
+        # COPY into an UNLOGGED-equivalent (session-scoped TEMP, which
+        # is already unlogged and auto-cleaned at connection close) is
+        # the standard fast-bulk-load pattern: COPY's wire protocol
+        # skips per-row statement parsing/planning that even a
+        # page_size=5000 execute_values still pays, and staging first
+        # keeps ON CONFLICT / idempotency semantics COPY itself can't
+        # express (COPY has no ON CONFLICT clause). DROP+CREATE (not
+        # CREATE IF NOT EXISTS) because this function can run multiple
+        # times per pg_conn -- low_memory_mode calls it once per score
+        # batch on the SAME connection (see doris_orchestrator's
+        # _score_and_decide_batched), and a stale staging table from
+        # the previous batch must not leak rows into this one.
+        cur.execute("DROP TABLE IF EXISTS _stage_candidate_pairs")
+        cur.execute("""
+            CREATE TEMP TABLE _stage_candidate_pairs
+                (pair_id UUID, run_id UUID, a_key UUID, b_key UUID, blocking_reasons TEXT[])
+        """)
+        cur.execute("DROP TABLE IF EXISTS _stage_match_scores")
+        cur.execute("""
+            CREATE TEMP TABLE _stage_match_scores (pair_id UUID, run_id UUID, score DECIMAL(5,4), evidence_json JSONB)
+        """)
+        cur.execute("DROP TABLE IF EXISTS _stage_match_decisions")
+        cur.execute("""
+            CREATE TEMP TABLE _stage_match_decisions (
+                pair_id UUID, run_id UUID, decision VARCHAR(20), threshold_used DECIMAL(5,4),
+                signals_hit TEXT[], hard_conflict_flags TEXT[], ruleset_version VARCHAR(64)
+            )
+        """)
+
+        _t0 = _time.perf_counter()
+        pairs_buf = io.StringIO()
+        pairs_csv = csv.writer(pairs_buf, lineterminator='\n')
+        for row_pair_id, r_id, a_uuid, b_uuid, reasons in pair_rows:
+            pairs_csv.writerow([row_pair_id, r_id, a_uuid, b_uuid, _pg_text_array_literal(reasons)])
+        pairs_buf.seek(0)
+        cur.copy_expert(
+            "COPY _stage_candidate_pairs (pair_id, run_id, a_key, b_key, blocking_reasons) FROM STDIN WITH (FORMAT csv)",
+            pairs_buf,
+        )
+        cur.execute("""
+            INSERT INTO candidate_pairs (pair_id, run_id, a_key, b_key, blocking_reasons)
+            SELECT pair_id, run_id, a_key, b_key, blocking_reasons FROM _stage_candidate_pairs
             ON CONFLICT (run_id, a_key, b_key) DO NOTHING
-            RETURNING pair_id, a_key, b_key
-        """, pair_rows, fetch=True, page_size=5000)
-        pair_id_map = {(str(r[1]), str(r[2])): r[0] for r in inserted}
+        """)
+        _t1 = _time.perf_counter()
 
-        # Pairs already existing (ON CONFLICT DO NOTHING skipped them) still
-        # need their pair_id for the score/decision inserts below.
-        missing = [(a, b) for (_, a, b, _) in pair_rows if (a, b) not in pair_id_map]
-        if missing:
+        scores_buf = io.StringIO()
+        scores_csv = csv.writer(scores_buf, lineterminator='\n')
+        for row_pair_id, r_id, score_val, evidence_json in score_rows:
+            scores_csv.writerow([row_pair_id, r_id, score_val, json.dumps(evidence_json)])
+        scores_buf.seek(0)
+        cur.copy_expert(
+            "COPY _stage_match_scores (pair_id, run_id, score, evidence_json) FROM STDIN WITH (FORMAT csv)",
+            scores_buf,
+        )
+        cur.execute("""
+            INSERT INTO match_scores (pair_id, run_id, score, evidence_json)
+            SELECT pair_id, run_id, score, evidence_json FROM _stage_match_scores
+            ON CONFLICT (pair_id) DO NOTHING
+        """)
+        _t2 = _time.perf_counter()
+
+        if decision_rows:
+            decisions_buf = io.StringIO()
+            decisions_csv = csv.writer(decisions_buf, lineterminator='\n')
+            for row_pair_id, r_id, decision_val, threshold, signals, conflicts, rv in decision_rows:
+                decisions_csv.writerow([
+                    row_pair_id, r_id, decision_val, threshold,
+                    _pg_text_array_literal(signals), _pg_text_array_literal(conflicts), rv,
+                ])
+            decisions_buf.seek(0)
+            cur.copy_expert(
+                "COPY _stage_match_decisions (pair_id, run_id, decision, threshold_used, signals_hit, "
+                "hard_conflict_flags, ruleset_version) FROM STDIN WITH (FORMAT csv)",
+                decisions_buf,
+            )
             cur.execute("""
-                SELECT pair_id, a_key, b_key FROM candidate_pairs
-                WHERE run_id = %s AND (a_key, b_key) IN %s
-            """, (run_id, tuple(missing)))
-            for r in cur.fetchall():
-                pair_id_map[(str(r[1]), str(r[2]))] = r[0]
-
-        score_values = []
-        for run_id_, a_uuid, b_uuid, score_val, ev in score_rows:
-            pid = pair_id_map.get((a_uuid, b_uuid))
-            if pid:
-                score_values.append((pid, run_id_, score_val, ev))
-
-        if score_values:
-            execute_values(cur, """
-                INSERT INTO match_scores (pair_id, run_id, score, evidence_json)
-                VALUES %s
-                ON CONFLICT (pair_id) DO NOTHING
-            """, score_values, page_size=5000)
-
-        decision_values = []
-        for run_id_, a_uuid, b_uuid, decision_val, score_val, signals, conflicts, rv in decision_rows:
-            pid = pair_id_map.get((a_uuid, b_uuid))
-            if pid:
-                decision_values.append((pid, run_id_, decision_val, score_val, signals, conflicts, rv))
-
-        if decision_values:
-            execute_values(cur, """
                 INSERT INTO match_decisions
                     (pair_id, run_id, decision, threshold_used, signals_hit, hard_conflict_flags, ruleset_version)
-                VALUES %s
+                SELECT pair_id, run_id, decision, threshold_used, signals_hit, hard_conflict_flags, ruleset_version
+                FROM _stage_match_decisions
                 ON CONFLICT (pair_id) DO NOTHING
-            """, decision_values, page_size=5000)
+            """)
+        _t3 = _time.perf_counter()
+        logger.info(
+            f"persist_candidate_pairs_and_decisions breakdown (s): "
+            f"candidate_pairs={_t1 - _t0:.3f} match_scores={_t2 - _t1:.3f} match_decisions={_t3 - _t2:.3f} "
+            f"({len(pair_rows):,} pairs, {len(score_rows):,} scores, {len(decision_rows):,} decisions)"
+        )
 
     pg_conn.commit()
-    return len(pair_id_map), len(score_values), len(decision_values)
+    return len(pair_rows), len(score_rows), len(decision_rows)
 
 
 def persist_clusters(

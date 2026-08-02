@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException
 from services.run_service import get_run_service
 from services.review_service import get_review_service
 from engine.clustering import get_cluster_manager
+from api import doris_run_reader
 
 router = APIRouter()
 
@@ -160,16 +161,31 @@ async def get_blocking_metrics(run_id: str) -> dict:
 @router.get("/scoring/{run_id}")
 async def get_scoring_metrics(run_id: str) -> dict:
     """
-    Get scoring distribution metrics for a run.
+    Get scoring distribution metrics for a run. See
+    api/doris_run_reader.py's module docstring -- Doris-first (all
+    aggregation done in SQL, not by pulling every score into Python),
+    falls back to the in-memory orchestrator for non-Doris-backed runs.
     """
+    if doris_run_reader.run_has_doris_data(run_id):
+        dist = doris_run_reader.fetch_score_distribution(run_id)
+        return {
+            "run_id": run_id,
+            "total_pairs": dist["total_pairs"],
+            "average_score": dist["average_score"],
+            "score_distribution": dist["buckets"],
+            "above_auto_threshold": dist["above_auto_threshold"],
+            "in_review_zone": dist["in_review_zone"],
+            "below_threshold": dist["below_threshold"],
+        }
+
     run_service = get_run_service()
     orchestrator = run_service.get_orchestrator(run_id)
-    
+
     if not orchestrator:
         raise HTTPException(status_code=404, detail="Run not found or orchestrator unavailable")
-    
+
     scores = orchestrator.get_scores()
-    
+
     # Calculate score distribution
     distribution = {
         "0.0-0.2": 0,
@@ -178,7 +194,7 @@ async def get_scoring_metrics(run_id: str) -> dict:
         "0.6-0.8": 0,
         "0.8-1.0": 0,
     }
-    
+
     for score in scores.values():
         s = score.score
         if s < 0.2:
@@ -191,18 +207,18 @@ async def get_scoring_metrics(run_id: str) -> dict:
             distribution["0.6-0.8"] += 1
         else:
             distribution["0.8-1.0"] += 1
-    
+
     # Calculate average score
     avg_score = 0
     if scores:
         avg_score = sum(s.score for s in scores.values()) / len(scores)
-    
+
     return {
         "run_id": run_id,
         "total_pairs": len(scores),
         "average_score": avg_score,
         "score_distribution": distribution,
-        
+
         # Threshold analysis
         "above_auto_threshold": sum(1 for s in scores.values() if s.score >= 0.92),
         "in_review_zone": sum(1 for s in scores.values() if 0.55 <= s.score < 0.92),

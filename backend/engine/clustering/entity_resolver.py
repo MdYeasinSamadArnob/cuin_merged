@@ -141,6 +141,19 @@ def resolve_entities(
     code_to_entity_before_this_run = dict(code_to_entity)
     cur = pg_conn.cursor()
 
+    # Reverse index (entity_id -> its current member codes), built ONCE
+    # in O(total codes). Pass 2 used to recompute this per accepted
+    # root via `{c for c, e in code_to_entity.items() if e ==
+    # entity_id}` -- a full scan of every current membership, for
+    # EVERY root -- which is O(roots x total codes). At 55,674 roots
+    # against ~380K current memberships that's ~21 billion comparisons
+    # and measured as the dominant cost of the entire persist stage
+    # (357s of a 392s stage). Kept in sync as pass 2 mutates
+    # code_to_entity below, so each root's lookup stays O(1).
+    entity_to_members: Dict[str, Set[str]] = {}
+    for code, eid in code_to_entity.items():
+        entity_to_members.setdefault(eid, set()).add(code)
+
     # Pass 1: compute each accepted root's overlap against the
     # PRE-RUN membership snapshot (never mutated during this pass), so
     # two components racing for the same entity (a genuine split, e.g.
@@ -209,21 +222,26 @@ def resolve_entities(
         root_to_entity[root] = entity_id
 
         # Membership delta: only touch codes that actually moved.
-        current_members_of_entity = {c for c, e in code_to_entity.items() if e == entity_id}
+        current_members_of_entity = entity_to_members.get(entity_id, set())
         new_member_set = set(members)
         joined = new_member_set - current_members_of_entity
         left = current_members_of_entity - new_member_set
 
         for code in left:
             members_to_close.add((entity_id, code))
+            entity_to_members[entity_id].discard(code)
         for code in joined:
             prior_entity = code_to_entity.get(code)
             if prior_entity and prior_entity != entity_id:
                 # ux_entity_members_current allows only one CURRENT entity per code --
                 # close the prior membership before opening this one.
                 members_to_close.add((prior_entity, code))
+                prior_set = entity_to_members.get(prior_entity)
+                if prior_set is not None:
+                    prior_set.discard(code)
             members_to_open.append((entity_id, code, run_id, "PIPELINE"))
             code_to_entity[code] = entity_id  # keep the in-memory map correct for subsequent roots in this loop
+            entity_to_members.setdefault(entity_id, set()).add(code)
 
     if new_entity_rows:
         execute_values(

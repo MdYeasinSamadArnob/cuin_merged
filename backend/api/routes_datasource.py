@@ -36,6 +36,14 @@ class DatasourceStartRequest(BaseModel):
     # cluster mints a brand-new entity_id regardless of overlap with
     # prior entities. See entity_resolver.resolve_entities's docstring.
     carry_forward: bool = True
+    # For a one-time, massive historical backfill (billions of records)
+    # where a single pass would otherwise accumulate every pair's score/
+    # decision in one process's RAM for the run's entire lifetime (see
+    # pipeline.doris_orchestrator's DorisPipelineOrchestrator docstring
+    # on low_memory_mode) -- normal-sized runs should never need this,
+    # it exists purely as an opt-in escape hatch. Only DorisPipelineOrchestrator
+    # implements it; other engines ignore the flag.
+    low_memory_mode: bool = False
 
 @router.post("/demo")
 async def start_datasource_demo(
@@ -127,7 +135,10 @@ async def start_datasource_demo(
                     'mode': run.mode.value
                 })
 
-                result = await orchestrator.run(run.run_id, mode=request.mode, carry_forward=request.carry_forward)
+                run_kwargs = {"mode": request.mode, "carry_forward": request.carry_forward}
+                if request.engine == "doris":
+                    run_kwargs["low_memory_mode"] = request.low_memory_mode
+                result = await orchestrator.run(run.run_id, **run_kwargs)
 
                 run_obj = run_service.get_run(run.run_id)
                 if run_obj:

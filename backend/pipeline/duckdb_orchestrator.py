@@ -31,11 +31,10 @@ from typing import List, Dict, Optional, Callable, Any
 import duckdb
 
 from pipeline.orchestrator import PipelineStage, StageProgress, PipelineResult
-from engine.structures import MatchScore, MatchDecision, FieldEvidence
+from engine.structures import MatchScore, MatchDecision
 from engine.normalize.explode import build_identifiers_table
 from engine.blocking.suppression import build_frequency_table, suppression_summary
-from engine.scoring.evidence import build_pair_evidence, evidence_to_field_evidence
-from engine.scoring.confidence import score_pair
+from engine.scoring.evidence import build_pair_evidence
 from engine.rules.match_rules import DEFAULT_MATCH_RULESET
 from engine.clustering import get_cluster_manager
 from engine.clustering import entity_resolver
@@ -363,10 +362,7 @@ class DuckDBPipelineOrchestrator:
         loop = asyncio.get_event_loop()
 
         def _score_and_decide():
-            from services.review_service import get_review_service
-            from engine.segments.relationships import detect_relationship_evidence
-            review_service = get_review_service()
-
+            from api.config import settings
             con = self._connect()
             build_pair_evidence(con)
 
@@ -433,98 +429,25 @@ class DuckDBPipelineOrchestrator:
                     "dob_precision_a": prec_a, "dob_precision_b": prec_b,
                 }
 
-            auto_links, review_items, rejected = [], [], []
-            empty_name_dob = {
-                "tokens_a": [], "tokens_b": [], "token_intersection": [], "token_union": [],
-            }
-
-            for a_key, b_key in pairs:
-                key = (a_key, b_key)
-                evidence = {
-                    "identifiers": id_evidence.get(key, []),
-                    "name_dob": name_dob_evidence.get(key, empty_name_dob),
-                }
-                if raw_columns:
-                    fields_a, fields_b = raw_by_code.get(a_key, {}), raw_by_code.get(b_key, {})
-                    evidence["raw_fields"] = {col: (fields_a.get(col), fields_b.get(col)) for col in raw_columns}
-
-                seg_a = segments.get(a_key, "ALL")
-                seg_b = segments.get(b_key, "ALL")
-                if seg_a != seg_b:
-                    # Cross-segment: never a candidate for AUTO_LINK/
-                    # REVIEW/REJECT -- score_pair() answers "how likely
-                    # is this the SAME entity", which is a category
-                    # error between e.g. a company and a person. The
-                    # pair still exists because blocking found real
-                    # shared evidence, so that connection is recorded
-                    # as a traceable relationship instead of an
-                    # identity decision -- see engine.segments.
-                    # relationships and db/migrations/004.
-                    rel_evidence = detect_relationship_evidence(evidence)
-                    if rel_evidence:
-                        self._relationships.append({
-                            "a_key": a_key, "b_key": b_key,
-                            "a_segment": seg_a, "b_segment": seg_b,
-                            "shared_evidence": [e.to_dict() for e in rel_evidence],
-                        })
-                    continue
-
-                # Confidence model (Stage 2) -- replaces
-                # classify()/decide()'s strong/medium tier counting with
-                # a per-field percentage a banker sets directly. tiers.py
-                # stays in the tree as the frozen oracle
-                # tests/unit/test_confidence_enumeration.py proves this
-                # agrees with, exhaustively, at the seed values.
-                # Stage 5: uses this segment's dedicated MatchRuleset
-                # when the catalog has one, else the catalog default --
-                # see RuleCatalogVersion.match_ruleset_for_segment.
-                segment_ruleset = self._catalog.match_ruleset_for_segment(seg_a)
-                pair_score = score_pair(evidence, segment_ruleset)
-                decision = MatchDecision(pair_score.decision)
-                score_value = pair_score.confidence_pct / 100.0
-
-                pair_id = f"{a_key}:{b_key}"
-
-                match_score = MatchScore(
-                    pair_id=pair_id,
-                    a_key=a_key,
-                    b_key=b_key,
-                    score=score_value,
-                    evidence=evidence_to_field_evidence(evidence),
-                    hard_conflicts=pair_score.vetoes,
-                    signals_hit=pair_score.signals_hit,
-                )
-                self._scores[pair_id] = match_score
-                self._decisions[pair_id] = decision
-
-                if decision == MatchDecision.AUTO_LINK:
-                    auto_links.append((a_key, b_key))
-                elif decision == MatchDecision.REVIEW:
-                    review_items.append((a_key, b_key))
-                    review_service.queue_for_review(
-                        pair_id=pair_id,
-                        run_id=self.run_id,
-                        a_key=a_key,
-                        b_key=b_key,
-                        score=score_value,
-                        evidence=[
-                            {
-                                "field": ev.field_name, "value_a": ev.value_a, "value_b": ev.value_b,
-                                "type": ev.comparison_type, "similarity": ev.similarity_score,
-                                "explanation": ev.explanation,
-                            }
-                            for ev in match_score.evidence
-                        ],
-                        signals=pair_score.signals_hit,
-                    )
-                else:
-                    rejected.append((a_key, b_key))
-
-            # ONE bulk save after the loop, not per-item -- review_service
-            # persists this run's queue file on each save, and calling
-            # that up to ~190K times inside this loop would make the
-            # pipeline take far longer than the actual matching work.
-            review_service._save_queue(self.run_id)
+            # Scoring/decision runs across a process pool, not a serial
+            # Python loop -- see pipeline.parallel_scoring's module
+            # docstring for why this was the pipeline's real throughput
+            # bottleneck (measured ~757 pairs/sec on one core,
+            # independent of the underlying database's own speed) and
+            # why splitting it across cores is safe (each pair's
+            # decision is fully independent of every other pair's).
+            # build_full_evidence=False always -- see
+            # pipeline.doris_orchestrator's identical call site for why
+            # (its only consumer turned out to be unreachable from
+            # production) and pipeline.parallel_scoring's docstring.
+            from pipeline.parallel_scoring import score_pairs_parallel
+            auto_links, review_items, rejected, chunk_scores, chunk_decisions, chunk_relationships = score_pairs_parallel(
+                pairs, id_evidence, name_dob_evidence, segments, raw_columns, raw_by_code,
+                self._catalog, build_full_evidence=False,
+            )
+            self._scores.update(chunk_scores)
+            self._decisions.update(chunk_decisions)
+            self._relationships.extend(chunk_relationships)
 
             # Durable baseline for the Settings UI's instant redecide/
             # reblock (api/routes_rules.py): the SAME confidence logic

@@ -32,6 +32,8 @@ import csv as csv_module
 import json
 import logging
 import os
+import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import List, Dict, Optional, Callable, Any
 
@@ -60,15 +62,13 @@ def _parse_array(value) -> list:
     return list(value)
 
 from pipeline.orchestrator import PipelineStage, StageProgress, PipelineResult
-from engine.structures import MatchScore, MatchDecision, FieldEvidence
+from engine.structures import MatchScore, MatchDecision
 from engine.ports.doris_conn import DorisConnection
 from engine.ports.doris_dialect import DorisDialect
 from engine.ports.doris_ingest import create_raw_table_sql, load_parquet_to_doris, local_parquet_view_sql
 from engine.normalize import explode_dialect
 from engine.blocking import suppression_dialect
 from engine.scoring.evidence_dialect import build_pair_evidence
-from engine.scoring.evidence import evidence_to_field_evidence
-from engine.scoring.confidence import score_pair
 from engine.rules.match_rules import DEFAULT_MATCH_RULESET
 from engine.rules import store as rule_store
 from engine.rules.compiler import compile_and_build
@@ -85,13 +85,50 @@ logger = logging.getLogger(__name__)
 
 PARQUET_PATH = "data_source/oracle_data.parquet"
 
+# low_memory_mode's batch size for _stage_score_and_decide. Chosen as a
+# balance point: large enough that per-batch overhead (staging-table
+# round trips, ProcessPoolExecutor startup) stays a small fraction of
+# a batch's own work, small enough that peak per-batch memory (pairs +
+# evidence dicts + MatchScore objects) stays boundable on a low-resource
+# node regardless of total run size. Not tuned against a real
+# billion-row run (no such dataset available in dev) -- treat as a
+# starting point to re-measure against, not a proven-optimal constant.
+# Env-overridable so a real run can be exercised with a deliberately
+# small batch size to prove the batching mechanism itself, even
+# against a dev-scale dataset far below where it would matter for
+# memory in production.
+SCORE_BATCH_SIZE = int(os.environ.get("CUIN_SCORE_BATCH_SIZE", 500_000))
+
 
 def _sanitize_db_name(run_id: str) -> str:
     return "cuin_run_" + run_id.replace("-", "_")
 
 
 class DorisPipelineOrchestrator:
-    """Deterministic entity-resolution pipeline over the Oracle parquet datasource, executed on Apache Doris."""
+    """
+    Deterministic entity-resolution pipeline over the Oracle parquet
+    datasource, executed on Apache Doris.
+
+    low_memory_mode (default False, opt-in): the normal path fetches
+    every candidate pair's evidence into Python dicts up front and
+    accumulates every scored pair's full MatchScore in self._scores/
+    self._decisions for the run's entire lifetime (services.run_service
+    keeps orchestrator instances alive indefinitely so api/routes_matches.py
+    etc. can call get_scores()/get_decisions() after the run completes).
+    That's the right, simple design at normal run sizes -- fine up to
+    tens of millions of pairs -- but at a one-time multi-billion-record
+    historical backfill it isn't just slow, it exhausts memory outright,
+    independent of how much CPU parallelism scores pairs. low_memory_mode
+    switches _stage_score_and_decide to bounded-batch processing
+    (SCORE_BATCH_SIZE pairs at a time: fetch batch -> fetch only that
+    batch's evidence -> score -> persist immediately -> discard) and
+    stops populating self._scores/self._decisions for non-auto-link
+    pairs entirely -- get_scores()/get_decisions() return an empty (or
+    auto-link-only) view for a low_memory_mode run. This is a deliberate,
+    documented trade-off, not a bug: nobody browses billions of match
+    pairs in a live UI table, and existing routes/tests for normal-sized
+    runs are completely unaffected since this whole path is opt-in.
+    """
 
     def __init__(
         self,
@@ -105,6 +142,12 @@ class DorisPipelineOrchestrator:
         self.progress_callback = progress_callback
         self.run_id = run_id
         self._carry_forward = True
+        self._low_memory_mode = False
+        # Populated instead of self._scores/self._decisions when
+        # low_memory_mode is on, scoped to ONLY auto-link pairs (a small
+        # fraction of all pairs) since that's all fingerprint_edges (see
+        # run()) actually needs: pair_id -> (decision_value, signals_hit).
+        self._auto_link_fingerprint_data: Dict[str, tuple] = {}
 
         # See pipeline.duckdb_orchestrator's identical comment --
         # EffectiveRuleset resolves decision thresholds from the active
@@ -190,6 +233,41 @@ class DorisPipelineOrchestrator:
                 user=self._doris_user, password=self._doris_password, database=self._database,
             )
         return self._con
+
+    def _fetch_chunks_parallel(self, items: list, chunk_size: int, query_fn, max_workers: int = 8) -> list:
+        """
+        Runs query_fn(conn, chunk) concurrently across chunks of `items`,
+        each on its own DorisConnection (pymysql connections aren't
+        safe to share across threads). This is I/O-bound work -- each
+        chunk waits on a network round trip + Doris query execution --
+        so threads are the right tool here (unlike parallel_scoring's
+        CPU-bound pure-Python work, which needed processes to get past
+        the GIL): the GIL is released while pymysql waits on the
+        socket, so threads genuinely run these concurrently. Requires
+        _connect() to have been called at least once already (so
+        self._database is set).
+        """
+        chunks = [items[i:i + chunk_size] for i in range(0, len(items), chunk_size)]
+        if not chunks:
+            return []
+        if len(chunks) == 1:
+            return list(query_fn(self._connect(), chunks[0]))
+
+        def _run(chunk):
+            conn = DorisConnection(
+                host=self._doris_host, port=self._doris_mysql_port,
+                user=self._doris_user, password=self._doris_password, database=self._database,
+            )
+            try:
+                return query_fn(conn, chunk)
+            finally:
+                conn.close()
+
+        results = []
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as pool:
+            for chunk_result in pool.map(_run, chunks):
+                results.extend(chunk_result)
+        return results
 
     # ------------------------------------------------------------------
     # Stage 1: Ingest (read the source Parquet in place, no copy)
@@ -338,10 +416,7 @@ class DorisPipelineOrchestrator:
         loop = asyncio.get_event_loop()
 
         def _score_and_decide():
-            from services.review_service import get_review_service
-            from engine.segments.relationships import detect_relationship_evidence
-            review_service = get_review_service()
-
+            from api.config import settings
             con = self._connect()
             build_pair_evidence(con, self._dialect)
 
@@ -402,72 +477,36 @@ class DorisPipelineOrchestrator:
                     "dob_precision_a": prec_a, "dob_precision_b": prec_b,
                 }
 
-            auto_links, review_items, rejected = [], [], []
-            empty_name_dob = {
-                "tokens_a": [], "tokens_b": [], "token_intersection": [], "token_union": [],
-            }
-
-            for a_key, b_key in pairs:
-                key = (a_key, b_key)
-                evidence = {
-                    "identifiers": id_evidence.get(key, []),
-                    "name_dob": name_dob_evidence.get(key, empty_name_dob),
-                }
-                if raw_columns:
-                    fields_a, fields_b = raw_by_code.get(a_key, {}), raw_by_code.get(b_key, {})
-                    evidence["raw_fields"] = {col: (fields_a.get(col), fields_b.get(col)) for col in raw_columns}
-
-                seg_a = segments.get(a_key, "ALL")
-                seg_b = segments.get(b_key, "ALL")
-                if seg_a != seg_b:
-                    # Cross-segment: not an identity decision -- record
-                    # the shared-evidence connection as a traceable
-                    # relationship instead. Mirrors duckdb_orchestrator.
-                    rel_evidence = detect_relationship_evidence(evidence)
-                    if rel_evidence:
-                        self._relationships.append({
-                            "a_key": a_key, "b_key": b_key,
-                            "a_segment": seg_a, "b_segment": seg_b,
-                            "shared_evidence": [e.to_dict() for e in rel_evidence],
-                        })
-                    continue
-
-                segment_ruleset = self._catalog.match_ruleset_for_segment(seg_a)
-                pair_score = score_pair(evidence, segment_ruleset)
-                decision = MatchDecision(pair_score.decision)
-                score_value = pair_score.confidence_pct / 100.0
-
-                pair_id = f"{a_key}:{b_key}"
-
-                match_score = MatchScore(
-                    pair_id=pair_id, a_key=a_key, b_key=b_key, score=score_value,
-                    evidence=evidence_to_field_evidence(evidence),
-                    hard_conflicts=pair_score.vetoes, signals_hit=pair_score.signals_hit,
-                )
-                self._scores[pair_id] = match_score
-                self._decisions[pair_id] = decision
-
-                if decision == MatchDecision.AUTO_LINK:
-                    auto_links.append((a_key, b_key))
-                elif decision == MatchDecision.REVIEW:
-                    review_items.append((a_key, b_key))
-                    review_service.queue_for_review(
-                        pair_id=pair_id, run_id=self.run_id, a_key=a_key, b_key=b_key,
-                        score=score_value,
-                        evidence=[
-                            {
-                                "field": ev.field_name, "value_a": ev.value_a, "value_b": ev.value_b,
-                                "type": ev.comparison_type, "similarity": ev.similarity_score,
-                                "explanation": ev.explanation,
-                            }
-                            for ev in match_score.evidence
-                        ],
-                        signals=pair_score.signals_hit,
-                    )
-                else:
-                    rejected.append((a_key, b_key))
-
-            review_service._save_queue(self.run_id)
+            # Scoring/decision runs across a process pool, not a serial
+            # Python loop -- see pipeline.parallel_scoring's module
+            # docstring for why this was the pipeline's real throughput
+            # bottleneck (measured ~757 pairs/sec on one core,
+            # independent of Doris's own speed) and why splitting it
+            # across cores is safe (each pair's decision is fully
+            # independent of every other pair's).
+            #
+            # build_full_evidence=False always -- see score_pairs_parallel's
+            # docstring: its ONLY consumer (routes_matches.py's
+            # /{pair_id}/explain, reading MatchScore.evidence's
+            # comparison_type/similarity_score fields) turned out to be
+            # unreachable from production -- the frontend's "Ask Referee"
+            # button calls an api.explainMatch() that was never actually
+            # defined in frontend/src/lib/api.ts (verified: grep finds no
+            # definition, only the `as any` call site). The live review
+            # workbench's referee feature reads its OWN stored
+            # explanation from referee_explanations, never MatchScore.evidence.
+            # Building this per-pair explanation-string data was therefore
+            # pure waste at any scale -- confirmed the single largest
+            # remaining cost path in persist_candidate_pairs_and_decisions
+            # (the JSONB evidence_json column).
+            from pipeline.parallel_scoring import score_pairs_parallel
+            auto_links, review_items, rejected, chunk_scores, chunk_decisions, chunk_relationships = score_pairs_parallel(
+                pairs, id_evidence, name_dob_evidence, segments, raw_columns, raw_by_code,
+                self._catalog, build_full_evidence=False,
+            )
+            self._scores.update(chunk_scores)
+            self._decisions.update(chunk_decisions)
+            self._relationships.extend(chunk_relationships)
 
             # Durable baseline for the Settings UI's instant redecide/
             # reblock (api/routes_rules.py, via engine.ports.run_session):
@@ -500,20 +539,322 @@ class DorisPipelineOrchestrator:
 
             return auto_links, review_items, rejected
 
-        auto_links, review_items, rejected = await loop.run_in_executor(None, _score_and_decide)
+        if self._low_memory_mode:
+            auto_links, review_items, rejected = await loop.run_in_executor(None, self._score_and_decide_batched)
+        else:
+            auto_links, review_items, rejected = await loop.run_in_executor(None, _score_and_decide)
+
+        review_count = review_items if isinstance(review_items, int) else len(review_items)
+        rejected_count = rejected if isinstance(rejected, int) else len(rejected)
+        scored_count = len(auto_links) + review_count + rejected_count
 
         duration = int((datetime.utcnow() - start).total_seconds() * 1000)
         relationships_msg = f", {len(self._relationships):,} cross-segment relationships" if self._segmentation.enabled else ""
         await self._emit_progress(StageProgress(
             stage=PipelineStage.SCORE, status="complete",
-            records_in=candidate_count, records_out=len(self._scores), duration_ms=duration,
-            message=f"{len(auto_links):,} auto-link, {len(review_items):,} review, {len(rejected):,} rejected{relationships_msg}",
+            records_in=candidate_count, records_out=scored_count, duration_ms=duration,
+            message=f"{len(auto_links):,} auto-link, {review_count:,} review, {rejected_count:,} rejected{relationships_msg}",
         ))
         await self._emit_progress(StageProgress(
             stage=PipelineStage.DECIDE, status="complete", records_out=len(auto_links),
             message=f"{len(auto_links):,} pairs meet the auto-link rule",
         ))
         return auto_links, review_items, rejected
+
+    def _score_and_decide_batched(self):
+        """
+        low_memory_mode's replacement for the nested _score_and_decide()
+        closure above: processes candidate_pairs SCORE_BATCH_SIZE rows
+        at a time instead of materializing every pair's evidence and
+        every pair's MatchScore for the whole run at once. See the
+        class docstring for why this exists and what it deliberately
+        gives up (self._scores/self._decisions stay empty for
+        non-auto-link pairs).
+
+        Returns (auto_links, review_count, rejected_count) -- note
+        review/rejected are INTS here, not lists (nothing downstream
+        needs the actual review/rejected pairs, only their counts;
+        _stage_score_and_decide's caller-facing contract already
+        tolerates either shape, see review_count/rejected_count above).
+        """
+        con = self._connect()
+        build_pair_evidence(con, self._dialect)
+
+        segments: Dict[str, str] = dict(
+            con.execute("SELECT customer_code, segment FROM customer_segments").fetchall()
+        )
+
+        from engine.rules.match_rules import raw_column_specs_in_catalog
+        raw_column_specs = raw_column_specs_in_catalog(self._catalog)
+        raw_columns = sorted(raw_column_specs)
+        raw_by_code: Dict[str, dict] = {}
+        if raw_columns:
+            cols_sql = ", ".join(raw_columns)
+            for row in con.execute(f"SELECT CUSTOMER_CODE, {cols_sql} FROM raw").fetchall():
+                code = row[0]
+                values = {}
+                for col, val in zip(raw_columns, row[1:]):
+                    values[col] = _parse_array(val) if raw_column_specs[col] else val
+                raw_by_code[code] = values
+
+        # Stage 6: no Postgres connection needed in this function at all
+        # any more -- candidate_pairs/match_scores/match_decisions
+        # (what the removed pg_conn/index-deferral machinery here used
+        # to serve) are no longer written to Postgres by Doris-backed
+        # runs. See the class docstring and api/doris_run_reader.py.
+
+        os.makedirs("data/runs", exist_ok=True)
+        scores_csv = open(f"data/runs/{self.run_id}_scores.csv", "w", newline="")
+        scores_writer = csv_module.writer(scores_csv)
+        scores_writer.writerow([
+            "CUSTOMER_CODE_l", "CUSTOMER_CODE_r", "match_probability",
+            "decision", "signals_hit", "hard_conflicts",
+        ])
+
+        auto_links: List[tuple] = []
+        review_count = 0
+        rejected_count = 0
+
+        try:
+            last_a_key, last_b_key = "", ""
+            while True:
+                # Keyset pagination via explicit boolean logic, not a
+                # row-value tuple comparison (`(a_key, b_key) > (?, ?)`)
+                # -- Doris's SQL parser doesn't support that MySQL/
+                # Postgres extension (verified live: "mismatched input
+                # ','... expecting {')', '.', ...}" at the tuple).
+                batch_pairs = con.execute("""
+                    SELECT a_key, b_key FROM candidate_pairs
+                    WHERE a_key > ? OR (a_key = ? AND b_key > ?)
+                    ORDER BY a_key, b_key
+                    LIMIT ?
+                """, (last_a_key, last_a_key, last_b_key, SCORE_BATCH_SIZE)).fetchall()
+                if not batch_pairs:
+                    break
+                last_a_key, last_b_key = batch_pairs[-1]
+
+                # Staging-table + JOIN, not a literal IN (...) list --
+                # same reasoning as _load_records_for_members/
+                # _persist_run_artifacts: a SCORE_BATCH_SIZE-row IN list
+                # is megabytes of SQL text and risks Doris's expression-
+                # tree limits.
+                con.execute("DROP TABLE IF EXISTS _score_batch")
+                con.execute("CREATE TABLE _score_batch (a_key VARCHAR(64), b_key VARCHAR(64))")
+                insert_chunk = 5000
+                for i in range(0, len(batch_pairs), insert_chunk):
+                    chunk = batch_pairs[i:i + insert_chunk]
+                    placeholders = ",".join(["(?,?)"] * len(chunk))
+                    flat = [v for pair in chunk for v in pair]
+                    con.execute(f"INSERT INTO _score_batch VALUES {placeholders}", flat)
+
+                id_evidence: Dict[tuple, list] = {}
+                for row in con.execute("""
+                    SELECT e.a_key, e.b_key, e.id_type, e.doc_type, e.values_a, e.values_b, e.intersection
+                    FROM pair_identifier_evidence e
+                    JOIN _score_batch b ON b.a_key = e.a_key AND b.b_key = e.b_key
+                """).fetchall():
+                    a_key, b_key, id_type, doc_type, values_a, values_b, intersection = row
+                    id_evidence.setdefault((a_key, b_key), []).append({
+                        "id_type": id_type, "doc_type": doc_type,
+                        "values_a": _parse_array(values_a),
+                        "values_b": _parse_array(values_b),
+                        "intersection": _parse_array(intersection),
+                    })
+
+                name_dob_evidence: Dict[tuple, dict] = {}
+                for row in con.execute("""
+                    SELECT e.a_key, e.b_key, e.name_a, e.name_b, e.tokens_a, e.tokens_b,
+                           e.token_intersection, e.token_union,
+                           e.dob_a, e.dob_b, e.dob_precision_a, e.dob_precision_b
+                    FROM pair_name_dob_evidence e
+                    JOIN _score_batch b ON b.a_key = e.a_key AND b.b_key = e.b_key
+                """).fetchall():
+                    (a_key, b_key, name_a, name_b, tokens_a, tokens_b,
+                     token_intersection, token_union, dob_a, dob_b, prec_a, prec_b) = row
+                    name_dob_evidence[(a_key, b_key)] = {
+                        "name_a": name_a, "name_b": name_b,
+                        "tokens_a": _parse_array(tokens_a),
+                        "tokens_b": _parse_array(tokens_b),
+                        "token_intersection": _parse_array(token_intersection),
+                        "token_union": _parse_array(token_union),
+                        "dob_a": dob_a, "dob_b": dob_b,
+                        "dob_precision_a": prec_a, "dob_precision_b": prec_b,
+                    }
+
+                from pipeline.parallel_scoring import score_pairs_parallel
+                b_auto, b_review, b_rejected, b_scores, b_decisions, b_relationships = score_pairs_parallel(
+                    batch_pairs, id_evidence, name_dob_evidence, segments, raw_columns, raw_by_code,
+                    self._catalog, build_full_evidence=False,  # see normal path's identical comment
+                )
+                self._relationships.extend(b_relationships)
+
+                for a_key, b_key in b_auto:
+                    pair_id = f"{a_key}:{b_key}"
+                    score = b_scores[pair_id]
+                    decision = b_decisions[pair_id]
+                    self._auto_link_fingerprint_data[pair_id] = (decision.value, score.signals_hit)
+                auto_links.extend(b_auto)
+                review_count += len(b_review)
+                rejected_count += len(b_rejected)
+
+                for pair_id, score in b_scores.items():
+                    decision = b_decisions.get(pair_id)
+                    scores_writer.writerow([
+                        score.a_key, score.b_key, score.score,
+                        decision.value if decision else "",
+                        ";".join(score.signals_hit), ";".join(score.hard_conflicts),
+                    ])
+
+                # Stage 6: no per-batch Postgres persist of pairs/scores/
+                # decisions -- pair_decisions/pair_contributions (built
+                # unconditionally below, once, after the batch loop)
+                # already hold this exact data in this run's own Doris
+                # database, and api/doris_run_reader.py now reads
+                # directly from there. See this method's/class's
+                # docstring and db/repository.py's comments for the
+                # full story of what used to happen here.
+                # b_scores/b_decisions/id_evidence/name_dob_evidence go
+                # out of scope here -- next loop iteration's assignments
+                # are this batch's only references, so they're eligible
+                # for GC immediately rather than living until the whole
+                # run finishes.
+
+            con.execute("DROP TABLE IF EXISTS _score_batch")
+        finally:
+            scores_csv.close()
+
+        try:
+            con.execute(compile_confidence_sql(self.match_ruleset, self._dialect, table_name="pair_decisions"))
+        except Exception:
+            logger.warning(
+                "Could not persist SQL-compiled pair_decisions baseline "
+                "(redecide/reblock will fall back to a fresh compile)", exc_info=True,
+            )
+        try:
+            from engine.rules.confidence_compiler import compile_contributions_sql
+            con.execute(compile_contributions_sql(self.match_ruleset, self._dialect, table_name="pair_contributions"))
+        except Exception:
+            logger.warning(
+                "Could not persist pair_contributions (workbench score breakdown unavailable for this run)",
+                exc_info=True,
+            )
+
+        return auto_links, review_count, rejected_count
+
+    def _score_partition(self, worker_idx: int, num_workers: int) -> dict:
+        """
+        Stage 4 proof-of-concept: scores exactly this worker's fixed
+        partition of candidate_pairs -- crc32(a_key||b_key) mod
+        num_workers = worker_idx -- rather than Stage 0/low_memory_mode's
+        sequential keyset batching. The difference matters for real
+        distribution: a fixed hash partition needs zero coordination
+        between workers (no worker needs to know another's progress or
+        last-seen key), so N of these can run as genuinely independent
+        processes -- on this dev host as subprocesses (see
+        pipeline/distributed_scoring_worker.py), on real infrastructure
+        as separate machines, with no code difference between the two.
+
+        Assumes the CALLER already ran ingest/normalize/block AND
+        build_pair_evidence() against this run_id's Doris database
+        exactly once -- re-running build_pair_evidence() per worker
+        would redo the exact bulk SQL work this exists to parallelize.
+        Returns a plain, JSON-serializable dict rather than mutating
+        self -- this runs in a separate process from whatever collects
+        the results, so there is no shared memory to mutate into.
+        """
+        con = self._connect()
+
+        segments: Dict[str, str] = dict(
+            con.execute("SELECT customer_code, segment FROM customer_segments").fetchall()
+        )
+        from engine.rules.match_rules import raw_column_specs_in_catalog
+        raw_column_specs = raw_column_specs_in_catalog(self._catalog)
+        raw_columns = sorted(raw_column_specs)
+        raw_by_code: Dict[str, dict] = {}
+        if raw_columns:
+            cols_sql = ", ".join(raw_columns)
+            for row in con.execute(f"SELECT CUSTOMER_CODE, {cols_sql} FROM raw").fetchall():
+                code = row[0]
+                values = {}
+                for col, val in zip(raw_columns, row[1:]):
+                    values[col] = _parse_array(val) if raw_column_specs[col] else val
+                raw_by_code[code] = values
+
+        partition_pairs = con.execute(f"""
+            SELECT a_key, b_key FROM candidate_pairs
+            WHERE MOD(crc32(CONCAT(a_key, '|', b_key)), {num_workers}) = {worker_idx}
+        """).fetchall()
+
+        staging = f"_partition_{worker_idx}"
+        con.execute(f"DROP TABLE IF EXISTS {staging}")
+        con.execute(f"CREATE TABLE {staging} (a_key VARCHAR(64), b_key VARCHAR(64))")
+        insert_chunk = 5000
+        for i in range(0, len(partition_pairs), insert_chunk):
+            chunk = partition_pairs[i:i + insert_chunk]
+            placeholders = ",".join(["(?,?)"] * len(chunk))
+            flat = [v for pair in chunk for v in pair]
+            con.execute(f"INSERT INTO {staging} VALUES {placeholders}", flat)
+
+        id_evidence: Dict[tuple, list] = {}
+        for row in con.execute(f"""
+            SELECT e.a_key, e.b_key, e.id_type, e.doc_type, e.values_a, e.values_b, e.intersection
+            FROM pair_identifier_evidence e
+            JOIN {staging} p ON p.a_key = e.a_key AND p.b_key = e.b_key
+        """).fetchall():
+            a_key, b_key, id_type, doc_type, values_a, values_b, intersection = row
+            id_evidence.setdefault((a_key, b_key), []).append({
+                "id_type": id_type, "doc_type": doc_type,
+                "values_a": _parse_array(values_a),
+                "values_b": _parse_array(values_b),
+                "intersection": _parse_array(intersection),
+            })
+
+        name_dob_evidence: Dict[tuple, dict] = {}
+        for row in con.execute(f"""
+            SELECT e.a_key, e.b_key, e.name_a, e.name_b, e.tokens_a, e.tokens_b,
+                   e.token_intersection, e.token_union,
+                   e.dob_a, e.dob_b, e.dob_precision_a, e.dob_precision_b
+            FROM pair_name_dob_evidence e
+            JOIN {staging} p ON p.a_key = e.a_key AND p.b_key = e.b_key
+        """).fetchall():
+            (a_key, b_key, name_a, name_b, tokens_a, tokens_b,
+             token_intersection, token_union, dob_a, dob_b, prec_a, prec_b) = row
+            name_dob_evidence[(a_key, b_key)] = {
+                "name_a": name_a, "name_b": name_b,
+                "tokens_a": _parse_array(tokens_a),
+                "tokens_b": _parse_array(tokens_b),
+                "token_intersection": _parse_array(token_intersection),
+                "token_union": _parse_array(token_union),
+                "dob_a": dob_a, "dob_b": dob_b,
+                "dob_precision_a": prec_a, "dob_precision_b": prec_b,
+            }
+
+        from pipeline.parallel_scoring import score_pairs_parallel
+        auto_links, review_items, rejected, scores, decisions, relationships = score_pairs_parallel(
+            partition_pairs, id_evidence, name_dob_evidence, segments, raw_columns, raw_by_code,
+            self._catalog, build_full_evidence=False,
+        )
+
+        # Stage 6: no per-partition Postgres persist of pairs/scores/
+        # decisions -- pair_decisions/pair_contributions (built once by
+        # the coordinator before dispatching workers) already hold this
+        # data in this run's own Doris database. See the class
+        # docstring and api/doris_run_reader.py.
+        con.execute(f"DROP TABLE IF EXISTS {staging}")
+
+        fingerprint_data = {}
+        for a_key, b_key in auto_links:
+            pid = f"{a_key}:{b_key}"
+            fingerprint_data[pid] = (decisions[pid].value, scores[pid].signals_hit)
+
+        return {
+            "worker_idx": worker_idx,
+            "auto_links": auto_links,
+            "review_count": len(review_items),
+            "rejected_count": len(rejected),
+            "fingerprint_data": fingerprint_data,
+            "relationships": relationships,
+        }
 
     # ------------------------------------------------------------------
     # Stage 7: Cluster (identical to the DuckDB path -- pure Python)
@@ -575,7 +916,7 @@ class DorisPipelineOrchestrator:
     def _load_records_for_members(self, customer_codes: set) -> Dict[str, dict]:
         if not customer_codes:
             return {}
-        con = self._connect()
+        self._connect()  # ensures self._database is set before parallel fetch
         codes_list = list(customer_codes)
 
         # Same "max 10000 children in an expression tree" limit as the
@@ -584,12 +925,12 @@ class DorisPipelineOrchestrator:
         # alone can exceed 100K codes, so this is not a hypothetical:
         # verified live (the unchunked form failed with exactly that
         # Doris error once cluster membership crossed 10,000 codes).
-        chunk_size = 5000
-        rows = []
-        for i in range(0, len(codes_list), chunk_size):
-            chunk = codes_list[i:i + chunk_size]
+        # Chunks are independent queries -- fetched concurrently via
+        # _fetch_chunks_parallel (see its docstring for why threads,
+        # not processes, are correct here).
+        def _query_chunk(conn, chunk):
             placeholders = ",".join(["?"] * len(chunk))
-            rows.extend(con.execute(f"""
+            return conn.execute(f"""
                 SELECT
                     s.customer_code, r.NAME AS name, s.name_norm,
                     any_value(i_email.value_norm) AS email_norm,
@@ -605,7 +946,9 @@ class DorisPipelineOrchestrator:
                 LEFT JOIN identifiers i_doc ON i_doc.customer_code = s.customer_code AND i_doc.id_type = 'document' AND i_doc.is_valid
                 WHERE s.customer_code IN ({placeholders})
                 GROUP BY s.customer_code, r.NAME, s.name_norm, s.dob_iso
-            """, chunk).fetchall())
+            """, chunk).fetchall()
+
+        rows = self._fetch_chunks_parallel(codes_list, 5000, _query_chunk)
 
         records = {}
         for row in rows:
@@ -623,18 +966,31 @@ class DorisPipelineOrchestrator:
         return records
 
     def _persist_run_artifacts(self, clusters: Dict[str, List[str]]) -> None:
+        import time as _time
+        _t = {}
+        _mark = _time.perf_counter()
+
+        def _lap(name):
+            nonlocal _mark
+            now = _time.perf_counter()
+            _t[name] = round(now - _mark, 3)
+            _mark = now
+
         os.makedirs("data/runs", exist_ok=True)
 
         manager = get_cluster_manager()
         manager.save_snapshot(f"data/runs/{self.run_id}_clusters.json")
+        _lap("cluster_snapshot")
 
         all_members = set()
         for members in clusters.values():
             all_members.update(members)
 
         self._records = self._load_records_for_members(all_members)
+        _lap("load_records_for_members")
         with open(f"data/runs/{self.run_id}_records.json", "w") as f:
             json.dump(self._records, f, default=str)
+        _lap("records_json_dump")
 
         con = self._connect()
         if all_members:
@@ -663,25 +1019,36 @@ class DorisPipelineOrchestrator:
             singleton_rows = con.execute(
                 "SELECT customer_code FROM customer_scalars ORDER BY customer_code"
             ).fetchall()
+        _lap("singleton_query")
         with open(f"data/runs/{self.run_id}_singletons.csv", "w", newline="") as f:
             writer = csv_module.writer(f)
             writer.writerow(["customer_code"])
             for (code,) in singleton_rows:
                 writer.writerow([code])
+        _lap("singleton_csv_write")
 
-        with open(f"data/runs/{self.run_id}_scores.csv", "w", newline="") as f:
-            writer = csv_module.writer(f)
-            writer.writerow([
-                "CUSTOMER_CODE_l", "CUSTOMER_CODE_r", "match_probability",
-                "decision", "signals_hit", "hard_conflicts",
-            ])
-            for pair_id, score in self._scores.items():
-                decision = self._decisions.get(pair_id)
+        if self._low_memory_mode:
+            # Already streamed row-by-row per batch in
+            # _score_and_decide_batched -- self._scores is empty here,
+            # writing it out would just truncate that file to its
+            # header row.
+            _lap("scores_csv_write_skipped_low_memory_mode")
+        else:
+            with open(f"data/runs/{self.run_id}_scores.csv", "w", newline="") as f:
+                writer = csv_module.writer(f)
                 writer.writerow([
-                    score.a_key, score.b_key, score.score,
-                    decision.value if decision else "",
-                    ";".join(score.signals_hit), ";".join(score.hard_conflicts),
+                    "CUSTOMER_CODE_l", "CUSTOMER_CODE_r", "match_probability",
+                    "decision", "signals_hit", "hard_conflicts",
                 ])
+                for pair_id, score in self._scores.items():
+                    decision = self._decisions.get(pair_id)
+                    writer.writerow([
+                        score.a_key, score.b_key, score.score,
+                        decision.value if decision else "",
+                        ";".join(score.signals_hit), ";".join(score.hard_conflicts),
+                    ])
+            _lap("scores_csv_write")
+        logger.info(f"_persist_run_artifacts breakdown (s): {_t}")
 
     def _cleanup_scratch_tables(self) -> None:
         """
@@ -728,28 +1095,53 @@ class DorisPipelineOrchestrator:
             import psycopg2
             from db import repository
 
-            audited_pair_ids = {f"{a}:{b}" for a, b in auto_links} | {f"{a}:{b}" for a, b in review_items}
-            if not audited_pair_ids and not self._relationships:
-                return
+            # Stage 6: candidate_pairs/match_scores/match_decisions are
+            # never written to Postgres any more (this run's own Doris
+            # database's pair_decisions/pair_contributions already hold
+            # this data -- see api/doris_run_reader.py). What's left to
+            # persist here is cluster-scoped, not pair-scoped:
+            # persist_clusters/resolve_entities/persist_entity_relationships/
+            # update_run_fingerprints, keyed off `clusters` and
+            # self._relationships. low_memory_mode narrows audited_codes
+            # to cluster members only (self._scores/self._decisions are
+            # empty in that mode, and review_items arrives as a count,
+            # not a list, so the pairs-based derivation below doesn't apply).
+            if self._low_memory_mode:
+                audited_codes = {code for members in clusters.values() for code in members}
+                for rel in self._relationships:
+                    audited_codes.add(rel["a_key"])
+                    audited_codes.add(rel["b_key"])
+                if not audited_codes and not self._relationships:
+                    return
+            else:
+                audited_pair_ids = {f"{a}:{b}" for a, b in auto_links} | {f"{a}:{b}" for a, b in review_items}
+                if not audited_pair_ids and not self._relationships:
+                    return
 
-            audited_codes = set()
-            for pid in audited_pair_ids:
-                a, b = pid.split(":", 1)
-                audited_codes.add(a)
-                audited_codes.add(b)
-            for rel in self._relationships:
-                audited_codes.add(rel["a_key"])
-                audited_codes.add(rel["b_key"])
+                audited_codes = set()
+                for pid in audited_pair_ids:
+                    a, b = pid.split(":", 1)
+                    audited_codes.add(a)
+                    audited_codes.add(b)
+                for rel in self._relationships:
+                    audited_codes.add(rel["a_key"])
+                    audited_codes.add(rel["b_key"])
 
             pg_conn = psycopg2.connect(settings.DATABASE_URL)
 
+            import time as _time
+            _step_timings = {}
+
             def _step(name, fn, *args):
+                _t0 = _time.perf_counter()
                 try:
                     return fn(*args)
                 except Exception as e:
                     pg_conn.rollback()
                     logger.warning(f"Postgres persistence step '{name}' failed, skipped: {e}")
                     return None
+                finally:
+                    _step_timings[name] = round(_time.perf_counter() - _t0, 3)
 
             try:
                 _step("ensure_run_row", repository.ensure_run_row, pg_conn, self.run_id, result.mode, "Datasource Demo (doris)")
@@ -762,16 +1154,6 @@ class DorisPipelineOrchestrator:
                 # suppressed-identifier audit data existed for DuckDB
                 # runs but not Doris ones.
                 _step("persist_identifier_frequency", repository.persist_identifier_frequency, pg_conn, self._connect(), self.run_id)
-
-                audited_scores = {pid: s for pid, s in self._scores.items() if pid in audited_pair_ids}
-                audited_decisions = {pid: d for pid, d in self._decisions.items() if pid in audited_pair_ids}
-
-                pair_result = _step(
-                    "persist_candidate_pairs_and_decisions",
-                    repository.persist_candidate_pairs_and_decisions,
-                    pg_conn, self.run_id, code_to_uuid, audited_scores, audited_decisions, RULESET_VERSION,
-                )
-                n_pairs, n_scores, n_decisions = pair_result if pair_result else (0, 0, 0)
 
                 n_clusters = _step(
                     "persist_clusters", repository.persist_clusters,
@@ -803,10 +1185,11 @@ class DorisPipelineOrchestrator:
                     },
                 )
                 logger.info(
-                    f"Persisted to Postgres: {len(code_to_uuid):,} customers, {n_pairs:,} pairs, "
-                    f"{n_scores:,} scores, {n_decisions:,} decisions, {n_clusters:,} cluster memberships, "
-                    f"{n_relationships:,} cross-segment relationships"
+                    f"Persisted to Postgres: {len(code_to_uuid):,} customers, {n_clusters:,} cluster memberships, "
+                    f"{n_relationships:,} cross-segment relationships (pairs/scores/decisions live only in "
+                    f"this run's Doris database as of Stage 6 -- see api/doris_run_reader.py)"
                 )
+                logger.info(f"_persist_to_postgres step breakdown (s): {_step_timings}")
             finally:
                 pg_conn.close()
         except Exception as e:
@@ -817,21 +1200,34 @@ class DorisPipelineOrchestrator:
         from psycopg2.extras import execute_values
         if not customer_codes:
             return {}
-        con = self._connect()
-        chunk_size = 5000
-        rows = []
-        for i in range(0, len(customer_codes), chunk_size):
-            chunk = customer_codes[i:i + chunk_size]
+        self._connect()  # ensures self._database is set before parallel fetch
+
+        def _query_chunk(conn, chunk):
             placeholders = ",".join(["?"] * len(chunk))
-            rows.extend(con.execute(f"""
+            return conn.execute(f"""
                 SELECT customer_code, name_norm, dob_iso FROM customer_scalars
                 WHERE customer_code IN ({placeholders})
-            """, chunk).fetchall())
+            """, chunk).fetchall()
 
-        values = [
+        rows = self._fetch_chunks_parallel(customer_codes, 5000, _query_chunk)
+
+        # Sorted by source_customer_id -- when Stage 4's distributed
+        # workers run as genuinely concurrent processes, their
+        # customer_codes sets legitimately overlap (partitioning is by
+        # PAIR via crc32, not by code, so the same code can appear in
+        # pairs assigned to different workers), and multiple concurrent
+        # ON CONFLICT DO UPDATE transactions upserting overlapping rows
+        # in different orders is a textbook Postgres deadlock -- caught
+        # live: 3 of 4 workers failed with DeadlockDetected on
+        # customers_norm before this fix. Sorting ensures every
+        # concurrent transaction acquires row locks in the same order,
+        # which eliminates the circular-wait condition. Harmless,
+        # zero-cost for the single-writer case this function already
+        # handled correctly.
+        values = sorted((
             (code, name_norm, dob_iso, f"doris-pipeline:{code}", "ORACLE_DATASOURCE")
             for code, name_norm, dob_iso in rows
-        ]
+        ), key=lambda v: v[0])
         with pg_conn.cursor() as cur:
             inserted = execute_values(cur, """
                 INSERT INTO customers_norm (source_customer_id, name_norm, dob_norm, record_hash, source_system)
@@ -847,10 +1243,15 @@ class DorisPipelineOrchestrator:
     # ------------------------------------------------------------------
     # Public run()
     # ------------------------------------------------------------------
-    async def run(self, run_id: str, raw_records: list = None, mode: str = "FULL", carry_forward: bool = True) -> PipelineResult:
+    async def run(
+        self, run_id: str, raw_records: list = None, mode: str = "FULL",
+        carry_forward: bool = True, low_memory_mode: bool = False,
+    ) -> PipelineResult:
         self.run_id = run_id
         # See pipeline.duckdb_orchestrator.run's identical comment.
         self._carry_forward = carry_forward
+        self._low_memory_mode = low_memory_mode
+        self._mode = mode
         result = PipelineResult(run_id=run_id, success=False, mode=mode, stages=[], started_at=datetime.utcnow())
 
         try:
@@ -865,10 +1266,12 @@ class DorisPipelineOrchestrator:
             result.candidates_generated = candidate_count
 
             auto_links, review_items, rejected = await self._stage_score_and_decide(candidate_count)
-            result.pairs_scored = len(self._scores)
+            review_count = review_items if isinstance(review_items, int) else len(review_items)
+            rejected_count = rejected if isinstance(rejected, int) else len(rejected)
+            result.pairs_scored = len(self._scores) if not self._low_memory_mode else (len(auto_links) + review_count + rejected_count)
             result.auto_links = len(auto_links)
-            result.review_items = len(review_items)
-            result.rejected = len(rejected)
+            result.review_items = review_count
+            result.rejected = rejected_count
 
             clusters = await self._stage_cluster(auto_links)
 
@@ -880,14 +1283,27 @@ class DorisPipelineOrchestrator:
 
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, self._persist_run_artifacts, clusters)
+            _cleanup_start = datetime.utcnow()
             await loop.run_in_executor(None, self._cleanup_scratch_tables)
+            logger.info(f"_cleanup_scratch_tables took {(datetime.utcnow() - _cleanup_start).total_seconds():.3f}s")
 
             self._input_fp = input_fingerprint(os.path.dirname(PARQUET_PATH))
             self._ruleset_fp = ruleset_fingerprint()
-            self._edges_fp = fingerprint_edges(
-                (a, b, self._decisions[f"{a}:{b}"].value, self._scores[f"{a}:{b}"].signals_hit)
-                for a, b in auto_links
-            )
+            if self._low_memory_mode:
+                # self._decisions/self._scores are empty in this mode --
+                # the batched score stage populated the much smaller
+                # self._auto_link_fingerprint_data (auto-link pairs
+                # only) with exactly what fingerprint_edges needs
+                # instead. See DorisPipelineOrchestrator's docstring.
+                self._edges_fp = fingerprint_edges(
+                    (a, b, *self._auto_link_fingerprint_data[f"{a}:{b}"])
+                    for a, b in auto_links
+                )
+            else:
+                self._edges_fp = fingerprint_edges(
+                    (a, b, self._decisions[f"{a}:{b}"].value, self._scores[f"{a}:{b}"].signals_hit)
+                    for a, b in auto_links
+                )
             self._clusters_fp = fingerprint_clusters(clusters)
             self._output_fp = output_fingerprint(self._edges_fp, self._clusters_fp)
 
@@ -914,6 +1330,163 @@ class DorisPipelineOrchestrator:
 
         except Exception as e:
             logger.error(f"Doris pipeline failed: {e}", exc_info=True)
+            result.success = False
+            result.error_message = str(e)
+            result.ended_at = datetime.utcnow()
+            await self._emit_progress(StageProgress(stage=PipelineStage.FAILED, status="error", message=str(e)))
+
+        finally:
+            if self._con:
+                try:
+                    self._con.close()
+                except Exception:
+                    pass
+
+        return result
+
+    async def run_distributed(
+        self, run_id: str, num_workers: int = 4, mode: str = "FULL", carry_forward: bool = True,
+    ) -> PipelineResult:
+        """
+        Stage 4 proof-of-concept coordinator. Identical to run() through
+        block_and_candidates; the score stage is dispatched across
+        num_workers independent subprocesses (pipeline.
+        distributed_scoring_worker / _score_partition's fixed hash
+        partitioning) instead of running here, sequentially or batched.
+        Forces self._low_memory_mode=True for the rest of the pipeline:
+        workers already persist their own partition's audited pairs to
+        Postgres directly (see _score_partition), which is exactly the
+        "already persisted, only cluster-level work is left" shape
+        low_memory_mode's persist path already handles -- reused as-is
+        rather than duplicated.
+        """
+        self.run_id = run_id
+        self._carry_forward = carry_forward
+        self._low_memory_mode = True
+        self._mode = mode
+        result = PipelineResult(run_id=run_id, success=False, mode=mode, stages=[], started_at=datetime.utcnow())
+
+        try:
+            record_count = await self._stage_ingest()
+            result.records_in = record_count
+
+            await self._stage_normalize(record_count)
+            result.records_normalized = record_count
+
+            candidate_count = await self._stage_block_and_candidates()
+            result.blocks_created = candidate_count
+            result.candidates_generated = candidate_count
+
+            score_start = datetime.utcnow()
+            await self._emit_progress(StageProgress(
+                stage=PipelineStage.SCORE, status="running",
+                message=f"Dispatching scoring across {num_workers} distributed workers...",
+            ))
+
+            loop = asyncio.get_event_loop()
+            con = self._connect()
+            # build_pair_evidence ONCE here, not per worker -- see
+            # _score_partition's docstring for why that matters.
+            await loop.run_in_executor(None, build_pair_evidence, con, self._dialect)
+
+            import redis
+            r = redis.from_url("redis://localhost:6381/0")
+            results_key = f"cuin:dist:{run_id}:results"
+            r.delete(results_key)  # clean slate in case a prior failed attempt left a stale key
+
+            backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            procs = []
+            for widx in range(num_workers):
+                proc = await asyncio.create_subprocess_exec(
+                    sys.executable, "-m", "pipeline.distributed_scoring_worker",
+                    run_id, str(widx), str(num_workers),
+                    cwd=backend_dir,
+                )
+                procs.append(proc)
+
+            exit_codes = await asyncio.gather(*(p.wait() for p in procs))
+            failed = [i for i, rc in enumerate(exit_codes) if rc != 0]
+            if failed:
+                raise RuntimeError(f"Distributed scoring worker(s) {failed} exited non-zero: {exit_codes}")
+
+            auto_links: List[tuple] = []
+            review_count = 0
+            rejected_count = 0
+            for _ in range(num_workers):
+                raw = r.blpop(results_key, timeout=120)
+                if raw is None:
+                    raise RuntimeError("Timed out waiting for a distributed scoring worker's result")
+                worker_result = json.loads(raw[1])
+                auto_links.extend((a, b) for a, b in worker_result["auto_links"])
+                review_count += worker_result["review_count"]
+                rejected_count += worker_result["rejected_count"]
+                for pid, fp_data in worker_result["fingerprint_data"].items():
+                    self._auto_link_fingerprint_data[pid] = tuple(fp_data)
+                self._relationships.extend(worker_result["relationships"])
+
+            score_duration = int((datetime.utcnow() - score_start).total_seconds() * 1000)
+            await self._emit_progress(StageProgress(
+                stage=PipelineStage.SCORE, status="complete",
+                records_in=candidate_count, records_out=len(auto_links) + review_count + rejected_count,
+                duration_ms=score_duration,
+                message=(
+                    f"{len(auto_links):,} auto-link, {review_count:,} review, {rejected_count:,} rejected "
+                    f"(distributed, {num_workers} workers)"
+                ),
+            ))
+            await self._emit_progress(StageProgress(
+                stage=PipelineStage.DECIDE, status="complete", records_out=len(auto_links),
+                message=f"{len(auto_links):,} pairs meet the auto-link rule",
+            ))
+
+            result.pairs_scored = len(auto_links) + review_count + rejected_count
+            result.auto_links = len(auto_links)
+            result.review_items = review_count
+            result.rejected = rejected_count
+
+            clusters = await self._stage_cluster(auto_links)
+
+            persist_start = datetime.utcnow()
+            await self._emit_progress(StageProgress(
+                stage=PipelineStage.PERSIST, status="running",
+                message="Persisting run artifacts and writing to Postgres...",
+            ))
+
+            await loop.run_in_executor(None, self._persist_run_artifacts, clusters)
+            await loop.run_in_executor(None, self._cleanup_scratch_tables)
+
+            self._input_fp = input_fingerprint(os.path.dirname(PARQUET_PATH))
+            self._ruleset_fp = ruleset_fingerprint()
+            self._edges_fp = fingerprint_edges(
+                (a, b, *self._auto_link_fingerprint_data[f"{a}:{b}"])
+                for a, b in auto_links
+            )
+            self._clusters_fp = fingerprint_clusters(clusters)
+            self._output_fp = output_fingerprint(self._edges_fp, self._clusters_fp)
+
+            await loop.run_in_executor(None, self._persist_to_postgres, clusters, auto_links, review_count, result)
+
+            persist_duration = int((datetime.utcnow() - persist_start).total_seconds() * 1000)
+            await self._emit_progress(StageProgress(
+                stage=PipelineStage.PERSIST, status="complete",
+                duration_ms=persist_duration,
+                message=f"Persisted run artifacts in {persist_duration / 1000:.1f}s",
+            ))
+
+            result.success = True
+            result.ended_at = datetime.utcnow()
+
+            await self._emit_progress(StageProgress(
+                stage=PipelineStage.COMPLETE, status="complete",
+                message=(
+                    f"Pipeline complete (Doris engine, distributed x{num_workers}): "
+                    f"{len(clusters):,} identity clusters resolved from {record_count:,} records "
+                    f"(ruleset={RULESET_VERSION}, output_fingerprint={self._output_fp[:16]}...)"
+                ),
+            ))
+
+        except Exception as e:
+            logger.error(f"Doris distributed pipeline failed: {e}", exc_info=True)
             result.success = False
             result.error_message = str(e)
             result.ended_at = datetime.utcnow()
