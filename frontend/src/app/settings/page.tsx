@@ -32,15 +32,15 @@ import {
     Table2, GitCompareArrows, Users, Link2, RotateCcw, ChevronDown, Database, Shield,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import { BlockingRuleCard } from "@/components/settings/BlockingRuleCard";
-import { ConfidencePanel } from "@/components/settings/ConfidencePanel";
-import { VersionHistory } from "@/components/settings/VersionHistory";
-import { FieldsPanel } from "@/components/settings/FieldsPanel";
-import { ComparatorInfoPanel } from "@/components/settings/ComparatorInfoPanel";
-import { SegmentsPanel } from "@/components/settings/SegmentsPanel";
-import { RelationshipsPanel } from "@/components/settings/RelationshipsPanel";
-import type { BlockingRule, MatchRuleset, FanoutEstimate, DecisionCounts, SegmentationConfig } from "@/components/settings/types";
-import { defaultRuleForField, defaultMatchRuleForField } from "@/components/settings/types";
+import { BlockingRuleCard } from "@/components/organisms/settings/BlockingRuleCard";
+import { ConfidencePanel } from "@/components/organisms/settings/ConfidencePanel";
+import { VersionHistory } from "@/components/molecules/VersionHistory";
+import { FieldsPanel } from "@/components/organisms/settings/FieldsPanel";
+import { ComparatorInfoPanel } from "@/components/molecules/ComparatorInfoPanel";
+import { SegmentsPanel } from "@/components/organisms/settings/SegmentsPanel";
+import { RelationshipsPanel } from "@/components/organisms/settings/RelationshipsPanel";
+import type { BlockingRule, MatchRuleset, FanoutEstimate, DecisionCounts, SegmentationConfig } from "@/types/settings";
+import { defaultRuleForField, defaultMatchRuleForField } from "@/types/settings";
 
 function useDebounced<T>(value: T, delayMs: number): T {
     const [debounced, setDebounced] = useState(value);

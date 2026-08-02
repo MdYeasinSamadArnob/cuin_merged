@@ -3,9 +3,9 @@
 import { useState } from "react";
 import { ChevronUp, ChevronDown, Trash2, ChevronRight, GripVertical } from "lucide-react";
 import { clsx } from "clsx";
-import type { BlockingRule, BlockingRuleType, FanoutEstimate } from "./types";
-import { RULE_TYPE_LABELS } from "./types";
-import { FanoutBadge, FanoutDetail } from "./FanoutBadge";
+import type { BlockingRule, BlockingRuleType, FanoutEstimate } from "@/types/settings";
+import { RULE_TYPE_LABELS } from "@/types/settings";
+import { FanoutBadge, FanoutDetail } from "@/components/atoms/FanoutBadge";
 
 const ID_TYPE_LABELS: Record<string, string> = {
     mobile: "Phone number", email: "Email address", document: "National ID / document", address: "Address",

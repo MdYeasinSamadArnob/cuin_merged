@@ -2,8 +2,8 @@
 
 import { useMemo } from "react";
 import { Loader2, TrendingUp, TrendingDown, Minus, Zap, X, ShieldAlert } from "lucide-react";
-import type { MatchRuleset, MatchRule, DecisionCounts } from "./types";
-import { ATTRIBUTE_RAW_COLUMN, vetoKindForComparator } from "./types";
+import type { MatchRuleset, MatchRule, DecisionCounts } from "@/types/settings";
+import { ATTRIBUTE_RAW_COLUMN, vetoKindForComparator } from "@/types/settings";
 
 interface Props {
     ruleset: MatchRuleset;

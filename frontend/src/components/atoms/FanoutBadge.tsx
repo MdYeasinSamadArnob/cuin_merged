@@ -1,7 +1,7 @@
 "use client";
 
 import { AlertTriangle, CheckCircle2, XCircle, Loader2 } from "lucide-react";
-import type { FanoutEstimate } from "./types";
+import type { FanoutEstimate } from "@/types/settings";
 
 function fmt(n: number): string {
     if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;

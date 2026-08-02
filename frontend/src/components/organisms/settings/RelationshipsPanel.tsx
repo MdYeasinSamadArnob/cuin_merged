@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Search, Building2, User, ArrowLeftRight } from "lucide-react";
-import type { EntityRelationship } from "./types";
+import type { EntityRelationship } from "@/types/settings";
 
 function PartyBadge({ party }: { party: EntityRelationship["a"] }) {
     const isCompany = party.segment === "COMPANY";

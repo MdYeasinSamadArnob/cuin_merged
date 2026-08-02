@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Building2, User, Plus, X, Link2 } from "lucide-react";
-import type { SegmentationConfig, SegmentCounts } from "./types";
+import type { SegmentationConfig, SegmentCounts } from "@/types/settings";
 
 function fmtNum(n: number): string {
     if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
