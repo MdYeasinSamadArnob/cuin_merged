@@ -3,7 +3,14 @@
 # ============================================
 # Generated from requirements.txt with the Spark/Splink-only packages
 # removed: pyspark, splink, py4j, scikit-learn, scipy, igraph, altair,
-# oracledb, Faker. Confirmed via `grep` across every .py file outside
+# oracledb, Faker -- plus their now-dangling transitive pins that a
+# `pip freeze`-style capture had left behind despite the parent package
+# already being excluded here: asyncpg (no dependents at all, in either
+# file), joblib/scipy (scikit-learn's deps), texttable/narwhals
+# (igraph's/altair's deps -- kept in requirements.txt since splink
+# itself needs igraph+altair there, but neither igraph nor altair is
+# in THIS file, so their sub-dependencies don't belong here either).
+# Confirmed via `grep` across every .py file outside
 # engine/spark_er/ that none of these are imported by the live API or
 # the DuckDB pipeline (pipeline.duckdb_orchestrator, api/*, engine/scoring,
 # engine/normalize, engine/blocking, engine/clustering) -- they are only
@@ -16,7 +23,6 @@
 annotated-doc==0.0.4
 annotated-types==0.7.0
 anyio==4.12.1
-asyncpg==0.31.0
 attrs==25.4.0
 certifi==2026.2.25
 cffi==2.0.0
@@ -30,11 +36,9 @@ httptools==0.7.1
 httpx==0.28.1
 idna==3.11
 Jinja2==3.1.6
-joblib==1.5.3
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
 MarkupSafe==3.0.3
-narwhals==2.18.0
 neo4j==6.1.0
 numpy==2.2.6
 packaging==26.0
@@ -57,7 +61,6 @@ rpds-py==0.30.0
 six==1.17.0
 sqlglot==29.0.1
 starlette==0.52.1
-texttable==1.7.0
 threadpoolctl==3.6.0
 tqdm==4.67.3
 typing-inspection==0.4.2
