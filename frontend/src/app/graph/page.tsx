@@ -17,12 +17,12 @@ import {
     IdCard, RefreshCw, LayoutGrid, Waypoints, Sliders, Type, Link2,
 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { ClusterBubbleMap, TierLegend, ClusterItem } from '@/components/graph2/ClusterBubbleMap';
-import { ClusterDrillDown } from '@/components/graph2/ClusterDrillDown';
-import { SingletonRecordDetail } from '@/components/graph2/SingletonRecordDetail';
-import { HopExplorer } from '@/components/graph2/HopExplorer';
-import { ClassicClusterGraph } from '@/components/graph2/ClassicClusterGraph';
-import { BridgesPanel } from '@/components/graph2/BridgesPanel';
+import { ClusterBubbleMap, TierLegend, ClusterItem } from '@/components/organisms/graph-explorer/ClusterBubbleMap';
+import { ClusterDrillDown } from '@/components/organisms/graph-explorer/ClusterDrillDown';
+import { SingletonRecordDetail } from '@/components/organisms/graph-explorer/SingletonRecordDetail';
+import { HopExplorer } from '@/components/organisms/graph-explorer/HopExplorer';
+import { ClassicClusterGraph } from '@/components/organisms/graph-explorer/ClassicClusterGraph';
+import { BridgesPanel } from '@/components/organisms/graph-explorer/BridgesPanel';
 // TuningPanel is reused read-only, exactly as /explorer already does --
 // never modified. Its "Run Preview" button intentionally keeps calling
 // the OLD api.previewClustering()/ClusterManager-backed endpoint (a
