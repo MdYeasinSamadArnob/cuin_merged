@@ -15,10 +15,10 @@ import {
     RotateCcw,
 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { ScoreBreakdown } from '@/components/workbench/ScoreBreakdown';
-import { ReasonDialog, ReasonDialogResult } from '@/components/workbench/ReasonDialog';
-import { RecordCompare } from '@/components/workbench/RecordCompare';
-import { FilterBar, PairFilters, EntityFilters, SingletonFilters } from '@/components/workbench/FilterBar';
+import { ScoreBreakdown } from '@/components/organisms/workbench/ScoreBreakdown';
+import { ReasonDialog, ReasonDialogResult } from '@/components/molecules/ReasonDialog';
+import { RecordCompare } from '@/components/organisms/workbench/RecordCompare';
+import { FilterBar, PairFilters, EntityFilters, SingletonFilters } from '@/components/molecules/FilterBar';
 
 type Population = 'REVIEW' | 'AUTO_LINK' | 'REJECT' | 'ENTITIES' | 'APPROVED' | 'SINGLETONS';
 
