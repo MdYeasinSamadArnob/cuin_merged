@@ -47,7 +47,8 @@ def _address_normalize_expr(col_expr: str, dialect) -> str:
     for pattern, repl in _BD_ADDRESS_ABBREV:
         expr = dialect.regexp_replace_all(expr, pattern, repl)
     expr = dialect.regexp_replace_all(expr, r"[^[:alnum:][:space:]]", " ")
-    expr = f"trim({dialect.regexp_replace_all(expr, r'\s+', ' ')})"
+    collapsed_ws = dialect.regexp_replace_all(expr, r"\s+", " ")
+    expr = f"trim({collapsed_ws})"
     return expr
 
 
@@ -66,6 +67,11 @@ def build_identifiers_table(con, dialect, source_relation: str = "raw") -> None:
     email_ref = dialect.unnest_column_ref("e")
     doc_ref = dialect.unnest_column_ref("d")
     addr_ref = dialect.unnest_column_ref("a")
+
+    email_valid_expr = dialect.regexp_matches("norm", r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    doc_dtype_expr = dialect.regexp_extract("upper(trim(value_raw))", r"^\s*([A-Z]+)\s*:\s*(.*)$", 1)
+    doc_dvalue_raw = dialect.regexp_extract("upper(trim(value_raw))", r"^\s*([A-Z]+)\s*:\s*(.*)$", 2)
+    doc_dvalue_expr = dialect.regexp_replace_all(doc_dvalue_raw, r"[\s\-\.]", "")
 
     select_sql = f"""
         WITH mobile_raw AS (
@@ -124,7 +130,7 @@ def build_identifiers_table(con, dialect, source_relation: str = "raw") -> None:
                 valid AS is_valid
             FROM (
                 SELECT *,
-                    {dialect.regexp_matches('norm', r'^[^@\s]+@[^@\s]+\.[^@\s]+$')} AS valid
+                    {email_valid_expr} AS valid
                 FROM (
                     SELECT customer_code, value_raw, trim(lower(value_raw)) AS norm
                     FROM email_raw
@@ -140,8 +146,8 @@ def build_identifiers_table(con, dialect, source_relation: str = "raw") -> None:
         document_parsed AS (
             SELECT
                 customer_code, value_raw,
-                {dialect.regexp_extract('upper(trim(value_raw))', r'^\s*([A-Z]+)\s*:\s*(.*)$', 1)} AS dtype,
-                {dialect.regexp_replace_all(dialect.regexp_extract('upper(trim(value_raw))', r'^\s*([A-Z]+)\s*:\s*(.*)$', 2), r'[\s\-\.]', '')} AS dvalue
+                {doc_dtype_expr} AS dtype,
+                {doc_dvalue_expr} AS dvalue
             FROM document_raw
         ),
         document_final AS (
@@ -217,6 +223,9 @@ def _build_customer_scalars(con, dialect, source_relation: str, honorifics_lit: 
 
     parsed_dt = dialect.try_parse_datetime("BIRTH_DATE", "%Y-%m-%dT%H:%M:%S")
 
+    name_collapsed_ws = dialect.regexp_replace_all("name_stage1", r"\s+", " ")
+    name_norm_expr = f"trim({name_collapsed_ws})"
+
     select_sql = f"""
         WITH name_norm_cte AS (
             SELECT
@@ -228,8 +237,8 @@ def _build_customer_scalars(con, dialect, source_relation: str, honorifics_lit: 
         name_tokens_cte AS (
             SELECT
                 customer_code,
-                trim({dialect.regexp_replace_all('name_stage1', r'\s+', ' ')}) AS name_norm,
-                {dialect.str_split(f"trim({dialect.regexp_replace_all('name_stage1', r'\s+', ' ')})", ' ')} AS tokens0,
+                {name_norm_expr} AS name_norm,
+                {dialect.str_split(name_norm_expr, ' ')} AS tokens0,
                 BIRTH_DATE
             FROM name_norm_cte
         ),
