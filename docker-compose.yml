@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Identity Graph Database
   neo4j:
@@ -74,7 +72,6 @@ services:
     container_name: cuin-redis-insight
     ports:
       - "15540:5540" # Access at http://localhost:15540 (Uncommon port)
-    privileged: true
     volumes:
       - ./data/redisinsight:/data
     depends_on:

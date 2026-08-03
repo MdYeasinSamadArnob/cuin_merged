@@ -67,6 +67,24 @@ docker compose up --build -d frontend   # frontend code changed (re-bakes NEXT_P
 
 ---
 
+## 🏦 One Command, Any Environment (Local or Restricted/Banking)
+
+The exact same command brings the stack up whether you're on a laptop or deploying inside a locked-down bank environment (no `sudo`, no privileged containers, no hardcoded secrets):
+```bash
+cd infra && cp -n .env.example .env && docker compose up --build -d
+```
+`cp -n` only creates `.env` from the template if it doesn't already exist, so re-running this is safe and never clobbers environment-specific values an ops team has set.
+
+Why this one command works in both places:
+*   **No privileged containers.** Every service — including RedisInsight, which previously ran with `privileged: true` purely to write its bind-mounted data folder — now runs under standard container permissions. Passes Pod Security Standards "restricted" / OPA / Kyverno-style admission policies without exceptions.
+*   **No hardcoded secrets.** Every port, credential, and hostname comes from `infra/.env` (see step 3 above) — set real values for a bank deployment, keep the defaults for local; the command itself never changes.
+*   **No host kernel changes required**, as long as you skip Apache Doris — the DuckDB engine is the default and needs nothing extra (see the Doris troubleshooting note below). Bank hosts frequently don't grant `sudo` for the `vm.max_map_count` tweak Doris needs; the app is fully functional without it.
+*   **Runs as a non-root, fixed UID/GID** (`BACKEND_UID`/`BACKEND_GID` in `.env`) rather than requiring root inside the container.
+
+One caveat worth being upfront about: `docker compose up --build` still needs the base images (`postgres:16-alpine`, `neo4j:5.15.0`, `redis:7-alpine`, `apache/doris:*`, `python`, `node`) to be reachable — either from the internet or a private registry mirror. A fully air-gapped host needs those images pre-pulled/pushed to an internal registry first; that's an infrastructure decision for the bank's ops team, not something a single command can paper over.
+
+---
+
 ## 🧑‍💻 Alternative: Run Without Docker (Local Dev)
 Useful for fast iteration on backend/frontend code without rebuilding containers each time.
 

@@ -240,7 +240,6 @@ services:
     container_name: cuin-redis-insight
     ports:
       - "${REDIS_INSIGHT_PORT:-15540}:5540"
-    privileged: true
     volumes:
       - ../data/redisinsight:/data
     depends_on:
