@@ -802,26 +802,31 @@ async def get_unique_records(
     records = []
     if page_codes:
         try:
-            import duckdb
+            import pyarrow.parquet as pq
             from pipeline.duckdb_orchestrator import PARQUET_PATH
 
-            con = duckdb.connect()
-            placeholders = ",".join(["?"] * len(page_codes))
-            rows = con.execute(f"""
-                SELECT
-                    CUSTOMER_CODE,
-                    NAME,
-                    BIRTH_DATE,
-                    list_extract(list_filter(MOBILE, x -> x IS NOT NULL), 1) AS mobile,
-                    list_extract(list_filter(EMAIL, x -> x IS NOT NULL), 1) AS email,
-                    list_extract(list_filter(FULL_ADDRESS, x -> x IS NOT NULL), 1) AS address,
-                    list_extract(list_filter(DOCUMENT, x -> x IS NOT NULL), 1) AS natid
-                FROM read_parquet(?)
-                WHERE CUSTOMER_CODE IN ({placeholders})
-            """, [PARQUET_PATH] + page_codes).fetchall()
-            con.close()
+            def _first_non_null(arr):
+                if not arr:
+                    return None
+                for x in arr:
+                    if x is not None:
+                        return x
+                return None
 
-            for code, name, dob, mobile, email, address, natid in rows:
+            table = pq.read_table(
+                PARQUET_PATH,
+                columns=["CUSTOMER_CODE", "NAME", "BIRTH_DATE", "MOBILE", "EMAIL", "FULL_ADDRESS", "DOCUMENT"],
+                filters=[("CUSTOMER_CODE", "in", page_codes)],
+            )
+
+            for r in table.to_pylist():
+                code = r["CUSTOMER_CODE"]
+                name = r["NAME"]
+                dob = r["BIRTH_DATE"]
+                mobile = _first_non_null(r["MOBILE"])
+                email = _first_non_null(r["EMAIL"])
+                address = _first_non_null(r["FULL_ADDRESS"])
+                natid = _first_non_null(r["DOCUMENT"])
                 records.append({
                     "customer_key": code,
                     "source_customer_id": code,

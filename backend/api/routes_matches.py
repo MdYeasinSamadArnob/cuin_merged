@@ -327,26 +327,22 @@ def _load_two_customer_rows(codes: list) -> dict:
     pipeline is a pure function of this same source data, so evidence
     computed fresh here matches what any run would have computed.
     """
-    import duckdb
+    import pyarrow.parquet as pq
     from pipeline.duckdb_orchestrator import PARQUET_PATH
 
-    con = duckdb.connect()
-    try:
-        placeholders = ",".join(["?"] * len(codes))
-        rows = con.execute(f"""
-            SELECT CUSTOMER_CODE, NAME, BIRTH_DATE, MOBILE, EMAIL, DOCUMENT, FULL_ADDRESS
-            FROM read_parquet(?)
-            WHERE CUSTOMER_CODE IN ({placeholders})
-        """, [PARQUET_PATH] + codes).fetchall()
-    finally:
-        con.close()
+    table = pq.read_table(
+        PARQUET_PATH,
+        columns=["CUSTOMER_CODE", "NAME", "BIRTH_DATE", "MOBILE", "EMAIL", "DOCUMENT", "FULL_ADDRESS"],
+        filters=[("CUSTOMER_CODE", "in", codes)],
+    )
 
     return {
-        r[0]: {
-            "CUSTOMER_CODE": r[0], "NAME": r[1], "BIRTH_DATE": r[2],
-            "MOBILE": r[3] or [], "EMAIL": r[4] or [], "DOCUMENT": r[5] or [], "FULL_ADDRESS": r[6] or [],
+        r["CUSTOMER_CODE"]: {
+            "CUSTOMER_CODE": r["CUSTOMER_CODE"], "NAME": r["NAME"], "BIRTH_DATE": r["BIRTH_DATE"],
+            "MOBILE": r["MOBILE"] or [], "EMAIL": r["EMAIL"] or [],
+            "DOCUMENT": r["DOCUMENT"] or [], "FULL_ADDRESS": r["FULL_ADDRESS"] or [],
         }
-        for r in rows
+        for r in table.to_pylist()
     }
 
 

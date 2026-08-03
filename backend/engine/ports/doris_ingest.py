@@ -2,14 +2,20 @@
 CUIN v2 - Parquet -> Doris Ingestion
 
 Doris has no SQL-level equivalent of DuckDB's `read_parquet()` FROM
-clause (see DorisDialect.read_source). This module uses DuckDB --
-already a dependency, and very good at reading Parquet -- purely as a
+clause (see DorisDialect.read_source). This module uses pyarrow --
+already a dependency, and reads Parquet natively -- purely as a
 Parquet -> newline-delimited-JSON converter, then bulk-loads that
 NDJSON into a Doris table over Stream Load (Doris's HTTP PUT bulk-load
-API). Verified live: DuckDB's `COPY ... TO 'x.json' (FORMAT JSON)`
-already emits one JSON object per line with no enclosing array or
-commas -- exactly Stream Load's `read_json_by_line` format, no
-reshaping needed in between.
+API). One JSON object per line, no enclosing array or commas -- Stream
+Load's `read_json_by_line` format, no reshaping needed in between.
+
+pyarrow.parquet.read_table() on a Spark-style multi-part output
+directory (this dataset's `data_source/oracle_data.parquet/` is
+part-00000..part-NNNNN + .crc sidecars) was verified empirically to
+produce the identical row count, row order, and content as the
+previous DuckDB read_parquet() implementation on the real dataset
+before this rewrite replaced it -- same lexicographic part-file
+ordering, .crc/_SUCCESS sidecars correctly ignored by both readers.
 
 This is the standard high-throughput path for getting data into Doris
 (the alternative, row-by-row INSERT, does not scale to millions of
@@ -19,11 +25,15 @@ direct, correct mechanism.
 """
 
 import base64
+import json
 import logging
 import os
+import re
 
-import duckdb
 import httpx
+import pyarrow.parquet as pq
+
+_CONTROL_CHARS_RE = re.compile(r"[\r\n\t]")
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +56,14 @@ DISTRIBUTED BY HASH(CUSTOMER_CODE) BUCKETS {buckets}
 """.strip()
 
 
+def _clean_str(s):
+    return _CONTROL_CHARS_RE.sub("", s) if s is not None else None
+
+
+def _clean_array(arr):
+    return None if arr is None else [_clean_str(x) for x in arr]
+
+
 def export_parquet_to_ndjson(parquet_path: str, out_path: str, limit: int = None) -> int:
     """
     Returns the number of rows written.
@@ -54,40 +72,34 @@ def export_parquet_to_ndjson(parquet_path: str, out_path: str, limit: int = None
     string/array-of-string field before export. Found live, on the
     full 1.5M-row dataset specifically (never surfaced on the 5k
     sample): a source DOCUMENT value containing a stray trailing \\r
-    (real-world data noise) round-trips through DuckDB's JSON export
-    correctly (properly escaped as the 2-byte sequence \\r), but
-    Doris's Stream Load JSON parser does not correctly unescape it --
-    it comes out the other side as a literal lowercase 'r' character
-    appended to the value, which then fails TIN validation
-    (regexp '^[0-9]{12}$') where the DuckDB path (which never
-    round-trips through JSON at all) correctly retains a clean value.
-    One pair out of 549,879 differed because of exactly this. Control
-    characters are never meaningful content in any of these fields, so
-    stripping them at the ingestion boundary is a safe, narrow fix
-    that also makes the Doris path robust to messier real-world
-    exports than this one -- it does not touch the DuckDB code path at
-    all (which reads Parquet directly, never through this function).
+    (real-world data noise) round-trips through the old DuckDB-based
+    JSON export correctly (properly escaped as the 2-byte sequence
+    \\r), but Doris's Stream Load JSON parser does not correctly
+    unescape it -- it comes out the other side as a literal lowercase
+    'r' character appended to the value, which then fails TIN
+    validation (regexp '^[0-9]{12}$'). One pair out of 549,879 differed
+    because of exactly this. Control characters are never meaningful
+    content in any of these fields, so stripping them at the ingestion
+    boundary is a safe, narrow fix -- NULL array elements are preserved
+    as JSON null (not stripped/dropped), matching the prior
+    implementation's list_transform-over-NULL semantics.
     """
-    con = duckdb.connect()
-    try:
-        con.execute("SET preserve_insertion_order = true")
-        limit_sql = f"LIMIT {limit}" if limit else ""
-        scalar_cols = ["CUSTOMER_CODE", "NAME", "BIRTH_DATE"]
-        array_cols = ["MOBILE", "EMAIL", "DOCUMENT", "FULL_ADDRESS"]
-        select_parts = [f"regexp_replace({c}, '[\\r\\n\\t]', '', 'g') AS {c}" for c in scalar_cols]
-        select_parts += [
-            f"list_transform({c}, x -> regexp_replace(x, '[\\r\\n\\t]', '', 'g')) AS {c}"
-            for c in array_cols
-        ]
-        select_sql = ", ".join(select_parts)
-        con.execute(f"""
-            COPY (SELECT {select_sql} FROM read_parquet('{parquet_path}') {limit_sql})
-            TO '{out_path}' (FORMAT JSON)
-        """)
-    finally:
-        con.close()
-    with open(out_path, "rb") as f:
-        return sum(1 for _ in f)
+    table = pq.read_table(parquet_path, columns=list(RAW_TABLE_COLUMNS))
+    if limit:
+        table = table.slice(0, limit)
+
+    scalar_cols = ["CUSTOMER_CODE", "NAME", "BIRTH_DATE"]
+    array_cols = ["MOBILE", "EMAIL", "DOCUMENT", "FULL_ADDRESS"]
+    columns = {c: table.column(c).to_pylist() for c in RAW_TABLE_COLUMNS}
+    n_rows = table.num_rows
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        for i in range(n_rows):
+            row = {c: _clean_str(columns[c][i]) for c in scalar_cols}
+            row.update({c: _clean_array(columns[c][i]) for c in array_cols})
+            f.write(json.dumps(row, ensure_ascii=False))
+            f.write("\n")
+    return n_rows
 
 
 def stream_load_ndjson(
