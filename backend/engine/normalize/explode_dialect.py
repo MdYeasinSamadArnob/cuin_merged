@@ -1,22 +1,17 @@
 """
 CUIN v2 - Identifier Explosion, dialect-driven (Ruleset v2, Layer 1)
 
-Dialect-portable twin of engine.normalize.explode -- same CTE
-structure, same validation rules, same honorifics/boilerplate lists,
-translated through engine.ports.dialect.SqlDialect so it runs
-unchanged on DuckDB or Doris. engine.normalize.explode itself is left
-untouched (it is what pipeline.duckdb_orchestrator uses, and
-tests/unit/test_sql_python_parity.py pins its exact behavior) -- this
-module exists purely to give pipeline.doris_orchestrator (and any
-future engine) the same logic without hand-duplicating DuckDB-specific
-SQL text.
+Explodes MOBILE/EMAIL/DOCUMENT/FULL_ADDRESS array columns into one
+normalized identifier row per value, translated through
+engine.ports.dialect.SqlDialect (currently only DorisDialect) so this
+logic isn't hand-duplicated in engine-specific SQL text. Used by
+pipeline.doris_orchestrator.
 
-tests/unit/test_explode_dialect_parity.py proves this module, run
-with DuckDbDialect, produces byte-identical output to
-engine.normalize.explode on the same fixture -- so drift between the
-two is caught, not silent. A second live-Doris check in that same
-file proves the DorisDialect path produces structurally equivalent
-output against a real cluster.
+Originally written as a dialect-portable twin of a DuckDB-only
+predecessor module during the DuckDB-to-Doris migration, proven
+byte-identical to it on the same fixture; that predecessor and the
+comparison test have since been removed now that Doris is the only
+engine.
 """
 
 # Keep in sync with policies/ruleset_v2.yaml `identifiers.name.honorifics`,

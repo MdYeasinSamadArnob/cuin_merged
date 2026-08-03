@@ -3,15 +3,17 @@ CUIN v2 - SQL Dialect Port
 
 A small seam between the ER engine's logic (engine.rules.compiler,
 engine.rules.decision_compiler, engine.rules.precheck) and the SQL
-text sent to whichever engine executes it. Every method here
-corresponds to a construct that differs between DuckDB and Doris --
-see docs/doris_compatibility.md for the full capability matrix this
-was derived from.
+text sent to Doris. Doris is the only engine now (DuckDB support was
+removed, see doris_dialect.py's docstring); this abstraction is kept
+rather than collapsed into hardcoded SQL because it's what makes
+engine.rules.compiler's rule-catalog-driven SQL generation testable in
+isolation from a live Doris connection -- see
+docs/doris_compatibility.md for the capability notes this was derived
+from.
 
-Nothing outside this module and its two implementations
-(duckdb_dialect.py, doris_dialect.py) should ever hand-write an
-engine-specific SQL fragment for the blocking/scoring pipeline -- that
-is what makes the same rule compile correctly to both engines.
+Nothing outside this module and its implementation (doris_dialect.py)
+should ever hand-write an engine-specific SQL fragment for the
+blocking/scoring pipeline.
 """
 
 from abc import ABC, abstractmethod

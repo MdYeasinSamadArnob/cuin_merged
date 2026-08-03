@@ -1,28 +1,26 @@
 """
-CUIN v2 - Doris Pipeline Orchestrator (Ruleset v2, Doris execution engine)
+CUIN v2 - Doris Pipeline Orchestrator (Ruleset v2, sole execution engine)
 
-Same public contract as pipeline.duckdb_orchestrator.DuckDBPipelineOrchestrator
-(constructor kwargs, async run(run_id, raw_records=None, mode="FULL"),
-get_scores/get_decisions/get_auto_links/get_uniques/get_result_clusters/
-get_fingerprints) -- so api/routes_datasource.py can pick either
-orchestrator class purely by the `engine` request field, with zero
-changes anywhere else. Produces the SAME decisions as the DuckDB path
-for the same ruleset: engine.normalize.explode_dialect,
-engine.blocking.suppression_dialect, and engine.scoring.evidence_dialect
-are dialect-portable twins of the DuckDB-only modules
-pipeline.duckdb_orchestrator uses, proven byte-identical to them on
-DuckDB and pair-for-pair identical to the DuckDB orchestrator's actual
-output on live Doris -- see tests/integration/test_doris_cross_engine_parity.py.
+Public contract: constructor kwargs, async run(run_id,
+raw_records=None, mode="FULL"), get_scores/get_decisions/
+get_auto_links/get_uniques/get_result_clusters/get_fingerprints --
+consumed by api/routes_datasource.py.
 
-Where this path is DELIBERATELY better than the DuckDB one, not just
-equivalent: blocking runs through engine.rules.compiler against the
-UI-editable rule catalog (engine.rules.store.get_active_catalog())
-rather than a hardcoded two-pass query, so a Doris-backed run
-automatically respects whatever the Settings UI has saved.
+engine.normalize.explode_dialect, engine.blocking.suppression_dialect,
+and engine.scoring.evidence_dialect are the dialect-portable SQL
+builders this orchestrator uses (parameterized by
+engine.ports.doris_dialect.DorisDialect) -- originally proven
+byte-identical to an earlier DuckDB execution path during the
+DuckDB-to-Doris migration, which has since been completed and that
+comparison path removed (Doris is now the only engine).
 
-Each run gets its own Doris database (`cuin_run_<run_id>`), mirroring
-the DuckDB orchestrator's per-run persistent .duckdb file -- both
-exist after the run completes and can be reopened (a future
+Blocking runs through engine.rules.compiler against the UI-editable
+rule catalog (engine.rules.store.get_active_catalog()) rather than a
+hardcoded two-pass query, so a run automatically respects whatever the
+Settings UI has saved.
+
+Each run gets its own Doris database (`cuin_run_<run_id>`), which
+exists after the run completes and can be reopened (a future
 extension point for redecide/reblock against Doris-backed runs, not
 built in this pass; see the migration plan's noted follow-ups).
 """
@@ -149,7 +147,6 @@ class DorisPipelineOrchestrator:
         # run()) actually needs: pair_id -> (decision_value, signals_hit).
         self._auto_link_fingerprint_data: Dict[str, tuple] = {}
 
-        # See pipeline.duckdb_orchestrator's identical comment --
         # EffectiveRuleset resolves decision thresholds from the active
         # catalog when one exists, YAML otherwise.
         self.ruleset = resolve_from_active_catalog()
@@ -160,7 +157,6 @@ class DorisPipelineOrchestrator:
         # by default -- see engine.segments.classifier.SegmentationConfig.
         self._segmentation = self._catalog.segmentation
         self._relationships: List[dict] = []
-        # Stage 3: mirrors duckdb_orchestrator's identical field.
         self._override_conflicts: List[tuple] = []
         self._con: Optional[DorisConnection] = None
         self._database: Optional[str] = None
@@ -355,8 +351,7 @@ class DorisPipelineOrchestrator:
                 "address": self.ruleset.suppression_address_max,
             }
             suppression_dialect.build_frequency_table(con, self._dialect, thresholds=thresholds)
-            # Stage 5: see duckdb_orchestrator's identical comment --
-            # always built, elision happens at decide time.
+            # Always built, elision happens at decide time.
             build_customer_segments(con, self._dialect, self._segmentation)
             return con.execute("SELECT COUNT(*) FROM identifiers WHERE is_valid").fetchone()[0]
 
@@ -422,14 +417,13 @@ class DorisPipelineOrchestrator:
 
             pairs = con.execute("SELECT a_key, b_key FROM candidate_pairs").fetchall()
 
-            # Stage 5: customer_code -> segment, mirrors duckdb_orchestrator.
+            # Stage 5: customer_code -> segment.
             segments: Dict[str, str] = dict(
                 con.execute("SELECT customer_code, segment FROM customer_segments").fetchall()
             )
 
             # Stage 5.1: bulk-fetch raw columns any RAW_COLUMN match
-            # rule references, mirrors duckdb_orchestrator exactly --
-            # except array-typed columns need _parse_array() here,
+            # rule references -- array-typed columns need _parse_array() here,
             # since pymysql returns Doris ARRAY<...> as JSON text, not
             # a native Python list (see _parse_array's docstring).
             from engine.rules.match_rules import raw_column_specs_in_catalog
@@ -515,8 +509,7 @@ class DorisPipelineOrchestrator:
             # database. Without this, redecide has nothing to diff
             # against on a Doris-backed run (baseline_decision_counts
             # would always be empty) even once run_session can reach
-            # the database at all. Mirrors duckdb_orchestrator's
-            # identical block.
+            # the database at all.
             try:
                 con.execute(compile_confidence_sql(self.match_ruleset, self._dialect, table_name="pair_decisions"))
             except Exception:
@@ -525,8 +518,7 @@ class DorisPipelineOrchestrator:
                     "(redecide/reblock will fall back to a fresh compile)", exc_info=True,
                 )
 
-            # Stage 1 of the entity resolution workbench plan -- mirrors
-            # duckdb_orchestrator's identical block. See
+            # Stage 1 of the entity resolution workbench plan -- see
             # confidence_compiler.compile_contributions_sql's docstring.
             try:
                 from engine.rules.confidence_compiler import compile_contributions_sql
@@ -857,7 +849,7 @@ class DorisPipelineOrchestrator:
         }
 
     # ------------------------------------------------------------------
-    # Stage 7: Cluster (identical to the DuckDB path -- pure Python)
+    # Stage 7: Cluster (pure Python)
     # ------------------------------------------------------------------
     async def _stage_cluster(self, auto_links):
         start = datetime.utcnow()
@@ -869,8 +861,7 @@ class DorisPipelineOrchestrator:
         loop = asyncio.get_event_loop()
 
         def _cluster():
-            # Stage 3 of the entity resolution workbench plan -- mirrors
-            # duckdb_orchestrator's identical block. See
+            # Stage 3 of the entity resolution workbench plan -- see
             # engine.clustering.build_clusters's module docstring.
             must_link, must_not_link = [], []
             try:
@@ -998,8 +989,7 @@ class DorisPipelineOrchestrator:
             # codes (realistic at full 1.5M-row scale) is megabytes of
             # SQL text -- slow to parse/plan and a real risk of hitting
             # a max-query-length limit. A staging table + LEFT JOIN
-            # anti-join is the standard, scale-safe pattern (mirrors
-            # pipeline.duckdb_orchestrator's `_cluster_members` table).
+            # anti-join is the standard, scale-safe pattern.
             con.execute("DROP TABLE IF EXISTS _cluster_members")
             con.execute("CREATE TABLE _cluster_members (customer_code VARCHAR(64))")
             member_list = list(all_members)
@@ -1086,7 +1076,7 @@ class DorisPipelineOrchestrator:
                 pass
 
     def _persist_to_postgres(self, clusters, auto_links, review_items, result) -> None:
-        """Mirrors DuckDBPipelineOrchestrator._persist_to_postgres -- see that method's docstring."""
+        """Bulk-persists this run's evidence, decisions, and clusters into Postgres via db.repository."""
         try:
             from api.config import settings
             if not settings.PERSIST_TO_POSTGRES:
@@ -1160,8 +1150,7 @@ class DorisPipelineOrchestrator:
                     pg_conn, code_to_uuid, clusters, RULESET_VERSION,
                 ) or 0
 
-                # Stage 2 of the entity resolution workbench plan --
-                # mirrors duckdb_orchestrator's identical block. See
+                # Stage 2 of the entity resolution workbench plan -- see
                 # engine.clustering.entity_resolver's module docstring.
                 entity_result = _step(
                     "resolve_entities", entity_resolver.resolve_entities,
@@ -1196,7 +1185,7 @@ class DorisPipelineOrchestrator:
             logger.warning(f"Postgres persistence failed (run still succeeds with file artifacts): {e}")
 
     def _upsert_customers(self, pg_conn, customer_codes: List[str]) -> Dict[str, str]:
-        """Doris-sourced equivalent of db.repository.upsert_customers (which reads from a DuckDB connection)."""
+        """Upserts customers_norm for the given CUSTOMER_CODEs, keyed off this run's own Doris-persisted customer_scalars table."""
         from psycopg2.extras import execute_values
         if not customer_codes:
             return {}
@@ -1248,7 +1237,6 @@ class DorisPipelineOrchestrator:
         carry_forward: bool = True, low_memory_mode: bool = False,
     ) -> PipelineResult:
         self.run_id = run_id
-        # See pipeline.duckdb_orchestrator.run's identical comment.
         self._carry_forward = carry_forward
         self._low_memory_mode = low_memory_mode
         self._mode = mode
@@ -1502,7 +1490,7 @@ class DorisPipelineOrchestrator:
         return result
 
     # ------------------------------------------------------------------
-    # Accessors (identical contract to DuckDBPipelineOrchestrator)
+    # Accessors
     # ------------------------------------------------------------------
     def get_scores(self) -> Dict[str, MatchScore]:
         return self._scores

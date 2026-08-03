@@ -1,7 +1,7 @@
 """
 CUIN v2 - Postgres Persistence Repository (Ruleset v2)
 
-Bulk-persists DuckDB pipeline results into Postgres, closing the gap
+Bulk-persists Doris pipeline results into Postgres, closing the gap
 the audit found: the Spark datasource pipeline wrote NOTHING to
 Postgres or Neo4j -- verified empirically as 0 rows across all 8
 tables despite a "completed" run reporting thousands of links. Every
@@ -19,9 +19,9 @@ matching, not warehousing raw source data.
 
 customers_norm.customer_key is a Postgres UUID (schema-defined,
 auto-generated), while the pipeline's identity key is the string
-CUSTOMER_CODE. upsert_customers() is the mapping layer between the
-two, keyed by (source_customer_id, source_system) per the schema's
-UNIQUE constraint.
+CUSTOMER_CODE. DorisPipelineOrchestrator._upsert_customers is the
+mapping layer between the two, keyed by (source_customer_id,
+source_system) per the schema's UNIQUE constraint.
 """
 
 import csv
@@ -31,7 +31,6 @@ import logging
 from typing import Dict, List, Tuple
 from uuid import uuid4
 
-import duckdb
 import psycopg2
 from psycopg2.extras import execute_values, Json
 
@@ -68,42 +67,6 @@ def _cluster_id_to_uuid(cluster_id: str) -> str:
     hex_part = cluster_id[3:] if cluster_id.startswith("CL_") else cluster_id
     hex_part = hex_part.ljust(32, "0")[:32]
     return f"{hex_part[0:8]}-{hex_part[8:12]}-{hex_part[12:16]}-{hex_part[16:20]}-{hex_part[20:32]}"
-
-
-def upsert_customers(pg_conn, con: duckdb.DuckDBPyConnection, customer_codes: List[str]) -> Dict[str, str]:
-    """
-    Upserts customers_norm for the given CUSTOMER_CODEs and returns
-    {customer_code: customer_key_uuid}.
-    """
-    if not customer_codes:
-        return {}
-
-    placeholders = ",".join(["?"] * len(customer_codes))
-    rows = con.execute(f"""
-        SELECT s.customer_code, s.name_norm, s.dob_iso
-        FROM customer_scalars s
-        WHERE s.customer_code IN ({placeholders})
-    """, customer_codes).fetchall()
-
-    values = [
-        (code, name_norm, dob_iso, f"duckdb-pipeline:{code}", "ORACLE_DATASOURCE")
-        for code, name_norm, dob_iso in rows
-    ]
-
-    with pg_conn.cursor() as cur:
-        inserted = execute_values(cur, """
-            INSERT INTO customers_norm
-                (source_customer_id, name_norm, dob_norm, record_hash, source_system)
-            VALUES %s
-            ON CONFLICT (source_customer_id, source_system) DO UPDATE SET
-                name_norm = EXCLUDED.name_norm,
-                dob_norm = EXCLUDED.dob_norm,
-                updated_at = NOW()
-            RETURNING source_customer_id, customer_key
-        """, values, fetch=True, page_size=5000)
-        mapping = {row[0]: str(row[1]) for row in inserted}
-    pg_conn.commit()
-    return mapping
 
 
 def persist_identifier_frequency(pg_conn, con, run_id: str) -> int:
@@ -198,7 +161,7 @@ def persist_candidate_pairs_and_decisions(
 ) -> Tuple[int, int, int]:
     """
     scores/decisions: keyed by pair_id "a_key:b_key" -> MatchScore / MatchDecision
-    (from pipeline.duckdb_orchestrator's get_scores()/get_decisions()).
+    (from the pipeline orchestrator's get_scores()/get_decisions()).
     Only persists pairs where BOTH endpoints made it into code_to_uuid
     (i.e. were upserted -- callers should upsert first).
 

@@ -2,13 +2,13 @@
 CUIN v2 - Blocking Rule Compiler
 
 Compiles an ordered engine.rules.catalog.BlockingRule list into SQL
-executed through an engine.ports.dialect.SqlDialect, producing the
-same `candidate_pairs(a_key, b_key, blocking_reasons)` table that
-engine.blocking.deterministic_blocker.build_candidate_pairs built by
-hand. DEFAULT_BLOCKING_RULES compiled through DuckDbDialect reproduces
-that hand-written SQL's *output* exactly (not necessarily the same
-SQL text) -- see tests/unit/test_rules_zero_change.py, the acceptance
-test for this module.
+executed through an engine.ports.dialect.SqlDialect (currently only
+DorisDialect), producing the `candidate_pairs(a_key, b_key,
+blocking_reasons)` table the pipeline blocks on. Originally verified
+to reproduce a hand-written DuckDB predecessor query's *output*
+exactly (not necessarily the same SQL text) during the DuckDB-to-Doris
+migration; that predecessor and its comparison test have since been
+removed now that Doris is the only engine.
 
 Each BlockingRuleType has one `_compile_<type>` function here,
 returning `(setup_statements, atomic_select_sql)`:

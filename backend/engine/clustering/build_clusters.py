@@ -2,11 +2,12 @@
 CUIN v2 - Shared cluster-building logic (Stage 3 of the entity
 resolution workbench plan)
 
-Extracted from duckdb_orchestrator.py's and doris_orchestrator.py's
-byte-identical inner _cluster() functions specifically so officer
-overrides ("officer decision is law" -- see
-db/migrations/005_entity_registry.sql) are implemented ONCE, not
-twice with a real risk of the two engines silently drifting apart.
+Extracted from doris_orchestrator.py's (and, historically, the
+removed DuckDB orchestrator's byte-identical) inner _cluster()
+function specifically so officer overrides ("officer decision is law"
+-- see db/migrations/005_entity_registry.sql) are implemented in one
+place, not duplicated with a real risk of engines silently drifting
+apart.
 
 With must_link=[] and must_not_link=[] (the default, and the only
 state possible before any officer has acted), build_clusters() is

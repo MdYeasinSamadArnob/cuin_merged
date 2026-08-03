@@ -12,16 +12,28 @@ engine.rules.precheck already uses for real blocking rules
 so "BRANCH_CODE" reads as "would produce 3.1B pairs", a number a
 banker can actually reason about.
 
-Read-only: this profiles the raw source Parquet directly via DuckDB's
-read_parquet() (fast, engine-agnostic analysis -- it doesn't touch
-whichever engine will actually run the pipeline). It does not require
-a completed run.
+Read-only: this profiles the raw source Parquet directly via pyarrow's
+native compute functions (fast, engine-agnostic analysis -- it doesn't
+touch whichever engine will actually run the pipeline). It does not
+require a completed run.
+
+Stays in Arrow-native columnar form throughout (list_flatten/
+list_parent_indices/value_counts/group_by+count_distinct) rather than
+converting to pandas -- measured on the full 1.5M-row dataset:
+pandas' .explode()/.groupby() on Python-object string columns took
+~50s end-to-end (vs ~10s for the DuckDB SQL this replaced), because
+those pandas operations fall back to per-element Python-object
+comparisons; pyarrow's compute kernels are vectorized C++ and bring
+this back in line with (and on some columns faster than) the original
+DuckDB implementation.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import List, Optional
 
-import duckdb
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
 
 from engine.rules.precheck import (
     FanoutSeverity, DEFAULT_WARN_PAIRS, DEFAULT_BLOCK_PAIRS,
@@ -29,13 +41,7 @@ from engine.rules.precheck import (
 )
 from engine.schema.semantic_types import guess_semantic_type, get_semantic_type
 
-# Profiling reads every row of every column -- on the full 1.5M-row
-# dataset this is a few seconds, not the tens of minutes a full
-# pipeline run costs, since it's a handful of GROUP BYs over columns
-# DuckDB reads directly off Parquet's columnar layout (no join, no
-# blocking, no scoring). No sampling needed at this scale; if a much
-# larger source ever made full profiling too slow, this is the single
-# place a LIMIT/SAMPLE would go.
+CUSTOMER_CODE_COL = "CUSTOMER_CODE"
 
 
 @dataclass
@@ -92,8 +98,61 @@ class ColumnProfile:
         }
 
 
-def _blocking_verdict(con, source_expr: str, is_array: bool,
-                       warn_pairs: int, block_pairs: int) -> BlockingVerdict:
+def _duckdb_style_type_name(pa_type: pa.DataType) -> str:
+    """
+    Maps a pyarrow type to the DuckDB type-name string this module used
+    to return (e.g. "VARCHAR", "VARCHAR[]") -- kept for API/frontend
+    display compatibility and because engine.schema.semantic_types.
+    guess_semantic_type() pattern-matches specific DuckDB numeric type
+    names (BIGINT/INTEGER/DOUBLE/FLOAT/DECIMAL/HUGEINT/SMALLINT).
+    """
+    if pa.types.is_list(pa_type) or pa.types.is_large_list(pa_type):
+        return _duckdb_style_type_name(pa_type.value_type) + "[]"
+    if pa.types.is_string(pa_type) or pa.types.is_large_string(pa_type):
+        return "VARCHAR"
+    if pa.types.is_int64(pa_type):
+        return "BIGINT"
+    if pa.types.is_int32(pa_type):
+        return "INTEGER"
+    if pa.types.is_int16(pa_type):
+        return "SMALLINT"
+    if pa.types.is_float64(pa_type):
+        return "DOUBLE"
+    if pa.types.is_float32(pa_type):
+        return "FLOAT"
+    if pa.types.is_decimal(pa_type):
+        return "DECIMAL"
+    if pa.types.is_boolean(pa_type):
+        return "BOOLEAN"
+    if pa.types.is_date(pa_type):
+        return "DATE"
+    if pa.types.is_timestamp(pa_type):
+        return "TIMESTAMP"
+    return str(pa_type).upper()
+
+
+def _flattened(values: pa.Array, codes: pa.Array, is_array: bool):
+    """
+    (values, codes) as flat, position-aligned arrays -- for array
+    columns, one row per (customer_code, element); for scalar columns,
+    unchanged. Exploded/flattened exactly ONCE per column and reused by
+    every stat that needs it.
+    """
+    if not is_array:
+        return values, codes
+    flat_values = pc.list_flatten(values)
+    parent_indices = pc.list_parent_indices(values)
+    flat_codes = codes.take(parent_indices)
+    return flat_values, flat_codes
+
+
+def _grouped_distinct_customer_counts(values: pa.Array, codes: pa.Array) -> pa.Table:
+    """value -> COUNT(DISTINCT customer_code), as a 2-column table."""
+    tbl = pa.table({"_value": values, "_code": codes})
+    return tbl.group_by("_value").aggregate([("_code", "count_distinct")])
+
+
+def _blocking_verdict(values: pa.Array, codes: pa.Array, warn_pairs: int, block_pairs: int) -> BlockingVerdict:
     """
     Treats this column's raw value as a hypothetical EXACT blocking
     key (one CUSTOMER_CODE per group, grouped by value) and computes
@@ -104,23 +163,10 @@ def _blocking_verdict(con, source_expr: str, is_array: bool,
     (a customer contributes one row per element, matching how blocking
     rules actually treat multi-value fields).
     """
-    if is_array:
-        rows = con.execute(f"""
-            SELECT v, COUNT(DISTINCT CUSTOMER_CODE) AS n
-            FROM (SELECT CUSTOMER_CODE, UNNEST({source_expr}) AS v FROM raw) t
-            WHERE v IS NOT NULL AND v != ''
-            GROUP BY v
-        """).fetchall()
-    else:
-        rows = con.execute(f"""
-            SELECT {source_expr} AS v, COUNT(DISTINCT CUSTOMER_CODE) AS n
-            FROM raw WHERE {source_expr} IS NOT NULL
-            GROUP BY {source_expr}
-        """).fetchall()
-
-    multi = [(v, n) for v, n in rows if n >= 2]
-    n_pairs = sum((n * (n - 1)) // 2 for _, n in multi)
-    largest_group = max((n for _, n in rows), default=0)
+    grouped = _grouped_distinct_customer_counts(values, codes)
+    counts = grouped.column("_code_count_distinct").to_pylist()
+    n_pairs = sum((n * (n - 1)) // 2 for n in counts if n >= 2)
+    largest_group = max(counts) if counts else 0
     severity = _severity(
         n_pairs, largest_group, warn_pairs, block_pairs,
         DEFAULT_WARN_BLOCK_SIZE, DEFAULT_BLOCK_BLOCK_SIZE,
@@ -136,28 +182,21 @@ def _blocking_verdict(con, source_expr: str, is_array: bool,
     return BlockingVerdict(
         would_explode=(severity == FanoutSeverity.BLOCK),
         severity=severity,
-        n_distinct_values=len(rows),
+        n_distinct_values=len(counts),
         n_pairs_if_blocked=n_pairs,
         largest_group=largest_group,
         message=message,
     )
 
 
-def _top_values(con, source_expr: str, is_array: bool, limit: int = 5) -> List[dict]:
-    if is_array:
-        rows = con.execute(f"""
-            SELECT v, COUNT(*) AS n
-            FROM (SELECT UNNEST({source_expr}) AS v FROM raw) t
-            WHERE v IS NOT NULL AND v != ''
-            GROUP BY v ORDER BY n DESC LIMIT {limit}
-        """).fetchall()
-    else:
-        rows = con.execute(f"""
-            SELECT {source_expr} AS v, COUNT(*) AS n
-            FROM raw WHERE {source_expr} IS NOT NULL
-            GROUP BY {source_expr} ORDER BY n DESC LIMIT {limit}
-        """).fetchall()
-    return [{"value": v, "count": n} for v, n in rows]
+def _top_values(values: pa.Array, limit: int = 5) -> List[dict]:
+    vc = pc.value_counts(values)
+    order = pc.array_sort_indices(vc.field("counts"), order="descending")
+    top = vc.take(order).slice(0, limit)
+    return [
+        {"value": v, "count": int(n)}
+        for v, n in zip(top.field("values").to_pylist(), top.field("counts").to_pylist())
+    ]
 
 
 def profile_source(
@@ -165,64 +204,74 @@ def profile_source(
     warn_pairs: int = DEFAULT_WARN_PAIRS,
     block_pairs: int = DEFAULT_BLOCK_PAIRS,
 ) -> List[ColumnProfile]:
-    con = duckdb.connect()
-    try:
-        con.execute(f"CREATE VIEW raw AS SELECT * FROM read_parquet('{parquet_path}')")
-        total_rows = con.execute("SELECT COUNT(*) FROM raw").fetchone()[0]
-        columns = con.execute("DESCRIBE raw").fetchall()
+    table = pq.read_table(parquet_path)
+    total_rows = table.num_rows
+    codes_col = table.column(CUSTOMER_CODE_COL)
 
-        profiles = []
-        for col_name, col_type, *_ in columns:
-            is_array = col_type.upper().endswith("[]")
-            source_expr = col_name
+    profiles = []
+    for field_ in table.schema:
+        col_name = field_.name
+        is_array = pa.types.is_list(field_.type) or pa.types.is_large_list(field_.type)
+        col_type = _duckdb_style_type_name(field_.type)
+        raw_col = table.column(col_name)
 
-            if is_array:
-                non_null = con.execute(f"""
-                    SELECT COUNT(*) FROM raw WHERE {source_expr} IS NOT NULL AND len({source_expr}) > 0
-                """).fetchone()[0]
-                distinct_count = con.execute(f"""
-                    SELECT COUNT(DISTINCT v) FROM (SELECT UNNEST({source_expr}) AS v FROM raw) t WHERE v IS NOT NULL
-                """).fetchone()[0]
-                avg_length = con.execute(f"""
-                    SELECT AVG(len(v)) FROM (SELECT UNNEST({source_expr}) AS v FROM raw) t WHERE v IS NOT NULL
-                """).fetchone()[0]
-            else:
-                non_null = con.execute(f"SELECT COUNT(*) FROM raw WHERE {source_expr} IS NOT NULL").fetchone()[0]
-                distinct_count = con.execute(f"SELECT COUNT(DISTINCT {source_expr}) FROM raw").fetchone()[0]
-                avg_length = con.execute(
-                    f"SELECT AVG(LENGTH(CAST({source_expr} AS VARCHAR))) FROM raw WHERE {source_expr} IS NOT NULL"
-                ).fetchone()[0]
+        if is_array:
+            lengths = pc.list_value_length(raw_col)
+            non_null = int(pc.sum(pc.and_(pc.is_valid(lengths), pc.greater(lengths, 0))).as_py() or 0)
+        else:
+            non_null = int(pc.sum(pc.is_valid(raw_col)).as_py() or 0)
+        fill_rate = round(non_null / total_rows, 4) if total_rows else 0.0
 
-            fill_rate = round(non_null / total_rows, 4) if total_rows else 0.0
-            semantic_id = guess_semantic_type(col_name, col_type)
-            semantic = get_semantic_type(semantic_id)
+        # null_only: matches the original DuckDB distinct_count/
+        # avg_length queries (`v IS NOT NULL` alone). valid: matches
+        # blocking_verdict/top_values' additional `v != ''` exclusion
+        # for array columns -- an intentional-looking asymmetry in the
+        # source queries (an empty telephone/document element is a
+        # real distinct VALUE worth counting but not a useful blocking
+        # key or a value worth surfacing as "top"), preserved here
+        # rather than "fixed" during this migration. Scalars never
+        # filtered empty strings anywhere in the original, so
+        # null_only == valid for them.
+        flat_values, flat_codes = _flattened(raw_col, codes_col, is_array)
+        null_only_mask = pc.is_valid(flat_values)
+        null_only_values = flat_values.filter(null_only_mask)
+        if is_array:
+            valid_mask = pc.and_(null_only_mask, pc.not_equal(flat_values, ""))
+        else:
+            valid_mask = null_only_mask
+        valid_values = flat_values.filter(valid_mask)
+        valid_codes = flat_codes.filter(valid_mask)
 
-            verdict = _blocking_verdict(con, source_expr, is_array, warn_pairs, block_pairs)
-            top_vals = _top_values(con, source_expr, is_array)
+        distinct_count = int(pc.count_distinct(null_only_values).as_py())
+        avg_length = pc.mean(pc.utf8_length(null_only_values)).as_py() if len(null_only_values) else None
 
-            good_for = []
-            if semantic.blocking_safe and verdict.severity != FanoutSeverity.BLOCK:
-                good_for.append("blocking")
-            if semantic_id not in ("customer_id",):
-                good_for.append("matching")
-            if verdict.severity == FanoutSeverity.BLOCK:
-                good_for.append("would_explode")
+        semantic_id = guess_semantic_type(col_name, col_type)
+        semantic = get_semantic_type(semantic_id)
 
-            profiles.append(ColumnProfile(
-                name=col_name,
-                parquet_type=col_type,
-                is_array=is_array,
-                fill_rate=fill_rate,
-                distinct_count=int(distinct_count),
-                avg_length=round(avg_length, 1) if avg_length is not None else None,
-                top_values=top_vals,
-                semantic_type=semantic_id,
-                semantic_label=semantic.label,
-                blocking_safe=semantic.blocking_safe,
-                default_comparators=semantic.default_comparators,
-                blocking_verdict=verdict,
-                good_for=good_for,
-            ))
-        return profiles
-    finally:
-        con.close()
+        verdict = _blocking_verdict(valid_values, valid_codes, warn_pairs, block_pairs)
+        top_vals = _top_values(valid_values)
+
+        good_for = []
+        if semantic.blocking_safe and verdict.severity != FanoutSeverity.BLOCK:
+            good_for.append("blocking")
+        if semantic_id not in ("customer_id",):
+            good_for.append("matching")
+        if verdict.severity == FanoutSeverity.BLOCK:
+            good_for.append("would_explode")
+
+        profiles.append(ColumnProfile(
+            name=col_name,
+            parquet_type=col_type,
+            is_array=is_array,
+            fill_rate=fill_rate,
+            distinct_count=distinct_count,
+            avg_length=round(avg_length, 1) if avg_length is not None else None,
+            top_values=top_vals,
+            semantic_type=semantic_id,
+            semantic_label=semantic.label,
+            blocking_safe=semantic.blocking_safe,
+            default_comparators=semantic.default_comparators,
+            blocking_verdict=verdict,
+            good_for=good_for,
+        ))
+    return profiles

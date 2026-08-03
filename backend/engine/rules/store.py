@@ -9,7 +9,7 @@ db/migrations/003_rule_catalog.sql added `rule_catalog_json`.
 
 Falls back to the YAML-equivalent hardcoded defaults when Postgres is
 unreachable -- the same graceful-degradation pattern used throughout
-this codebase (pipeline.duckdb_orchestrator._persist_to_postgres,
+this codebase (pipeline.doris_orchestrator._persist_to_postgres,
 api/db_init.init_graph): a fresh checkout or a Postgres outage must
 not stop the pipeline from running with sane defaults, only stop the
 UI from persisting NEW edits.

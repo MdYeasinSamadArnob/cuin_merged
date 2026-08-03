@@ -69,14 +69,14 @@ class Settings(BaseSettings):
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 10
 
-    # Whether pipeline.duckdb_orchestrator persists results (customers,
+    # Whether the pipeline orchestrator persists results (customers,
     # candidate pairs, scores, decisions, clusters) to Postgres. Off by
     # default so a fresh checkout without a reachable Postgres still runs
     # the pipeline against in-memory/file artifacts only.
     PERSIST_TO_POSTGRES: bool = True
-    
+
     # ----------------------------------------
-    # Doris (alternate ER execution engine -- see pipeline.doris_orchestrator)
+    # Doris (the pipeline's execution engine -- see pipeline.doris_orchestrator)
     # ----------------------------------------
     DORIS_HOST: str = "127.0.0.1"
     DORIS_MYSQL_PORT: int = 9130
@@ -86,9 +86,14 @@ class Settings(BaseSettings):
 
     # ----------------------------------------
     # Lakehouse storage (engine.lake) -- local filesystem path now, an
-    # S3/HDFS URI for multi-BE deployments later. Both DuckDB
-    # (read_parquet) and Doris (LOCAL()/S3() TVF) read the same files
-    # from here so bulk data is stored once, not once per engine.
+    # S3/HDFS URI for multi-BE deployments later. Currently vestigial:
+    # the pipeline reads its source dataset from the hardcoded
+    # PARQUET_PATH constant (data_source/oracle_data.parquet), not
+    # through this setting -- nothing in the live orchestrator actually
+    # reads or writes through LAKE_ROOT today. Only api/routes_admin.py's
+    # reset endpoint references it (clearing a directory nothing
+    # populates). Kept as a forward-looking placeholder for when bulk
+    # data genuinely needs a configurable root.
     # ----------------------------------------
     LAKE_ROOT: str = "./data/lake"
 

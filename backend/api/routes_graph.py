@@ -773,7 +773,7 @@ async def get_unique_records(
     cluster for this run. Used by the Explorer UNIQUE tab.
 
     Reads the lightweight code-only manifest written by
-    pipeline.duckdb_orchestrator._persist_run_artifacts
+    pipeline.doris_orchestrator._persist_run_artifacts
     (data/runs/{run_id}_singletons.csv) rather than deriving singletons
     from {run_id}_records.json -- that file only ever contains CLUSTER
     MEMBERS (see _load_records_for_members), so subtracting "clustered"
@@ -803,7 +803,7 @@ async def get_unique_records(
     if page_codes:
         try:
             import pyarrow.parquet as pq
-            from pipeline.duckdb_orchestrator import PARQUET_PATH
+            from pipeline.doris_orchestrator import PARQUET_PATH
 
             def _first_non_null(arr):
                 if not arr:

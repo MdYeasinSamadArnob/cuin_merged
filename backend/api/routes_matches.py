@@ -255,7 +255,7 @@ async def list_match_scores_query(
     Reads from the run-specific scoring CSV saved after each pipeline run.
 
     `decision` filters to AUTO_LINK/REVIEW/REJECT when the CSV has a
-    `decision` column (written by pipeline.duckdb_orchestrator since the
+    `decision` column (written by the pipeline orchestrator since the
     Ruleset v2 rework -- older CSVs without it ignore this filter rather
     than erroring, so this stays backward compatible).
     """
@@ -328,7 +328,7 @@ def _load_two_customer_rows(codes: list) -> dict:
     computed fresh here matches what any run would have computed.
     """
     import pyarrow.parquet as pq
-    from pipeline.duckdb_orchestrator import PARQUET_PATH
+    from pipeline.doris_orchestrator import PARQUET_PATH
 
     table = pq.read_table(
         PARQUET_PATH,

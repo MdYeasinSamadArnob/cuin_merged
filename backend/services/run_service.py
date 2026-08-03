@@ -71,7 +71,7 @@ class Run:
     current_stage: Optional[str] = None
     ruleset_version: Optional[str] = None
     output_fingerprint: Optional[str] = None
-    engine: str = "duckdb"
+    engine: str = "doris"
     # Wall-clock ms spent in each completed stage, keyed by
     # PipelineStage.value (e.g. "ingest", "persist"). Populated from
     # StageProgress.duration_ms as "complete" events arrive -- makes the
@@ -181,7 +181,7 @@ class RunService:
         mode: str = "FULL",
         description: str = "",
         policy_version: int = 1,
-        engine: str = "duckdb",
+        engine: str = "doris",
     ) -> Run:
         """Create a new pipeline run."""
         run_id = str(uuid4())

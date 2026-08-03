@@ -3,12 +3,12 @@ CUIN v2 - Parallel pair scoring
 
 The per-pair scoring/decision step (engine.scoring.confidence.score_pair,
 called once per candidate pair) was a single-threaded Python `for` loop
-in duckdb_orchestrator.py / doris_orchestrator.py -- measured at ~757
-pairs/second on one core (549,879 pairs / 726s, the same Doris run
-cited throughout the infra report), the actual throughput bottleneck
-for the whole pipeline, independent of how fast the underlying
-database is. Doris's own ingestion/query engine was never the slow
-part; this unparallelized Python loop was.
+in doris_orchestrator.py -- measured at ~757 pairs/second on one core
+(549,879 pairs / 726s, the same Doris run cited throughout the infra
+report), the actual throughput bottleneck for the whole pipeline,
+independent of how fast the underlying database is. Doris's own
+ingestion/query engine was never the slow part; this unparallelized
+Python loop was.
 
 Each pair's score is fully independent of every other pair's (no
 shared mutable state, no ordering dependency), so this is genuinely

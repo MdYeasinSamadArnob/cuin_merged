@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 
 from services.run_service import get_run_service, RunStatus
-from pipeline.duckdb_orchestrator import DuckDBPipelineOrchestrator
+from pipeline.doris_orchestrator import DorisPipelineOrchestrator
 from api.ws_events import ws_manager, EventType
 from datetime import datetime
 
@@ -10,16 +10,13 @@ router = APIRouter()
 
 class DatasourceStartRequest(BaseModel):
     mode: str = "FULL"
-    # "doris" is the default -- distributed, colocated-join execution of
-    # the same ruleset, proven pair-for-pair identical to the duckdb
-    # engine on the same input (tests/integration/
-    # test_doris_cross_engine_parity.py), and what production/at-scale
-    # bank ingestion actually runs against. Requires DORIS_HOST/
-    # DORIS_MYSQL_PORT/DORIS_HTTP_PORT reachable (see api/config.py).
-    # "duckdb" remains available -- zero-ops, in-process, deterministic
-    # Ruleset v2, used by every dev/CI environment -- the import is lazy
-    # so a deployment without Doris configured never pays for it unless
-    # this engine is actually requested.
+    # Doris is the only pipeline engine -- distributed, colocated-join
+    # execution of Ruleset v2, what production/at-scale bank ingestion
+    # actually runs against. Requires DORIS_HOST/DORIS_MYSQL_PORT/
+    # DORIS_HTTP_PORT reachable (see api/config.py). This field is kept
+    # (rather than removed outright) purely for request-shape
+    # compatibility with any caller still sending it; its value is no
+    # longer read.
     engine: str = "doris"
     # A bank re-running ingestion after finding a mismatch in their
     # source system (the actual, stated reason this option exists) wants
@@ -92,18 +89,7 @@ async def start_datasource_demo(
                         data=progress.data
                     )
 
-                if request.engine == "duckdb":
-                    orchestrator_cls = DuckDBPipelineOrchestrator
-                elif request.engine == "doris":
-                    # Imported lazily -- pymysql/httpx are lightweight and
-                    # always installed, but constructing the class touches
-                    # api.config.settings' DORIS_* fields, which only
-                    # matter once this engine is actually selected.
-                    from pipeline.doris_orchestrator import DorisPipelineOrchestrator
-                    orchestrator_cls = DorisPipelineOrchestrator
-                else:
-                    raise ValueError(f"Unknown engine: {request.engine!r} (expected 'duckdb' or 'doris')")
-                orchestrator = orchestrator_cls(
+                orchestrator = DorisPipelineOrchestrator(
                     progress_callback=progress_callback,
                     run_id=run.run_id
                 )
