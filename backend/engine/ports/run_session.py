@@ -1,51 +1,39 @@
 """
 CUIN v2 - Engine-agnostic run session
 
-Resolves a completed run to a (connection, dialect) pair regardless of
-which engine actually ran it, so api/routes_rules.py's precheck/
-redecide/reblock and api/routes_search.py's search work identically
-whether the run was DuckDB- or Doris-backed.
+Resolves a completed Doris-backed run to a (connection, dialect) pair
+for api/routes_rules.py's precheck/redecide/reblock and
+api/routes_search.py's search.
 
-Before this module, both routes hardcoded `data/runs/{run_id}.duckdb`
-and `DuckDbDialect()` directly -- so EVERY Doris-backed run 404'd on
-these endpoints with "No persisted evidence database for run {id} --
-... or used a non-DuckDB engine", the exact bug a Doris demo run hits
-on the Settings UI's precheck/reblock/redecide and on search.
+Two access modes:
 
-Two access modes, mirroring what routes_rules.py already had for
-DuckDB:
-
-- `open_run_readonly(run_id)`: a connection directly to the run's
-  persisted tables, for read-only use (search). DuckDB:
-  `duckdb.connect(path, read_only=True)`. Doris: connect to the run's
-  own `cuin_run_{id}` database -- nothing else writes to a completed
-  run's database, so this is read-only in practice even though Doris
+- `open_run_readonly(run_id)`: a connection directly to the run's own
+  `cuin_run_{id}` database -- nothing else writes to a completed run's
+  database, so this is read-only in practice even though Doris
   connections have no read_only flag to enforce it.
 - `open_run_scratch(run_id, table_names)`: an ISOLATED copy of the
   requested tables that redecide/reblock can freely mutate with zero
-  risk to the real run. DuckDB: in-memory DB + ATTACH-and-copy (the
-  original routes_rules.py pattern, unchanged). Doris: a throwaway
-  `cuin_scratch_{uuid}` database populated via `CREATE TABLE ... AS
-  SELECT * FROM cuin_run_{id}.{table}` -- verified live that Doris
-  supports cross-database qualified table references within one
-  connection/session -- dropped on `.close()`.
+  risk to the real run -- a throwaway `cuin_scratch_{uuid}` database
+  populated via `CREATE TABLE ... AS SELECT * FROM cuin_run_{id}.
+  {table}` -- verified live that Doris supports cross-database
+  qualified table references within one connection/session -- dropped
+  on `.close()`.
 
-A run's engine is read from services.run_service's `Run.engine` field
-(added alongside this module); runs created before that field existed
-default to "duckdb" and are resolved by the pre-existing file-presence
-check, so old runs keep working exactly as before.
+Doris-only: the earlier DuckDB-backed run path (`data/runs/
+{run_id}.duckdb`, `DuckDbDialect()`) was removed once the DuckDB
+pipeline engine was -- there was no legacy `.duckdb` run data left on
+disk to preserve read access to at the time (see the commit that
+wiped backend/data/runs/ to empty), so this was a clean break, not a
+compat shim.
 """
 
-import os
 import uuid
 from dataclasses import dataclass
 from typing import Optional
 
-import duckdb
 from fastapi import HTTPException
 
 from engine.ports.dialect import SqlDialect
-from engine.ports.duckdb_dialect import DuckDbDialect
 
 
 def get_run_engine(run_id: str) -> str:
@@ -53,7 +41,7 @@ def get_run_engine(run_id: str) -> str:
     run = get_run_service().get_run(run_id)
     if run and run.engine:
         return run.engine
-    return "duckdb"
+    return "doris"
 
 
 @dataclass
@@ -82,76 +70,6 @@ class RunSession:
                 admin.close()
             except Exception:
                 pass
-
-
-# ----------------------------------------------------------------------
-# DuckDB
-# ----------------------------------------------------------------------
-
-def _duckdb_run_path(run_id: str) -> str:
-    return f"data/runs/{run_id}.duckdb"
-
-
-def _open_duckdb_readonly(run_id: str) -> RunSession:
-    path = _duckdb_run_path(run_id)
-    if not os.path.exists(path):
-        raise HTTPException(
-            status_code=404,
-            detail=f"No persisted evidence database for run {run_id} -- the run predates the "
-                   "persistent-evidence upgrade or is still executing.",
-        )
-    try:
-        con = duckdb.connect(path, read_only=True)
-    except duckdb.IOException as e:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Run database for {run_id} is locked (the run may still be executing): {e}",
-        )
-    return RunSession(con=con, dialect=DuckDbDialect(), engine="duckdb", run_id=run_id)
-
-
-def _open_duckdb_scratch(run_id: str, table_names: tuple) -> RunSession:
-    path = _duckdb_run_path(run_id)
-    if not os.path.exists(path):
-        raise HTTPException(
-            status_code=404,
-            detail=f"No persisted evidence database for run {run_id} -- the run predates the "
-                   "persistent-evidence upgrade or is still executing.",
-        )
-    scratch = duckdb.connect(":memory:")
-    scratch.execute("SET preserve_insertion_order = true")
-    try:
-        scratch.execute(f"ATTACH '{path}' AS src (READ_ONLY)")
-        found_any = False
-        # NOTE: the loop variable here must NOT be named `tables` --
-        # DuckDB's Python API auto-scans the calling frame for a local
-        # variable whose name matches an unresolved SQL identifier
-        # ("replacement scans") and will try to bind THAT instead of
-        # the real table, raising InvalidInputException. Existence is
-        # checked by attempting the copy and catching CatalogException,
-        # not information_schema -- `src.information_schema.tables` is
-        # not valid cross-catalog syntax in DuckDB. Both findings
-        # verified live originally wiring this into routes_rules.py.
-        for one_table in table_names:
-            try:
-                scratch.execute(f"CREATE TABLE {one_table} AS SELECT * FROM src.{one_table}")
-                found_any = True
-            except duckdb.CatalogException:
-                continue
-        scratch.execute("DETACH src")
-    except duckdb.IOException as e:
-        scratch.close()
-        raise HTTPException(
-            status_code=409,
-            detail=f"Run database for {run_id} is locked (the run may still be executing): {e}",
-        )
-    if not found_any:
-        scratch.close()
-        raise HTTPException(
-            status_code=409,
-            detail=f"Run {run_id} has none of the required tables persisted -- cannot preview.",
-        )
-    return RunSession(con=scratch, dialect=DuckDbDialect(), engine="duckdb", run_id=run_id)
 
 
 # ----------------------------------------------------------------------
@@ -258,12 +176,8 @@ def _open_doris_scratch(run_id: str, table_names: tuple) -> RunSession:
 # ----------------------------------------------------------------------
 
 def open_run_readonly(run_id: str) -> RunSession:
-    if get_run_engine(run_id) == "doris":
-        return _open_doris_readonly(run_id)
-    return _open_duckdb_readonly(run_id)
+    return _open_doris_readonly(run_id)
 
 
 def open_run_scratch(run_id: str, table_names: tuple) -> RunSession:
-    if get_run_engine(run_id) == "doris":
-        return _open_doris_scratch(run_id, table_names)
-    return _open_duckdb_scratch(run_id, table_names)
+    return _open_doris_scratch(run_id, table_names)

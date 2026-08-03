@@ -5,13 +5,10 @@ Greenfield: the earlier audit of this codebase found no search
 endpoint, no search UI, and no index -- GET /matches/{pair_id}
 "searches" by scanning the 50 most recent runs' CSVs. This searches
 the normalized `identifiers` / `customer_scalars` tables of a run's
-persisted DuckDB file (see pipeline.duckdb_orchestrator._connect) --
-exact/prefix match on mobile, email, document value, or customer_code,
-and token-containment on name -- rather than the raw source Parquet.
-
-On Doris this same query becomes an inverted-index lookup at 10B-row
-scale (see the migration plan's Phase 8); the API surface here is
-engine-agnostic so that swap doesn't change this route.
+persisted Doris database (an inverted-index lookup at 10B-row scale is
+the eventual target, see the migration plan's Phase 8) -- exact/prefix
+match on mobile, email, document value, or customer_code, and
+token-containment on name -- rather than the raw source Parquet.
 """
 
 import os
@@ -20,22 +17,20 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from services.run_service import get_run_service
-from engine.ports.run_session import open_run_readonly, get_run_engine, doris_database_exists, doris_run_db_name
+from engine.ports.run_session import open_run_readonly, doris_database_exists, doris_run_db_name
 
 router = APIRouter()
 
 
-def _run_has_persisted_data(run_id: str, engine: str) -> bool:
-    if engine == "doris":
-        return doris_database_exists(doris_run_db_name(run_id))
-    return os.path.exists(f"data/runs/{run_id}.duckdb")
+def _run_has_persisted_data(run_id: str) -> bool:
+    return doris_database_exists(doris_run_db_name(run_id))
 
 
 def _most_recent_completed_run_id() -> Optional[str]:
     service = get_run_service()
     runs, _ = service.list_runs(page=1, page_size=50)
     for r in runs:
-        if r.status.value == "COMPLETED" and _run_has_persisted_data(r.run_id, get_run_engine(r.run_id)):
+        if r.status.value == "COMPLETED" and _run_has_persisted_data(r.run_id):
             return r.run_id
     return None
 

@@ -106,7 +106,7 @@ def upsert_customers(pg_conn, con: duckdb.DuckDBPyConnection, customer_codes: Li
     return mapping
 
 
-def persist_identifier_frequency(pg_conn, con: duckdb.DuckDBPyConnection, run_id: str) -> int:
+def persist_identifier_frequency(pg_conn, con, run_id: str) -> int:
     rows = con.execute("""
         SELECT id_type, value_norm, n_records, is_suppressed
         FROM identifier_frequency

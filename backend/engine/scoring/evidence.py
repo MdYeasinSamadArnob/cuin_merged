@@ -8,6 +8,15 @@ concrete proof, not just a boolean.
 
 Reuses engine.structures.FieldEvidence unchanged (the shape
 routes_matches.py already serializes).
+
+build_pair_evidence() is DuckDB-only, used only by the (still-live,
+pending removal) pipeline.duckdb_orchestrator.DuckDBPipelineOrchestrator
+and its test oracles -- see engine.scoring.evidence_dialect for the
+dialect-portable twin Doris actually uses. load_pair_evidence() and
+evidence_to_field_evidence() below are engine-agnostic and load-bearing
+for both engines (engine.ports.run_session, pipeline.parallel_scoring,
+api/routes_workbench.py, api/routes_public_identity_api.py) -- keep
+those two regardless of build_pair_evidence's fate.
 """
 
 import duckdb
@@ -95,9 +104,7 @@ def build_pair_evidence(con: duckdb.DuckDBPyConnection) -> None:
     """)
 
 
-def load_pair_evidence(
-    con: duckdb.DuckDBPyConnection, a_key: str, b_key: str
-) -> Dict:
+def load_pair_evidence(con, a_key: str, b_key: str) -> Dict:
     """
     Fetch the full evidence bundle for a single pair, used both by
     classify() in tiers.py and by the /matches/{pair_id} API to render
