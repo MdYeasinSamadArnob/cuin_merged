@@ -3,32 +3,9 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
-import { Database, Zap, Cpu, Network, CheckCircle2, Boxes, HardDrive, RefreshCw, Sparkles, AlertTriangle } from "lucide-react";
+import { Database, Zap, Cpu, Network, CheckCircle2, Boxes, RefreshCw, Sparkles, AlertTriangle } from "lucide-react";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-
-type Engine = "duckdb" | "doris" | "spark";
-
-const ENGINES: { id: Engine; label: string; description: string; icon: any }[] = [
-    {
-        id: "duckdb",
-        label: "DuckDB",
-        description: "Zero-ops, in-process, deterministic Ruleset v2.",
-        icon: HardDrive,
-    },
-    {
-        id: "doris",
-        label: "Apache Doris",
-        description: "Default. Distributed, colocated-join execution of the same ruleset -- for scale.",
-        icon: Boxes,
-    },
-    {
-        id: "spark",
-        label: "PySpark + Splink",
-        description: "Legacy/rollback path. Probabilistic (EM-trained), not seeded -- non-deterministic.",
-        icon: Network,
-    },
-];
 
 // The actual mechanism behind "update existing" is engine.clustering.
 // entity_resolver's Jaccard carry-forward, which already runs on EVERY
@@ -57,7 +34,6 @@ const RUN_MODES: { id: "update" | "new"; label: string; description: string; ico
 
 export default function DatasourcePage() {
     const [isStarting, setIsStarting] = useState(false);
-    const [engine, setEngine] = useState<Engine>("doris");
     const [runMode, setRunMode] = useState<"update" | "new">("update");
     const router = useRouter();
 
@@ -67,7 +43,7 @@ export default function DatasourcePage() {
             const res = await fetch(`${API_BASE_URL}/datasource/demo`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ mode: "FULL", engine, carry_forward: runMode === "update" })
+                body: JSON.stringify({ mode: "FULL", carry_forward: runMode === "update" })
             });
             const data = await res.json();
 
@@ -93,39 +69,10 @@ export default function DatasourcePage() {
                     Datasource Integration
                 </h1>
                 <p className="text-gray-600 dark:text-gray-400">
-                    Run entity resolution over the Oracle Parquet datasource. Pick the execution
-                    engine below -- all three run the same deterministic Ruleset v2 blocking/scoring
-                    logic (Spark excepted, which is a legacy probabilistic path) and are expected to
-                    produce the same decisions on the same data.
+                    Run entity resolution over the Oracle Parquet datasource via Apache Doris --
+                    distributed, colocated-join execution of the deterministic Ruleset v2
+                    blocking/scoring logic.
                 </p>
-            </div>
-
-            {/* Engine Selector */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-                {ENGINES.map((e) => {
-                    const Icon = e.icon;
-                    const selected = engine === e.id;
-                    return (
-                        <button
-                            key={e.id}
-                            onClick={() => setEngine(e.id)}
-                            className={`text-left p-4 rounded-xl border-2 transition-all ${
-                                selected
-                                    ? "border-blue-500 bg-blue-50 dark:bg-blue-950/30 shadow-lg"
-                                    : "border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 hover:border-gray-300 dark:hover:border-gray-700"
-                            }`}
-                        >
-                            <div className="flex items-center gap-2 mb-2">
-                                <Icon size={18} className={selected ? "text-blue-600 dark:text-blue-400" : "text-gray-400"} />
-                                <span className={`font-semibold ${selected ? "text-blue-700 dark:text-blue-300" : "text-gray-900 dark:text-white"}`}>
-                                    {e.label}
-                                </span>
-                                {e.id === "doris" && <span className="badge badge-info !text-[10px] !py-0">default</span>}
-                            </div>
-                            <p className="text-xs text-gray-500 dark:text-gray-400">{e.description}</p>
-                        </button>
-                    );
-                })}
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
@@ -154,8 +101,8 @@ export default function DatasourcePage() {
                         </div>
                         <div className="flex justify-between items-center pb-2">
                             <span className="text-gray-500">ENGINE</span>
-                            <span className="font-bold text-blue-600 dark:text-blue-400">
-                                {ENGINES.find((e) => e.id === engine)?.label}
+                            <span className="font-bold text-blue-600 dark:text-blue-400 flex items-center gap-1.5">
+                                <Boxes size={14} /> Apache Doris
                             </span>
                         </div>
                     </div>
@@ -176,54 +123,18 @@ export default function DatasourcePage() {
                     </h2>
 
                     <ul className="space-y-4 relative z-10">
-                        {engine === "duckdb" && (
-                            <>
-                                <li className="flex items-start gap-3">
-                                    <CheckCircle2 size={18} className="text-emerald-400 mt-0.5 shrink-0" />
-                                    <span className="text-blue-100 text-sm">Loads the Parquet dataset into an in-process DuckDB file.</span>
-                                </li>
-                                <li className="flex items-start gap-3">
-                                    <CheckCircle2 size={18} className="text-emerald-400 mt-0.5 shrink-0" />
-                                    <span className="text-blue-100 text-sm">Deterministic rule-based blocking and tiered decisioning (no ML training).</span>
-                                </li>
-                                <li className="flex items-start gap-3">
-                                    <CheckCircle2 size={18} className="text-emerald-400 mt-0.5 shrink-0" />
-                                    <span className="text-blue-100 text-sm">Same output every run -- bit-reproducible, audit-friendly.</span>
-                                </li>
-                            </>
-                        )}
-                        {engine === "doris" && (
-                            <>
-                                <li className="flex items-start gap-3">
-                                    <CheckCircle2 size={18} className="text-emerald-400 mt-0.5 shrink-0" />
-                                    <span className="text-blue-100 text-sm">Stream-loads the Parquet dataset into a dedicated Doris database for this run.</span>
-                                </li>
-                                <li className="flex items-start gap-3">
-                                    <CheckCircle2 size={18} className="text-emerald-400 mt-0.5 shrink-0" />
-                                    <span className="text-blue-100 text-sm">Same blocking/scoring rules, compiled to Doris SQL -- colocated joins, no shuffle.</span>
-                                </li>
-                                <li className="flex items-start gap-3">
-                                    <CheckCircle2 size={18} className="text-emerald-400 mt-0.5 shrink-0" />
-                                    <span className="text-blue-100 text-sm">Proven pair-for-pair identical decisions to the DuckDB engine on the same data.</span>
-                                </li>
-                            </>
-                        )}
-                        {engine === "spark" && (
-                            <>
-                                <li className="flex items-start gap-3">
-                                    <CheckCircle2 size={18} className="text-emerald-400 mt-0.5 shrink-0" />
-                                    <span className="text-blue-100 text-sm">Loads customer data partitions into Spark RDDs.</span>
-                                </li>
-                                <li className="flex items-start gap-3">
-                                    <CheckCircle2 size={18} className="text-emerald-400 mt-0.5 shrink-0" />
-                                    <span className="text-blue-100 text-sm">EM algorithm probabilistically matches entities across sources.</span>
-                                </li>
-                                <li className="flex items-start gap-3">
-                                    <CheckCircle2 size={18} className="text-emerald-400 mt-0.5 shrink-0" />
-                                    <span className="text-blue-100 text-sm">Legacy path: not seeded, so results can vary between runs.</span>
-                                </li>
-                            </>
-                        )}
+                        <li className="flex items-start gap-3">
+                            <CheckCircle2 size={18} className="text-emerald-400 mt-0.5 shrink-0" />
+                            <span className="text-blue-100 text-sm">Stream-loads the Parquet dataset into a dedicated Doris database for this run.</span>
+                        </li>
+                        <li className="flex items-start gap-3">
+                            <CheckCircle2 size={18} className="text-emerald-400 mt-0.5 shrink-0" />
+                            <span className="text-blue-100 text-sm">Deterministic rule-based blocking and tiered decisioning, compiled to Doris SQL -- colocated joins, no shuffle.</span>
+                        </li>
+                        <li className="flex items-start gap-3">
+                            <CheckCircle2 size={18} className="text-emerald-400 mt-0.5 shrink-0" />
+                            <span className="text-blue-100 text-sm">Same output every run -- bit-reproducible, audit-friendly.</span>
+                        </li>
                     </ul>
                 </motion.div>
             </div>
@@ -276,7 +187,7 @@ export default function DatasourcePage() {
                     <div>
                         <h3 className="text-lg font-bold text-gray-900 dark:text-white">Ready to Ingest</h3>
                         <p className="text-sm text-gray-500">
-                            Trigger the {ENGINES.find((e) => e.id === engine)?.label} pipeline -- {RUN_MODES.find((m) => m.id === runMode)?.label}
+                            Trigger the Apache Doris pipeline -- {RUN_MODES.find((m) => m.id === runMode)?.label}
                         </p>
                     </div>
                 </div>
@@ -297,7 +208,7 @@ export default function DatasourcePage() {
                     {isStarting ? (
                         <>
                             <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                            Starting {ENGINES.find((e) => e.id === engine)?.label}...
+                            Starting Apache Doris...
                         </>
                     ) : (
                         <>

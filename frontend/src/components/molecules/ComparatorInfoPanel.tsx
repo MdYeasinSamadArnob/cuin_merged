@@ -33,8 +33,8 @@ export function ComparatorInfoPanel({
     return (
         <div className="space-y-4 text-xs">
             <p className="text-gray-500 dark:text-gray-400">
-                Only comparators proven to behave identically on both DuckDB and Doris are offered -- a rule that
-                matches differently depending which engine happens to run it would be worse than not offering it.
+                Only comparators proven to behave identically in Python and compiled Doris SQL are offered -- a rule
+                that matches differently depending which path evaluates it would be worse than not offering it.
                 Excluded options are shown below with the reason, not hidden.
             </p>
 

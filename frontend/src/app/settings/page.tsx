@@ -9,8 +9,8 @@
 // they write to routes_config.py's in-memory _config_store, which only
 // the legacy ad-hoc Excel/CSV upload path (api/routes_upload.py ->
 // services/run_service.py's execute_run) ever reads. The real
-// Datasource pipeline (pipeline/duckdb_orchestrator.py,
-// pipeline/doris_orchestrator.py) reads exclusively from
+// Datasource pipeline (pipeline/doris_orchestrator.py) reads
+// exclusively from
 // engine.rules.store.get_active_catalog() -- i.e. everything below
 // under "Blocking Rules" / "Matching & Confidence". That legacy config
 // mechanism is NOT removed (the Upload page and its backend path still
