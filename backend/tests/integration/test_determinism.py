@@ -1,7 +1,7 @@
 """
-Proves the DuckDB pipeline is bit-reproducible: the same (input,
-ruleset) always yields an identical output_fingerprint, run after run,
-process after process, regardless of PYTHONHASHSEED.
+Proves the pipeline is bit-reproducible: the same (input, ruleset)
+always yields an identical output_fingerprint, run after run, process
+after process, regardless of PYTHONHASHSEED.
 
 PYTHONHASHSEED is deliberately DIFFERENT on every trial. That is the
 whole point: if any set()/dict() iteration order leaks into the
@@ -9,11 +9,19 @@ output -- and before this rework it did, via UnionFind.get_clusters()
 returning Set[str] and cluster_manager picking members[0] off an
 unordered set -- trial 0 would disagree with trial 1. Pinning the seed
 to a fixed value would HIDE that class of bug rather than catch it.
+That shared clustering code (engine.clustering) is unchanged by which
+pipeline engine runs it, so this property is exactly as meaningful for
+Doris as it was for the now-removed DuckDB engine this test originally
+ran against.
 
 Each trial runs in a SEPARATE SUBPROCESS, not a loop in this process,
 because engine.clustering.cluster_manager._cluster_manager and
 engine.graph.neo4j_writer._writer are process-global singletons that
 would accumulate state across in-process trials and pass falsely.
+
+Requires a live Doris instance reachable over MySQL (port 9130) --
+skips gracefully if unreachable, since this exercises real
+infrastructure, not just code.
 """
 
 import json
@@ -21,23 +29,28 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SAMPLE_PARQUET = os.environ.get(
     "CUIN_TEST_SAMPLE_PARQUET",
     os.path.join(BACKEND_DIR, "tests", "fixtures", "sample_5k.parquet"),
 )
 
+DORIS_HOST = os.environ.get("DORIS_HOST", "127.0.0.1")
+DORIS_MYSQL_PORT = int(os.environ.get("DORIS_MYSQL_PORT", "9130"))
+
 
 def _run_pipeline_subprocess(hash_seed: int, parquet_path: str) -> dict:
     driver = f'''
 import asyncio, sys, json
 sys.path.insert(0, {BACKEND_DIR!r})
-import pipeline.duckdb_orchestrator as mod
+import pipeline.doris_orchestrator as mod
 mod.PARQUET_PATH = {parquet_path!r}
-from pipeline.duckdb_orchestrator import DuckDBPipelineOrchestrator
+from pipeline.doris_orchestrator import DorisPipelineOrchestrator
 
 async def main():
-    orch = DuckDBPipelineOrchestrator(run_id="determinism-test")
+    orch = DorisPipelineOrchestrator(run_id="determinism-test")
     result = await orch.run(run_id="determinism-test", mode="FULL")
     print(json.dumps({{
         "success": result.success,
@@ -65,8 +78,13 @@ asyncio.run(main())
 
 def test_pipeline_is_bit_reproducible():
     if not os.path.exists(SAMPLE_PARQUET):
-        import pytest
         pytest.skip(f"fixture not found: {SAMPLE_PARQUET} (see tests/fixtures/README.md)")
+
+    try:
+        import pymysql
+        pymysql.connect(host=DORIS_HOST, port=DORIS_MYSQL_PORT, user="root", password="", connect_timeout=3).close()
+    except Exception as e:
+        pytest.skip(f"No live Doris instance reachable at {DORIS_HOST}:{DORIS_MYSQL_PORT}: {e}")
 
     trials = [_run_pipeline_subprocess(seed, SAMPLE_PARQUET) for seed in (0, 7919, 15838)]
 
@@ -86,7 +104,6 @@ def test_ruleset_change_changes_fingerprint(tmp_path):
     test_pipeline_is_bit_reproducible.
     """
     if not os.path.exists(SAMPLE_PARQUET):
-        import pytest
         pytest.skip(f"fixture not found: {SAMPLE_PARQUET}")
 
     sys.path.insert(0, BACKEND_DIR)

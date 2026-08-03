@@ -7,13 +7,17 @@ originally hardcoded it. See engine.rules.match_rules'
 ATTRIBUTE_RAW_COLUMN, engine.scoring.confidence._score_raw_column_rule,
 engine.rules.confidence_compiler._raw_column_confidence_cte.
 
-Proves, on the real 5k fixture:
+Proves, on the real 5k fixture, run through live Doris:
   1. Every Tier-A comparator's Python evaluator (engine.rules.
      comparators.evaluate_python) agrees with its SQL twin.
   2. A RAW_COLUMN match rule scores identically in score_pair() (the
      Python path the live pipeline actually decides through) and
      compile_confidence_sql() (the SQL path redecide/reblock use) --
      scalar comparator, array comparator, and both veto kinds.
+
+Requires a live Doris instance (see tests/integration/_doris_fixture.py)
+-- moved from tests/unit/ during the Doris-only migration, since it can
+no longer run against an in-process DuckDB connection.
 """
 
 import os
@@ -22,25 +26,12 @@ from datetime import date
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-import duckdb
-import pytest
-
-from engine.normalize.explode import build_identifiers_table
-from engine.blocking.suppression import build_frequency_table
-from engine.blocking.deterministic_blocker import build_candidate_pairs, build_name_dob_keys
-from engine.scoring.evidence import build_pair_evidence
 from engine.scoring.confidence import score_pair
 from engine.rules.confidence_compiler import compile_confidence_sql
 from engine.rules.match_rules import MatchRule, MatchRuleset, VETO_BOTH_PRESENT_NO_OVERLAP, VETO_BOTH_QUALIFIED_AND_DIFFER
 from engine.rules.comparators import COMPARATORS, evaluate_python, prep_raw_value
-from engine.ports.duckdb_dialect import DuckDbDialect
 
-SAMPLE_PARQUET = os.path.join(os.path.dirname(__file__), "..", "fixtures", "sample_5k.parquet")
-
-
-def _skip_if_missing():
-    if not os.path.exists(SAMPLE_PARQUET):
-        pytest.skip(f"fixture not found: {SAMPLE_PARQUET}")
+from _doris_fixture import DorisEvidenceFixture, bare_connection, execute_multi, parse_doris_array, skip_unless_doris_reachable
 
 
 def _dialect_literal(value, dialect):
@@ -56,10 +47,10 @@ def _dialect_literal(value, dialect):
 
 
 # ----------------------------------------------------------------------
-# 1. Comparator Python <-> SQL parity, synthetic values (DuckDB -- the
-#    comparator SQL is dialect-neutral through engine.ports.dialect,
-#    already proven portable elsewhere this session for every one of
-#    these functions via the blocking/evidence dialect parity suites).
+# 1. Comparator Python <-> SQL parity, synthetic values, run through
+#    live Doris (the comparator SQL is dialect-neutral through
+#    engine.ports.dialect, already proven portable elsewhere via the
+#    blocking/evidence dialect parity suites).
 # ----------------------------------------------------------------------
 
 _CASES = {
@@ -74,27 +65,33 @@ _CASES = {
 
 
 def test_comparator_python_sql_parity():
-    con = duckdb.connect()
-    dialect = DuckDbDialect()
-    for comparator in COMPARATORS:
-        if not comparator.implemented:
-            continue
-        cases = _CASES.get(comparator.id)
-        assert cases is not None, f"no test cases declared for comparator {comparator.id!r}"
-        params = {k: v["default"] for k, v in comparator.params_schema.items()}
-        for value_a, value_b in cases:
-            sql_expr = comparator.sql(
-                _dialect_literal(value_a, dialect), _dialect_literal(value_b, dialect), params, dialect,
-            )
-            sql_result = con.execute(f"SELECT {sql_expr}").fetchone()[0]
-            if comparator.id == "token_jaccard":
-                sql_matched = bool(sql_result) and sql_result >= params.get("threshold", 0.5)
-            else:
-                sql_matched = bool(sql_result)
-            py_matched = evaluate_python(comparator.id, value_a, value_b, params)
-            assert py_matched == sql_matched, (
-                f"{comparator.id}({value_a!r}, {value_b!r}): python={py_matched}, sql={sql_result!r}"
-            )
+    skip_unless_doris_reachable()
+    from engine.ports.doris_dialect import DorisDialect
+
+    con = bare_connection()
+    dialect = DorisDialect()
+    try:
+        for comparator in COMPARATORS:
+            if not comparator.implemented:
+                continue
+            cases = _CASES.get(comparator.id)
+            assert cases is not None, f"no test cases declared for comparator {comparator.id!r}"
+            params = {k: v["default"] for k, v in comparator.params_schema.items()}
+            for value_a, value_b in cases:
+                sql_expr = comparator.sql(
+                    _dialect_literal(value_a, dialect), _dialect_literal(value_b, dialect), params, dialect,
+                )
+                sql_result = con.execute(f"SELECT {sql_expr}").fetchone()[0]
+                if comparator.id == "token_jaccard":
+                    sql_matched = bool(sql_result) and sql_result >= params.get("threshold", 0.5)
+                else:
+                    sql_matched = bool(sql_result)
+                py_matched = evaluate_python(comparator.id, value_a, value_b, params)
+                assert py_matched == sql_matched, (
+                    f"{comparator.id}({value_a!r}, {value_b!r}): python={py_matched}, sql={sql_result!r}"
+                )
+    finally:
+        con.close()
 
 
 # ----------------------------------------------------------------------
@@ -104,14 +101,12 @@ def test_comparator_python_sql_parity():
 # ----------------------------------------------------------------------
 
 def _build_pairs_and_raw(con):
-    build_identifiers_table(con)
-    build_frequency_table(con)
-    build_name_dob_keys(con)
-    build_candidate_pairs(con)
-    build_pair_evidence(con)
     pairs = con.execute("SELECT a_key, b_key FROM candidate_pairs").fetchall()
     raw_rows = con.execute("SELECT CUSTOMER_CODE, SPONSOR_NAME, BRANCH_CODE, TELEPHONE FROM raw").fetchall()
-    raw_by_code = {code: {"SPONSOR_NAME": sp, "BRANCH_CODE": bc, "TELEPHONE": tel} for code, sp, bc, tel in raw_rows}
+    raw_by_code = {
+        code: {"SPONSOR_NAME": sp, "BRANCH_CODE": bc, "TELEPHONE": parse_doris_array(tel)}
+        for code, sp, bc, tel in raw_rows
+    }
     return pairs, raw_by_code
 
 
@@ -129,19 +124,15 @@ def _score_all(con, pairs, raw_by_code, ruleset, raw_columns):
     return results
 
 
-def _run_sql(con, ruleset):
-    con.execute(compile_confidence_sql(ruleset, DuckDbDialect(), table_name="pair_decisions_rawcol"))
+def _run_sql(con, dialect, ruleset):
+    execute_multi(con, compile_confidence_sql(ruleset, dialect, table_name="pair_decisions_rawcol"))
     rows = con.execute("SELECT a_key, b_key, confidence_pct, decision FROM pair_decisions_rawcol").fetchall()
-    return {(a, b): (round(c, 4), d) for a, b, c, d in rows}
+    return {(a, b): (round(float(c), 4), d) for a, b, c, d in rows}
 
 
 def test_raw_column_scalar_prefix_rule_parity():
     """BRANCH_CODE exact match, no veto -- the simplest custom field."""
-    _skip_if_missing()
-    con = duckdb.connect()
-    con.execute("SET preserve_insertion_order=true")
-    con.execute(f"CREATE OR REPLACE VIEW raw AS SELECT * FROM read_parquet('{SAMPLE_PARQUET}')")
-    pairs, raw_by_code = _build_pairs_and_raw(con)
+    skip_unless_doris_reachable()
 
     rule = MatchRule(
         rule_id="branch_match", attribute="RAW_COLUMN", comparator="exact",
@@ -149,8 +140,10 @@ def test_raw_column_scalar_prefix_rule_parity():
     )
     ruleset = MatchRuleset(match_rules=(rule,), auto_link_min_confidence=10.0, review_min_confidence=5.0)
 
-    py_results = _score_all(con, pairs, raw_by_code, ruleset, ["BRANCH_CODE"])
-    sql_results = _run_sql(con, ruleset)
+    with DorisEvidenceFixture("cuin_test_rawcol_match_branch") as fx:
+        pairs, raw_by_code = _build_pairs_and_raw(fx.con)
+        py_results = _score_all(fx.con, pairs, raw_by_code, ruleset, ["BRANCH_CODE"])
+        sql_results = _run_sql(fx.con, fx.dialect, ruleset)
 
     assert set(py_results) == set(sql_results)
     mismatches = [(k, py_results[k], sql_results[k]) for k in py_results if py_results[k] != sql_results[k]]
@@ -159,11 +152,7 @@ def test_raw_column_scalar_prefix_rule_parity():
 
 def test_raw_column_scalar_token_jaccard_with_veto_parity():
     """SPONSOR_NAME token_jaccard, WITH the generalized both_qualified_and_differ veto."""
-    _skip_if_missing()
-    con = duckdb.connect()
-    con.execute("SET preserve_insertion_order=true")
-    con.execute(f"CREATE OR REPLACE VIEW raw AS SELECT * FROM read_parquet('{SAMPLE_PARQUET}')")
-    pairs, raw_by_code = _build_pairs_and_raw(con)
+    skip_unless_doris_reachable()
 
     rule = MatchRule(
         rule_id="sponsor_match", attribute="RAW_COLUMN", comparator="token_jaccard",
@@ -172,8 +161,10 @@ def test_raw_column_scalar_token_jaccard_with_veto_parity():
     )
     ruleset = MatchRuleset(match_rules=(rule,), auto_link_min_confidence=15.0, review_min_confidence=5.0)
 
-    py_results = _score_all(con, pairs, raw_by_code, ruleset, ["SPONSOR_NAME"])
-    sql_results = _run_sql(con, ruleset)
+    with DorisEvidenceFixture("cuin_test_rawcol_match_sponsor") as fx:
+        pairs, raw_by_code = _build_pairs_and_raw(fx.con)
+        py_results = _score_all(fx.con, pairs, raw_by_code, ruleset, ["SPONSOR_NAME"])
+        sql_results = _run_sql(fx.con, fx.dialect, ruleset)
 
     assert set(py_results) == set(sql_results)
     mismatches = [(k, py_results[k], sql_results[k]) for k in py_results if py_results[k] != sql_results[k]]
@@ -186,11 +177,7 @@ def test_raw_column_scalar_token_jaccard_with_veto_parity():
 
 def test_raw_column_array_set_intersect_with_veto_parity():
     """TELEPHONE (raw, unvalidated array) set_intersect, WITH the generalized both_present_no_overlap veto."""
-    _skip_if_missing()
-    con = duckdb.connect()
-    con.execute("SET preserve_insertion_order=true")
-    con.execute(f"CREATE OR REPLACE VIEW raw AS SELECT * FROM read_parquet('{SAMPLE_PARQUET}')")
-    pairs, raw_by_code = _build_pairs_and_raw(con)
+    skip_unless_doris_reachable()
 
     rule = MatchRule(
         rule_id="telephone_match", attribute="RAW_COLUMN", comparator="set_intersect",
@@ -199,8 +186,10 @@ def test_raw_column_array_set_intersect_with_veto_parity():
     )
     ruleset = MatchRuleset(match_rules=(rule,), auto_link_min_confidence=15.0, review_min_confidence=5.0)
 
-    py_results = _score_all(con, pairs, raw_by_code, ruleset, ["TELEPHONE"])
-    sql_results = _run_sql(con, ruleset)
+    with DorisEvidenceFixture("cuin_test_rawcol_match_tel") as fx:
+        pairs, raw_by_code = _build_pairs_and_raw(fx.con)
+        py_results = _score_all(fx.con, pairs, raw_by_code, ruleset, ["TELEPHONE"])
+        sql_results = _run_sql(fx.con, fx.dialect, ruleset)
 
     assert set(py_results) == set(sql_results)
     mismatches = [(k, py_results[k], sql_results[k]) for k in py_results if py_results[k] != sql_results[k]]
@@ -209,12 +198,19 @@ def test_raw_column_array_set_intersect_with_veto_parity():
 
 def test_prep_raw_value_split_matches_sql_str_split():
     """Double-space edge case: Python's str.split(' ') must keep the empty element, like SQL str_split(s, ' ') does."""
-    con = duckdb.connect()
-    dialect = DuckDbDialect()
-    s = "JOHN  SMITH"
-    sql_tokens = con.execute(f"SELECT {dialect.str_split(dialect.quote_str(s), ' ')}").fetchone()[0]
-    py_tokens = prep_raw_value(s, "token_jaccard", is_array=False)
-    assert list(sql_tokens) == py_tokens, f"sql={sql_tokens!r} python={py_tokens!r}"
+    skip_unless_doris_reachable()
+    from engine.ports.doris_dialect import DorisDialect
+
+    con = bare_connection()
+    dialect = DorisDialect()
+    try:
+        s = "JOHN  SMITH"
+        raw_tokens = con.execute(f"SELECT {dialect.str_split(dialect.quote_str(s), ' ')}").fetchone()[0]
+        sql_tokens = parse_doris_array(raw_tokens)
+        py_tokens = prep_raw_value(s, "token_jaccard", is_array=False)
+        assert sql_tokens == py_tokens, f"sql={sql_tokens!r} python={py_tokens!r}"
+    finally:
+        con.close()
 
 
 if __name__ == "__main__":

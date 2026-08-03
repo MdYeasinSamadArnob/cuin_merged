@@ -33,11 +33,34 @@ import re
 import httpx
 import pyarrow.parquet as pq
 
-_CONTROL_CHARS_RE = re.compile(r"[\r\n\t]")
+# \r\n\t: control characters, never meaningful content (see
+# export_parquet_to_ndjson's docstring for the original \r-in-DOCUMENT
+# incident this targeted). \\: a literal backslash also found live in
+# TELEPHONE data (e.g. "8114503\8812129", two numbers seemingly
+# concatenated by mistake at the source) -- Doris's own array-to-JSON
+# serialization on the way OUT (SELECT ... FROM raw, not the way in)
+# doesn't correctly escape a stored backslash, producing invalid JSON
+# text (an unrecognized "\8" escape sequence) that json.loads() cannot
+# parse. Same fix as \r: strip at the ingestion boundary rather than
+# work around Doris's serialization on every read.
+_CONTROL_CHARS_RE = re.compile(r"[\r\n\t\\]")
 
 logger = logging.getLogger(__name__)
 
-RAW_TABLE_COLUMNS = ("CUSTOMER_CODE", "NAME", "BIRTH_DATE", "MOBILE", "EMAIL", "DOCUMENT", "FULL_ADDRESS")
+# Must match the FULL source Parquet schema, not just the columns the
+# default ruleset happens to reference today -- the LOCAL() read-in-
+# place path (the primary path, see local_parquet_view_sql) does
+# `SELECT *` and so already exposes every source column; this Stream
+# Load fallback path (used when LOCAL() isn't available -- multi-BE
+# clusters, or no BE-local filesystem access, e.g. this module's own
+# test fixtures) used to expose a narrower, hardcoded subset, silently
+# breaking any RAW_COLUMN rule referencing BRANCH_CODE/SPONSOR_NAME/
+# TELEPHONE only when Doris happened to fall back to this path --
+# fixed here so both ingest paths are schema-equivalent.
+RAW_TABLE_COLUMNS = (
+    "CUSTOMER_CODE", "NAME", "SPONSOR_NAME", "BRANCH_CODE", "BIRTH_DATE",
+    "MOBILE", "TELEPHONE", "EMAIL", "DOCUMENT", "FULL_ADDRESS",
+)
 
 
 def create_raw_table_sql(buckets: int = 32) -> str:
@@ -45,8 +68,11 @@ def create_raw_table_sql(buckets: int = 32) -> str:
 CREATE TABLE IF NOT EXISTS raw (
     CUSTOMER_CODE VARCHAR(64) NOT NULL,
     NAME          VARCHAR(500),
+    SPONSOR_NAME  VARCHAR(500),
+    BRANCH_CODE   VARCHAR(64),
     BIRTH_DATE    VARCHAR(32),
     MOBILE        ARRAY<TEXT>,
+    TELEPHONE     ARRAY<TEXT>,
     EMAIL         ARRAY<TEXT>,
     DOCUMENT      ARRAY<TEXT>,
     FULL_ADDRESS  ARRAY<TEXT>
@@ -68,28 +94,34 @@ def export_parquet_to_ndjson(parquet_path: str, out_path: str, limit: int = None
     """
     Returns the number of rows written.
 
-    Strips embedded control characters (\\r, \\n, \\t) from every
-    string/array-of-string field before export. Found live, on the
-    full 1.5M-row dataset specifically (never surfaced on the 5k
-    sample): a source DOCUMENT value containing a stray trailing \\r
-    (real-world data noise) round-trips through the old DuckDB-based
-    JSON export correctly (properly escaped as the 2-byte sequence
-    \\r), but Doris's Stream Load JSON parser does not correctly
-    unescape it -- it comes out the other side as a literal lowercase
-    'r' character appended to the value, which then fails TIN
-    validation (regexp '^[0-9]{12}$'). One pair out of 549,879 differed
-    because of exactly this. Control characters are never meaningful
-    content in any of these fields, so stripping them at the ingestion
-    boundary is a safe, narrow fix -- NULL array elements are preserved
-    as JSON null (not stripped/dropped), matching the prior
-    implementation's list_transform-over-NULL semantics.
+    Strips embedded control characters (\\r, \\n, \\t) and stray
+    backslashes from every string/array-of-string field before export.
+    Two real-world data-noise incidents found this way: (1) a source
+    DOCUMENT value containing a stray trailing \\r round-trips through
+    the JSON export correctly on the way in, but Doris's Stream Load
+    JSON parser does not correctly unescape it -- it comes out the
+    other side as a literal lowercase 'r' character appended to the
+    value, which then fails TIN validation (regexp '^[0-9]{12}$"). One
+    pair out of 549,879 differed because of exactly this. (2) a source
+    TELEPHONE value containing a literal backslash (e.g.
+    "8114503\\8812129", apparently two numbers concatenated by mistake
+    at the source) round-trips in fine, but Doris's own array-to-JSON
+    serialization on the way OUT (SELECT ... FROM raw) does not
+    correctly escape the stored backslash, producing invalid JSON text
+    a naive json.loads() cannot parse. Neither control characters nor
+    backslashes are ever meaningful content in any of these fields, so
+    stripping them at the ingestion boundary is a safe, narrow fix that
+    sidesteps Doris's JSON (de)serialization quirks on both ends rather
+    than working around them on every read -- NULL array elements are
+    preserved as JSON null (not stripped/dropped), matching the prior
+    DuckDB implementation's list_transform-over-NULL semantics.
     """
     table = pq.read_table(parquet_path, columns=list(RAW_TABLE_COLUMNS))
     if limit:
         table = table.slice(0, limit)
 
-    scalar_cols = ["CUSTOMER_CODE", "NAME", "BIRTH_DATE"]
-    array_cols = ["MOBILE", "EMAIL", "DOCUMENT", "FULL_ADDRESS"]
+    scalar_cols = ["CUSTOMER_CODE", "NAME", "SPONSOR_NAME", "BRANCH_CODE", "BIRTH_DATE"]
+    array_cols = ["MOBILE", "TELEPHONE", "EMAIL", "DOCUMENT", "FULL_ADDRESS"]
     columns = {c: table.column(c).to_pylist() for c in RAW_TABLE_COLUMNS}
     n_rows = table.num_rows
 
