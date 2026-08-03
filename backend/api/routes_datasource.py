@@ -20,10 +20,6 @@ class DatasourceStartRequest(BaseModel):
     # Ruleset v2, used by every dev/CI environment -- the import is lazy
     # so a deployment without Doris configured never pays for it unless
     # this engine is actually requested.
-    # "spark" is kept available for comparison/rollback but is not the
-    # default -- it retrains Splink's m/u probabilities on every run
-    # with no fixed seed, so identical input can produce different
-    # clusters between runs (see engine.ruleset for the replacement).
     engine: str = "doris"
     # A bank re-running ingestion after finding a mismatch in their
     # source system (the actual, stated reason this option exists) wants
@@ -106,15 +102,7 @@ async def start_datasource_demo(
                     from pipeline.doris_orchestrator import DorisPipelineOrchestrator
                     orchestrator_cls = DorisPipelineOrchestrator
                 else:
-                    # Imported lazily, not at module load time: pyspark/
-                    # splink are excluded from the Docker image's dependency
-                    # set (requirements-docker.txt) since only this legacy/
-                    # rollback path needs them -- the app must still boot
-                    # fine when they aren't installed, and only requesting
-                    # engine=spark should fail, with a clear error, not the
-                    # whole API refusing to start.
-                    from pipeline.spark_orchestrator import SparkPipelineOrchestrator
-                    orchestrator_cls = SparkPipelineOrchestrator
+                    raise ValueError(f"Unknown engine: {request.engine!r} (expected 'duckdb' or 'doris')")
                 orchestrator = orchestrator_cls(
                     progress_callback=progress_callback,
                     run_id=run.run_id
