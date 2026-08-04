@@ -200,7 +200,21 @@ def _compile_token_key(rule: BlockingRule, dialect: SqlDialect) -> Tuple[List[st
         WHERE {tok_ref} IS NOT NULL AND {tok_ref} != ''
     """)]
 
+    # Both guards cap the SAME thing here (a token's global frequency),
+    # unlike EXACT_IDENTIFIER/COMPOSITE_KEY where max_block_size caps
+    # the joined pair count directly -- for a single-column self-join,
+    # a token appearing in N records always produces exactly N*(N-1)/2
+    # pairs, so capping frequency at sqrt(2*max_block_size) bounds the
+    # worst case. Take the tighter of the two, same pattern as
+    # _compile_prefix_key, so a rule's "Max block size" guard isn't
+    # silently ignored just because it's a TOKEN_KEY rule.
+    caps = []
     if rule.guards.max_key_frequency:
+        caps.append(rule.guards.max_key_frequency)
+    if rule.guards.max_block_size:
+        caps.append(int((2 * rule.guards.max_block_size) ** 0.5))
+    if caps:
+        cap = min(caps)
         tokens_table = _rule_table(rule, "tokens")
         freq_table = _rule_table(rule, "freq")
         setup.append(dialect.create_or_replace_table(freq_table, f"""
@@ -210,7 +224,7 @@ def _compile_token_key(rule: BlockingRule, dialect: SqlDialect) -> Tuple[List[st
         setup.append(dialect.create_or_replace_table(tokens_table, f"""
             SELECT t.customer_code, t.token FROM {raw_table} t
             JOIN {freq_table} f ON t.token = f.token
-            WHERE f.n_records <= {rule.guards.max_key_frequency}
+            WHERE f.n_records <= {cap}
         """))
     else:
         tokens_table = raw_table

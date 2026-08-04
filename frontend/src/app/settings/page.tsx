@@ -308,6 +308,51 @@ export default function SettingsPage() {
         setAddingField("");
     };
 
+    // ---- Fuzzy(-ish) address blocking: a TOKEN_KEY rule against
+    // customer_scalars.address_tokens (word-tokenized address, common
+    // structural words like RD/ST/APT/directionals excluded server-side
+    // -- see engine/normalize/explode_dialect.py). TOKEN_KEY rules have
+    // no generic "pick a field" creation path above (that dropdown only
+    // ever builds RAW_COLUMN rules from the discovered source schema;
+    // address_tokens is a derived pipeline column, not a source
+    // column), so this is a dedicated one-off "add" action rather than
+    // a dropdown entry.
+    const hasAddressTokenRule = blockingRules.some((r) => r.type === "token_key" && r.fields[0] === "address_tokens");
+    const addAddressTokenRule = () => {
+        setDirty(true);
+        setBlockingRules((prev) => [...prev, {
+            rule_id: `rule_${Date.now().toString(36)}`,
+            type: "token_key",
+            enabled: true,
+            order: prev.length + 1,
+            label: "Fuzzy address match (shared word)",
+            fields: ["address_tokens"],
+            params: {},
+            // Deliberately tight. Verified live against a real 1.5M-row
+            // dataset: address components have a MUCH fatter frequency
+            // distribution than name tokens (a country has a few
+            // thousand distinct area/city names, not tens of thousands
+            // of distinct surnames) -- "DHAKA" alone appeared on
+            // ~144,000 records. A guard that looks generous for
+            // name-token blocking (e.g. 2000) is catastrophic here: it
+            // took Doris to an 85GB OOM and killed the query. At
+            // max_key_frequency=20, estimated join output is ~5.6M rows
+            // (empirically measured); a banker who wants more recall
+            // can raise this, but should watch pipeline duration/memory
+            // closely when doing so.
+            guards: { max_key_frequency: 20, max_block_size: null, min_key_parts: null },
+            description: (
+                "Self-joins on any shared word from a customer's address(es) -- " +
+                "house number, street name, area/city. Common structural words " +
+                "(RD/ST/APT/BLK and bare directionals) are excluded before this " +
+                "rule ever sees them, so a match here means a real distinguishing " +
+                "word was shared. Broader recall than exact address match: catches " +
+                "a typo/abbreviation difference in ONE word as long as another word " +
+                "still matches exactly -- it is not similarity-scored, just token overlap."
+            ),
+        }]);
+    };
+
     // ---- Search ----
     const [searchQuery, setSearchQuery] = useState("");
     const debouncedSearch = useDebounced(searchQuery, 400);
@@ -462,6 +507,21 @@ export default function SettingsPage() {
                             <p className="text-[11px] text-gray-400 mt-2">
                                 Every field is listed in the Fields tab with its explosion-risk check -- pick any of them here to block on it.
                             </p>
+
+                            <div className="flex items-center justify-between gap-3 mt-3 pt-3 border-t border-gray-100 dark:border-gray-800">
+                                <p className="text-[11px] text-gray-400">
+                                    Exact address match above only groups byte-identical addresses. Word-token blocking
+                                    catches typos/abbreviation differences in one word as long as another word still matches.
+                                </p>
+                                <button
+                                    onClick={addAddressTokenRule}
+                                    disabled={hasAddressTokenRule}
+                                    className="btn btn-ghost gap-1 !py-1.5 !px-3 text-xs disabled:opacity-40 shrink-0"
+                                    title={hasAddressTokenRule ? "Already added" : "Add a fuzzy(-ish) address blocking rule"}
+                                >
+                                    <Plus size={14} /> Add fuzzy address blocking
+                                </button>
+                            </div>
                         </div>
                     )}
 

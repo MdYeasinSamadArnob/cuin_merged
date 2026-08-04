@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS customer_scalars (
     customer_code VARCHAR(64) NOT NULL,
     name_norm     VARCHAR(500),
     name_tokens   ARRAY<TEXT>,
+    address_tokens ARRAY<TEXT>,
     dob_iso       VARCHAR(10),
     dob_precision VARCHAR(10)
 )

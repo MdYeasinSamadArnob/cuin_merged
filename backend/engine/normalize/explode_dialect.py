@@ -32,6 +32,16 @@ _BD_ADDRESS_ABBREV = [
     (r"\bEAST\b", "E"), (r"\bWEST\b", "W"),
 ]
 
+# Tokens dropped from address_tokens (customer_scalars, TOKEN_KEY
+# blocking) -- the abbreviated forms _BD_ADDRESS_ABBREV produces, plus
+# bare directionals. These appear in nearly every address (by the time
+# tokenization runs, _address_normalize_expr has already collapsed
+# "ROAD"/"STREET"/etc down to exactly these strings), so keeping them
+# as blocking keys would create massive, non-selective blocks instead
+# of useful ones -- the house number, street name, and area/city
+# tokens are what actually discriminate one address from another.
+_ADDRESS_TOKEN_STOPWORDS = ["RD", "ST", "AVE", "BLDG", "FL", "APT", "BLK", "WD", "UPZ", "DIST", "N", "S", "E", "W"]
+
 
 def _array_literal(values, dialect) -> str:
     return "[" + ", ".join(dialect.quote_str(v) for v in values) + "]"
@@ -221,6 +231,9 @@ def _build_customer_scalars(con, dialect, source_relation: str, honorifics_lit: 
     name_collapsed_ws = dialect.regexp_replace_all("name_stage1", r"\s+", " ")
     name_norm_expr = f"trim({name_collapsed_ws})"
 
+    addr_stopwords_lit = _array_literal(_ADDRESS_TOKEN_STOPWORDS, dialect)
+    addr_tok_ref = dialect.unnest_column_ref("atok")
+
     select_sql = f"""
         WITH name_norm_cte AS (
             SELECT
@@ -252,11 +265,39 @@ def _build_customer_scalars(con, dialect, source_relation: str, honorifics_lit: 
                      AND {dialect.array_contains(honorifics_lit, dialect.array_element('tokens1', 1))}
                      THEN {dialect.array_slice_from('tokens1', 2)} ELSE tokens1 END AS name_tokens
             FROM name_stripped_cte
+        ),
+        -- Fuzzy(-ish) address blocking support: word-tokenize the SAME
+        -- validated, normalized address value already used for exact
+        -- address blocking (identifiers WHERE id_type='address'), so
+        -- both rules agree on what "the address" means. A customer can
+        -- have multiple addresses (FULL_ADDRESS is an array column) --
+        -- tokens from all of them are flattened into one deduped array
+        -- per customer_code, same shape as name_tokens.
+        address_word_arrays AS (
+            SELECT customer_code, {dialect.str_split('value_norm', ' ')} AS words
+            FROM identifiers
+            WHERE id_type = 'address' AND value_norm IS NOT NULL
+        ),
+        address_tokens_raw AS (
+            SELECT customer_code, {addr_tok_ref} AS token
+            FROM {dialect.unnest_lateral('address_word_arrays', 'words', 'atok')}
+        ),
+        address_tokens_filtered AS (
+            SELECT customer_code, token
+            FROM address_tokens_raw
+            WHERE token IS NOT NULL AND token != ''
+              AND NOT {dialect.array_contains(addr_stopwords_lit, 'token')}
+        ),
+        address_tokens_agg AS (
+            SELECT customer_code, {dialect.collect_distinct_sorted('token')} AS address_tokens
+            FROM address_tokens_filtered
+            GROUP BY customer_code
         )
         SELECT
-            customer_code,
-            CASE WHEN name_norm = '' THEN NULL ELSE name_norm END AS name_norm,
-            {dialect.array_filter_nonempty('name_tokens')} AS name_tokens,
+            n.customer_code,
+            CASE WHEN n.name_norm = '' THEN NULL ELSE n.name_norm END AS name_norm,
+            {dialect.array_filter_nonempty('n.name_tokens')} AS name_tokens,
+            a.address_tokens AS address_tokens,
             {dialect.format_date(parsed_dt, '%Y-%m-%d')} AS dob_iso,
             CASE
                 WHEN {parsed_dt} IS NULL THEN NULL
@@ -265,7 +306,8 @@ def _build_customer_scalars(con, dialect, source_relation: str, honorifics_lit: 
                     THEN 'YEAR_ONLY'
                 ELSE 'FULL'
             END AS dob_precision
-        FROM name_final_cte
+        FROM name_final_cte n
+        LEFT JOIN address_tokens_agg a ON a.customer_code = n.customer_code
     """
     for stmt in dialect.create_or_replace_table("customer_scalars", select_sql).split(";\n"):
         stmt = stmt.strip()

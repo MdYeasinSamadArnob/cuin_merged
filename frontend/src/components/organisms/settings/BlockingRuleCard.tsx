@@ -12,7 +12,7 @@ const ID_TYPE_LABELS: Record<string, string> = {
 };
 const ID_TYPES = Object.keys(ID_TYPE_LABELS);
 const SCALAR_FIELDS = ["name_norm", "dob_iso", "name_key"];
-const ARRAY_FIELDS = ["name_tokens"];
+const ARRAY_FIELDS = ["name_tokens", "address_tokens"];
 const DATE_PARTS = ["year", "month", "day"];
 
 interface Props {

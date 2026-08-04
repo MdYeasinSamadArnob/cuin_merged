@@ -86,7 +86,7 @@ SOURCE_TABLE_BY_TYPE: Dict[BlockingRuleType, str] = {
 # and engine.blocking.suppression -- never an arbitrary column name.
 ALLOWED_FIELDS: Dict[str, Tuple[str, ...]] = {
     "identifiers": ("id_type", "value_norm", "customer_code", "is_valid", "is_suppressed"),
-    "customer_scalars": ("name_norm", "name_tokens", "name_key", "dob_iso", "dob_precision", "customer_code"),
+    "customer_scalars": ("name_norm", "name_tokens", "address_tokens", "name_key", "dob_iso", "dob_precision", "customer_code"),
 }
 
 VALID_ID_TYPES: Tuple[str, ...] = ("mobile", "email", "document", "address")
