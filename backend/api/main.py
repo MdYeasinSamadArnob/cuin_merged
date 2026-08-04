@@ -53,9 +53,8 @@ async def lifespan(app: FastAPI):
     logger.info(f"   Debug mode: {settings.DEBUG}")
     logger.info(f"   API URL: http://{settings.API_HOST}:{settings.API_PORT}")
     
-    # Initialize Databases
+    # Initialize Database
     db_init.init_db()
-    db_init.init_graph()
     
     # Hook up RunService to WebSockets
     run_service = get_run_service()
@@ -96,11 +95,11 @@ Production-grade identity resolution for banking with:
 
 ### Key Features
 - Multi-pass blocking with explainability
-- Splink probabilistic matching
+- Deterministic rule-based confidence scoring
 - Three-tier decision engine (Auto-Link / Review / Reject)
 - Maker-checker review workflow
 - Tamper-evident audit trail
-- Neo4j identity graph projection
+- Postgres-backed identity graph visualization
 
 ### API Sections
 - `/runs` - Manage ER pipeline runs
@@ -157,26 +156,7 @@ async def readiness_check() -> dict:
     Readiness check - verifies all dependencies are available.
     Used by Kubernetes/container orchestrators.
     """
-    # 1. Check Neo4j
-    neo4j_ready = False
-    try:
-        from engine.graph.neo4j_writer import get_neo4j_writer
-        writer = get_neo4j_writer()
-        # Initial check
-        if writer and writer.driver:
-             writer.driver.verify_connectivity()
-             neo4j_ready = True
-        else:
-             # Try re-initializing if None (lazy load attempt)
-             from neo4j import GraphDatabase
-             with GraphDatabase.driver(settings.NEO4J_URI, auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD)) as driver:
-                 driver.verify_connectivity()
-                 neo4j_ready = True
-    except Exception as e:
-        logger.warning(f"Neo4j Health Check Failed: {e}")
-        neo4j_ready = False
-
-    # 2. Check Postgres (via SQLAlchemy or raw connection)
+    # Check Postgres (via SQLAlchemy or raw connection)
     db_ready = False
     try:
         # Simple TCP check or import connection logic if available
@@ -193,7 +173,6 @@ async def readiness_check() -> dict:
     checks = {
         "api": True,
         "database": db_ready,
-        "neo4j": neo4j_ready,
     }
     
     all_ready = all(checks.values())

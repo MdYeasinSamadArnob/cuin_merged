@@ -6,7 +6,7 @@ This is the FastAPI-based backend for the CUIN v2 Identity Intelligence Platform
 
 - **Python**: 3.9+
 - **PostgreSQL**: Running locally or accessible via URL
-- **Neo4j**: (Optional but recommended) Running locally or accessible via URI
+- **Apache Doris**: Running locally or accessible via URI -- the pipeline's only execution engine
 
 ## Local Development Setup
 
@@ -31,7 +31,7 @@ This is the FastAPI-based backend for the CUIN v2 Identity Intelligence Platform
         ```bash
         cp .env.example .env
         ```
-    -   Edit `.env` to match your local database credentials (Postgres, Neo4j).
+    -   Edit `.env` to match your local database credentials (Postgres, Doris).
 
 ## Running the Server
 
@@ -76,4 +76,4 @@ Once the server is running, interactive API docs are available at:
 
 -   **"Command not found: uvicorn"**: Ensure your virtual environment is activated (`source venv/bin/activate`).
 -   **Database connection error**: Check `DATABASE_URL` in `.env` and ensure Postgres is running.
--   **Neo4j connection error**: Check `NEO4J_URI` and credentials in `.env`.
+-   **Doris connection error**: Check `DORIS_HOST`/`DORIS_MYSQL_PORT`/`DORIS_HTTP_PORT` and credentials in `.env`.

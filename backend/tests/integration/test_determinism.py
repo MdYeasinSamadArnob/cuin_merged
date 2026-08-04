@@ -15,9 +15,9 @@ Doris as it was for the now-removed DuckDB engine this test originally
 ran against.
 
 Each trial runs in a SEPARATE SUBPROCESS, not a loop in this process,
-because engine.clustering.cluster_manager._cluster_manager and
-engine.graph.neo4j_writer._writer are process-global singletons that
-would accumulate state across in-process trials and pass falsely.
+because engine.clustering.cluster_manager._cluster_manager is a
+process-global singleton that would accumulate state across
+in-process trials and pass falsely.
 
 Requires a live Doris instance reachable over MySQL (port 9130) --
 skips gracefully if unreachable, since this exercises real

@@ -1,17 +1,17 @@
 # ============================================
 # CUIN v2 - Full Stack Docker Compose
 # ============================================
-# Builds and runs the entire application: Postgres, Neo4j, Redis,
-# the FastAPI backend (Apache Doris entity-resolution pipeline), the
+# Builds and runs the entire application: Postgres, Redis, Apache
+# Doris, the FastAPI backend (Doris entity-resolution pipeline), the
 # Next.js frontend, and the PgAdmin/RedisInsight management UIs.
 #
 # Quick start:
 #   cp infra/.env.example infra/.env      # adjust PUBLIC_HOST + ports
 #   cd infra && docker compose up --build -d
 #
-# Data (Postgres/Neo4j volumes, pipeline run artifacts, the source
-# parquet dataset) lives under ../data and ../backend/data*, shared
-# with the previous host-run setup -- nothing is lost by switching to
+# Data (Postgres volumes, pipeline run artifacts, the source parquet
+# dataset) lives under ../data and ../backend/data*, shared with the
+# previous host-run setup -- nothing is lost by switching to
 # containers.
 #
 # `name:` below pins the Compose PROJECT name explicitly. Without it,
@@ -27,27 +27,6 @@
 name: cuin-controlplane
 
 services:
-  # ------------------------------------------------------------
-  # Identity Graph Database
-  # ------------------------------------------------------------
-  neo4j:
-    image: neo4j:5.15.0
-    container_name: cuin-neo4j
-    ports:
-      - "${NEO4J_HTTP_PORT:-7476}:7474" # HTTP
-      - "${NEO4J_BOLT_PORT:-7689}:7687" # Bolt
-    environment:
-      - NEO4J_AUTH=${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-password123}
-    volumes:
-      - ../data/neo4j/data:/data
-      - ../data/neo4j/logs:/logs
-    healthcheck:
-      test: [ "CMD-SHELL", "wget --no-verbose --tries=1 --spider localhost:7474 || exit 1" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
   # ------------------------------------------------------------
   # Relational Database (records, evidence, audit trail)
   # ------------------------------------------------------------
@@ -166,9 +145,6 @@ services:
       - "${BACKEND_PORT:-8110}:8000"
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-admin}:${POSTGRES_PASSWORD:-password123}@postgres:5432/${POSTGRES_DB:-cuin_db}
-      - NEO4J_URI=bolt://neo4j:7687
-      - NEO4J_USER=${NEO4J_USER:-neo4j}
-      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password123}
       - REDIS_URL=redis://redis:6379/0
       - CORS_ORIGINS=http://${PUBLIC_HOST:-localhost}:${FRONTEND_PORT:-30011},http://localhost:${FRONTEND_PORT:-30011}
       - PERSIST_TO_POSTGRES=true
@@ -187,8 +163,6 @@ services:
       - ../backend/policies:/app/policies
     depends_on:
       postgres:
-        condition: service_healthy
-      neo4j:
         condition: service_healthy
       redis:
         condition: service_healthy

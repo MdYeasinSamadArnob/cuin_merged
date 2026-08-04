@@ -35,7 +35,6 @@ async def reset_all_data():
     - Delete all files in data/runs/ directory
     - Clear the runs_index.json file
     - Truncate all database tables (except genesis audit event)
-    - Clear Neo4j graph data
     - Reset in-memory state
     
     WARNING: This operation is irreversible!
@@ -167,27 +166,7 @@ async def reset_all_data():
             logger.error(f"Failed to clear database tables: {e}")
             # Continue with other cleanup even if DB fails
         
-        # 4. Clear Neo4j graph data
-        try:
-            from api.config import settings
-            from neo4j import GraphDatabase
-            
-            driver = GraphDatabase.driver(
-                settings.NEO4J_URI,
-                auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD)
-            )
-            
-            with driver.session() as session:
-                # Delete all nodes and relationships
-                session.run("MATCH (n) DETACH DELETE n")
-                logger.info("✅ Neo4j graph cleared")
-            
-            driver.close()
-            
-        except Exception as e:
-            logger.warning(f"Failed to clear Neo4j (may not be running): {e}")
-        
-        # 5. Reset in-memory state
+        # 4. Reset in-memory state
         try:
             from services.run_service import get_run_service
             from engine.clustering import get_cluster_manager

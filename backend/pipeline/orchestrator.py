@@ -27,7 +27,6 @@ from engine.matching.splink_engine import SplinkScorer
 from engine.decisioning.decision_engine import DecisionEngine
 from engine.structures import ScoringConfig, MatchDecision, MatchScore
 from engine.clustering import get_cluster_manager
-from engine.graph.neo4j_writer import get_neo4j_writer
 from engine.read_staging import read_staging_data
 from agents.referee_agent import get_referee
 from agents.planner_agent import get_planner_agent
@@ -455,8 +454,7 @@ class PipelineOrchestrator:
         Stage 8: Cluster records and generate golden records.
         """
         start = datetime.utcnow()
-        writer = get_neo4j_writer()
-        
+
         await self._emit_progress(StageProgress(
             stage=PipelineStage.CLUSTER,
             status="running",
@@ -496,12 +494,7 @@ class PipelineOrchestrator:
             cluster_records = [record_map[k] for k in members_keys if k in record_map]
             
             if cluster_records:
-                golden = manager.generate_golden_record(cluster_id, cluster_records)
-                writer.project_cluster(
-                    cluster_id=cluster_id, 
-                    members=cluster_records, 
-                    golden_record=golden.payload
-                )
+                manager.generate_golden_record(cluster_id, cluster_records)
                 generated_count += 1
                 
         duration = int((datetime.utcnow() - start).total_seconds() * 1000)

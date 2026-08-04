@@ -1,23 +1,4 @@
 services:
-  # Identity Graph Database
-  neo4j:
-    image: neo4j:5.15.0
-    container_name: cuin-neo4j
-    ports:
-      - "7475:7474" # HTTP
-      - "7688:7687" # Bolt
-    environment:
-      - NEO4J_AUTH=neo4j/password123
-      # - NEO4J_PLUGINS=["apoc", "graph-data-science"] # Commented out to speed up startup
-    volumes:
-      - ./data/neo4j/data:/data
-      - ./data/neo4j/logs:/logs
-    healthcheck:
-      test: [ "CMD-SHELL", "wget --no-verbose --tries=1 --spider localhost:7474 || exit 1" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   # Relational Database (Records & Audit)
   postgres:
     image: postgres:16-alpine
@@ -81,10 +62,5 @@ services:
   #   build: ./backend
   #   ports:
   #     - "8000:8000"
-  #   environment:
-  #     - NEO4J_URI=bolt://neo4j:7687
-  #     - NEO4J_USER=neo4j
-  #     - NEO4J_PASSWORD=password123
   #   depends_on:
-  #     - neo4j
   #     - postgres

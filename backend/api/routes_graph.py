@@ -1,7 +1,11 @@
 """
 CUIN v2 - Graph API Routes
 
-Neo4j graph projection and visualization endpoints.
+Legacy graph/cluster projection and visualization endpoints, backed by
+the in-memory ClusterManager and per-run parquet/JSON snapshots (not
+Neo4j, despite this module's old docstring -- still used by /explorer,
+/pipeline, and /runs/[id]; the live /graph page is Postgres-backed via
+routes_graph_v2.py instead).
 """
 
 from fastapi import APIRouter, HTTPException, Query

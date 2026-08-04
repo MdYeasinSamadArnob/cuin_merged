@@ -3,7 +3,6 @@ import os
 import time
 import psycopg2
 from pathlib import Path
-from neo4j import GraphDatabase
 
 from api.config import settings
 
@@ -112,52 +111,3 @@ def _apply_migrations(conn, migrations_dir: Path):
         logger.info(f"Migration applied: {migration_file.name}")
 
     cur.close()
-
-def init_graph():
-    """
-    Initialize Graph Database (Neo4j).
-    Creates necessary constraints and indexes.
-    """
-    logger.info("Initializing Graph Constraints...")
-    
-    driver = None
-    try:
-        # Wait for Neo4j
-        for i in range(MAX_RETRIES):
-            try:
-                driver = GraphDatabase.driver(
-                    settings.NEO4J_URI, 
-                    auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD)
-                )
-                driver.verify_connectivity()
-                break
-            except Exception as e:
-                logger.warning(f"Neo4j not ready yet ({i+1}/{MAX_RETRIES}): {e}")
-                time.sleep(RETRY_DELAY)
-                
-        if not driver:
-            logger.error("Could not connect to Neo4j after retries.")
-            return
-
-        with driver.session() as session:
-            # Create constraints (idempotent-ish in Neo4j 5.x with IF NOT EXISTS usually, but let's try raw)
-            
-            # Constraint: Cluster ID must be unique
-            session.run("CREATE CONSTRAINT cluster_id_unique IF NOT EXISTS FOR (c:Cluster) REQUIRE c.id IS UNIQUE")
-            
-            # Constraint: Entity ID unique (if we use Entity label)
-            session.run("CREATE CONSTRAINT entity_id_unique IF NOT EXISTS FOR (e:Entity) REQUIRE e.id IS UNIQUE")
-            
-            # Index: Source System for faster lookups
-            session.run("CREATE INDEX entity_source_idx IF NOT EXISTS FOR (e:Entity) ON (e.source_system)")
-            
-            # Index: Names for search
-            session.run("CREATE INDEX entity_name_idx IF NOT EXISTS FOR (e:Entity) ON (e.name)")
-            
-            logger.info("Graph constraints verified.")
-
-    except Exception as e:
-        logger.error(f"Failed to initialize graph: {e}")
-    finally:
-        if driver:
-            driver.close()

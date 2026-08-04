@@ -98,13 +98,6 @@ class Settings(BaseSettings):
     LAKE_ROOT: str = "./data/lake"
 
     # ----------------------------------------
-    # Neo4j
-    # ----------------------------------------
-    NEO4J_URI: str = "bolt://localhost:7687"
-    NEO4J_USER: str = "neo4j"
-    NEO4J_PASSWORD: str = "neo4j_secret"
-    
-    # ----------------------------------------
     # Referee Agent (LLM)
     # ----------------------------------------
     LLM_ENABLED: bool = False

@@ -5,7 +5,7 @@
 ---
 
 ## 🐳 Quick Start (Docker — Recommended)
-The entire stack — Postgres, Neo4j, Redis, the backend API, and the frontend dashboard — builds and runs from one place: `infra/`.
+The entire stack — Postgres, Redis, Apache Doris, the backend API, and the frontend dashboard — builds and runs from one place: `infra/`.
 
 ### 1. Prerequisites
 **Docker** and **Docker Compose**. That's it — no local Python/Node install needed.
@@ -25,7 +25,7 @@ cp infra/.env.example infra/.env
 Open `infra/.env` and set:
 *   `PUBLIC_HOST` — the address you'll type into your **browser** to reach the app (e.g. `localhost`, or this machine's LAN IP if you're accessing it from another device). This gets baked into the frontend at build time — see the comment in the file.
 *   `BACKEND_UID` / `BACKEND_GID` — set to your host user's `id -u` / `id -g` if you hit `Permission denied` errors on the backend writing to `backend/data/` (a bind-mount ownership mismatch, not a bug in the app).
-*   Ports, if any of the defaults (`8110`, `30011`, `5436`, `7476`, `7689`, `6381`, `18080`, `15540`, `8130`, `9130`, `8040`, `9050`) are already taken on your machine.
+*   Ports, if any of the defaults (`8110`, `30011`, `5436`, `6381`, `18080`, `15540`, `8130`, `9130`, `8040`, `9050`) are already taken on your machine.
 
 ### 4. Up
 ```bash
@@ -51,12 +51,12 @@ docker compose ps
 cd infra
 docker compose down
 ```
-This stops and removes the containers but **keeps your data** — Postgres, Neo4j, and pipeline run artifacts live in bind-mounted host folders (`../data/`, `../backend/data/`), and Doris's data lives in named Docker volumes (`doris_fe_meta`, `doris_be_storage`) — neither is inside a container that gets deleted, so nothing is lost. Run `docker compose up -d` again later and you're back where you left off.
+This stops and removes the containers but **keeps your data** — Postgres and pipeline run artifacts live in bind-mounted host folders (`../data/`, `../backend/data/`), and Doris's data lives in named Docker volumes (`doris_fe_meta`, `doris_be_storage`) — neither is inside a container that gets deleted, so nothing is lost. Run `docker compose up -d` again later and you're back where you left off.
 
 To also wipe the data volumes (start completely fresh):
 ```bash
 docker compose down -v   # -v also removes Doris's named volumes
-rm -rf ../data/postgres ../data/neo4j ../backend/data/runs
+rm -rf ../data/postgres ../backend/data/runs
 ```
 
 ### Rebuilding after a code change
@@ -82,7 +82,7 @@ Why this one command works in both places:
 
 Two things worth being upfront about, honestly, rather than papering over:
 *   **The `vm.max_map_count` host kernel setting from step 2 is mandatory everywhere, including restricted hosts.** Apache Doris is the only pipeline engine — there is no in-process fallback that avoids this requirement. If the host genuinely cannot grant `sudo` to run that one `sysctl` command, that's a real blocker to raise with the platform/ops team before deployment, not something this command can work around.
-*   `docker compose up --build` still needs the base images (`postgres:16-alpine`, `neo4j:5.15.0`, `redis:7-alpine`, `apache/doris:*`, `python`, `node`) to be reachable — either from the internet or a private registry mirror. A fully air-gapped host needs those images pre-pulled/pushed to an internal registry first; that's an infrastructure decision for the bank's ops team, not something a single command can paper over.
+*   `docker compose up --build` still needs the base images (`postgres:16-alpine`, `redis:7-alpine`, `apache/doris:*`, `python`, `node`) to be reachable — either from the internet or a private registry mirror. A fully air-gapped host needs those images pre-pulled/pushed to an internal registry first; that's an infrastructure decision for the bank's ops team, not something a single command can paper over.
 
 ---
 
@@ -93,7 +93,7 @@ Useful for fast iteration on backend/frontend code without rebuilding containers
 ```bash
 docker-compose up -d --build
 ```
-This starts Postgres (`5433`), Neo4j (`7474`), Redis (`6380`), PgAdmin (`18080`), and RedisInsight (`15540`) from the **root** `docker-compose.yml` (infra services only — no backend/frontend containers).
+This starts Postgres (`5435`), Redis (`6380`), PgAdmin (`18080`), and RedisInsight (`15540`) from the **root** `docker-compose.yml` (infra services only — no backend/frontend containers).
 
 This root compose file does **not** include Doris — but Doris is the pipeline's only execution engine, so it's still required even in this "fast local iteration" mode. Do the `vm.max_map_count` host setup from step 2 above, then start just the `doris` service from the full stack's compose file: `cd infra && docker compose up -d doris`. No further configuration needed — `backend/api/config.py`'s defaults (`DORIS_HOST=127.0.0.1`, `DORIS_MYSQL_PORT=9130`, `DORIS_HTTP_PORT=8130`) already match the host ports `infra/docker-compose.yml` publishes Doris on.
 
@@ -120,7 +120,7 @@ npm run dev
 ### Makefile shortcuts
 ```bash
 make install      # installs backend (venv) + frontend (npm) deps
-make docker-up    # starts Postgres, Neo4j, Redis, PgAdmin, RedisInsight
+make docker-up    # starts Postgres, Redis, PgAdmin, RedisInsight
 make dev          # runs backend (uvicorn :8000) + frontend (next :3000) concurrently
 ```
 Other targets: `make test`, `make lint`, `make format`, `make db-migrate`, `make docker-down`, `make clean`. Run `make help` to list them all.
@@ -145,7 +145,7 @@ docker-compose down      # or: make docker-down
 ## 🧠 System Architecture
 *   **Ingest**: Loads the source dataset into Apache Doris; CSVs also land in Postgres (`customers_norm` table).
 *   **Matching**: Deterministic, rule-based blocking and confidence scoring (Ruleset v2) compiled to Doris SQL — see the Settings page's rule editor.
-*   **Graph**: Projects the results into **Neo4j** for visualization.
+*   **Graph**: Entity clusters and relationships are queried straight from Postgres (`entities`/`entity_members`) and rendered by the Identity Graph 360 dashboard.
 *   **Auto-Healing**: on startup, `db_init.py` checks and repairs the database schema.
 
 ---
@@ -164,9 +164,9 @@ If the log mentions `vm.max_map_count`, set it (see step 2) and `docker compose 
 A transient race on a **freshly-created** Doris deployment (empty volumes) — the BE can report itself healthy on its HTTP endpoint slightly before it's finished registering its storage/disk info with the FE. Wait ~30 seconds after `docker compose ps` first shows `doris` healthy, then retry. Only seen on a brand new deployment (fresh volumes); does not recur on subsequent runs against the same Doris instance.
 
 ### Port already in use
-On a shared machine, another project may already be using one of this stack's ports (`5433`, `7474`, `7687`, `8000`, `3000`, `8110`, `30011`, etc.). If `docker-compose up` or a dev server fails with `port is already allocated` / `address already in use`:
+On a shared machine, another project may already be using one of this stack's ports (`5433`, `8000`, `3000`, `8110`, `30011`, etc.). If `docker-compose up` or a dev server fails with `port is already allocated` / `address already in use`:
 1.  Find the offending process/container: `ss -ltnp | grep :<port>` or `docker ps --format '{{.Names}}: {{.Ports}}'`.
-2.  Either stop it, or remap **only your local copy**: edit the host-side port in `docker-compose.yml` (e.g. `"5433:5432"` → `"5435:5432"`) and update `backend/.env`'s `DATABASE_URL`/`NEO4J_URI` (and `frontend/.env.local`'s `NEXT_PUBLIC_API_URL` if you also moved the backend port) to match.
+2.  Either stop it, or remap **only your local copy**: edit the host-side port in `docker-compose.yml` (e.g. `"5433:5432"` → `"5435:5432"`) and update `backend/.env`'s `DATABASE_URL` (and `frontend/.env.local`'s `NEXT_PUBLIC_API_URL` if you also moved the backend port) to match.
 3.  Don't commit personal port remaps — keep them local.
 
 ---
