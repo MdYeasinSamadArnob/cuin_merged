@@ -80,10 +80,35 @@ services:
   doris:
     image: apache/doris:4.0.3-all-slim
     container_name: cuin-doris
-    # The image's entrypoint backgrounds FE/BE then `exec`s CMD; with no
-    # CMD it exits immediately despite FE/BE still running. Keep PID 1
-    # alive so `restart: unless-stopped` actually means something.
-    command: [ "tail", "-f", "/dev/null" ]
+    # No CMD override. The image's own entry_point.sh already keeps PID 1
+    # alive correctly on its own (`wait $child_pid` blocks on the
+    # backgrounded BE process) -- overriding CMD with `tail -f /dev/null`
+    # was actively harmful: entry_point.sh's `trap 'stop_doris' SIGTERM
+    # SIGINT` (which gracefully runs stop_fe.sh/stop_be.sh so BDBJE, the
+    # FE's metadata replication log, closes cleanly) only fires if the
+    # script itself is still PID 1 when SIGTERM arrives. Its last line is
+    # `exec "$@"`, which REPLACES the bash process with the CMD -- so
+    # with `tail -f /dev/null` as CMD, the trap gets exec'd away the
+    # moment startup finishes, and every `docker compose down`/`stop`/
+    # `restart` SIGKILLed the FE/BE Java processes with no graceful
+    # shutdown at all. A real bug, but NOT the full story -- fixing it
+    # alone still left the FE stuck in leader-election limbo after a
+    # full `down`+`up` cycle. Root cause of THAT: `down` removes and
+    # recreates the docker network, and Doris's BDBJE (the FE's metadata
+    # replication log) ties its own node identity to whatever container
+    # IP it saw at bootstrap, persisted in the doris_fe_meta volume.
+    # Without a pinned address, a fresh network recreation can hand the
+    # container a different IP than what's on disk (observed live:
+    # 172.18.0.2 -> 172.18.0.4 across one down/up), and the FE can never
+    # reconcile "the node this persisted state describes" with its own
+    # new address -- stuck in role=UNKNOWN forever. Fixed by pinning a
+    # static IP below (see the `networks:` block at the end of this
+    # file) so the address never moves across recreation, verified live
+    # across a full down/up cycle with the pre-existing (non-empty)
+    # doris_fe_meta volume.
+    networks:
+      default:
+        ipv4_address: 172.18.0.10
     ports:
       - "${DORIS_FE_HTTP_PORT:-8130}:8030" # FE HTTP (Stream Load entry point)
       - "${DORIS_FE_MYSQL_PORT:-9130}:9030" # FE MySQL protocol
@@ -228,3 +253,13 @@ volumes:
   doris_be_storage:
   doris_fe_log:
   doris_be_log:
+
+networks:
+  # Explicit subnet so `doris`'s pinned ipv4_address above is always
+  # valid -- Compose still auto-assigns every other service's address
+  # from this same pool, only Doris needs (and gets) a fixed one.
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.18.0.0/16
