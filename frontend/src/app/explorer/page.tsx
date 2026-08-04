@@ -192,26 +192,6 @@ function ExplorerPageContent() {
         }
     };
 
-    const handleSaveConfig = async (config: any) => {
-        try {
-            // Map to UpdateConfigRequest format
-            const updatePayload = {
-                match_name_weight: config.name_weight,
-                match_phone_weight: config.phone_weight,
-                match_email_weight: config.email_weight,
-                match_dob_weight: config.dob_weight,
-                match_natid_weight: config.natid_weight,
-                match_address_weight: config.address_weight,
-                auto_link_threshold: config.auto_link_threshold,
-                review_threshold: config.review_threshold
-            };
-            await api.updateConfig(updatePayload);
-            console.log('Config saved');
-        } catch (err) {
-            console.error('Failed to save config:', err);
-        }
-    };
-
     const searchParams = useSearchParams();
     const urlRunId = searchParams.get('runId');
 
@@ -570,7 +550,6 @@ function ExplorerPageContent() {
                         <div className={`absolute top-4 left-4 z-50 transition-opacity duration-300 ${!isTuningOpen ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'}`}>
                             <TuningPanel
                                 onPreview={handlePreview}
-                                onSave={handleSaveConfig}
                                 loading={previewLoading}
                                 isOpen={isTuningOpen}
                                 setIsOpen={setIsTuningOpen}

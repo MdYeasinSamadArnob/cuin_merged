@@ -24,8 +24,6 @@ from api.routes_metrics import router as metrics_router
 from api.routes_review import router as review_router
 from api.routes_runs import router as runs_router
 
-# Trigger reload
-from api.routes_upload import router as upload_router
 # Import the module-level singleton, not the class -- api/routes_datasource.py
 # and api/routes_runs.py import this SAME `ws_manager` from api.ws_events to
 # broadcast progress. A previous version of this file instantiated its own
@@ -201,16 +199,12 @@ async def liveness_check() -> dict:
 # ============================================
 
 app.include_router(runs_router, prefix="/runs", tags=["Runs"])
-app.include_router(upload_router, prefix="/upload", tags=["Upload"])
 app.include_router(candidates_router, prefix="/candidates", tags=["Candidates"])
 app.include_router(matches_router, prefix="/matches", tags=["Matches"])
 app.include_router(review_router, prefix="/review", tags=["Review"])
 app.include_router(audit_router, prefix="/audit", tags=["Audit"])
 app.include_router(metrics_router, prefix="/metrics", tags=["Metrics"])
 app.include_router(graph_router, prefix="/graph", tags=["Graph"])
-
-from api.routes_config import router as config_router
-app.include_router(config_router, prefix="/config", tags=["Config"])
 
 from api.routes_admin import router as admin_router
 app.include_router(admin_router, prefix="/admin", tags=["Admin"])

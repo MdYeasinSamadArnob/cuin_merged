@@ -13,12 +13,7 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 
 from pipeline import (
-    PipelineOrchestrator,
-    PipelineResult,
     StageProgress,
-    BlockingConfig,
-    ScoringConfig,
-    MatchDecision,
 )
 from services.audit import log_audit_event, AuditEventType
 from engine.clustering import get_cluster_manager
@@ -113,7 +108,12 @@ class RunService:
     
     def __init__(self):
         self._runs: Dict[str, Run] = {}
-        self._orchestrators: Dict[str, PipelineOrchestrator] = {}
+        # Doris pipeline runs (api/routes_datasource.py) register their
+        # DorisPipelineOrchestrator instance here so routes_matches.py,
+        # routes_candidates.py, routes_graph.py etc. can look it up by
+        # run_id while the process is warm. Not type-imported here to
+        # avoid a services -> pipeline.doris_orchestrator dependency.
+        self._orchestrators: Dict[str, Any] = {}
         self._progress_callback: Optional[Callable[[str, StageProgress], Any]] = None
         self._load_runs()
 
@@ -255,116 +255,6 @@ class RunService:
         
         return handler
     
-    async def execute_run(
-        self,
-        run_id: str,
-        records: List[dict]
-    ) -> PipelineResult:
-        """
-        Execute a pipeline run with the given records.
-        
-        Args:
-            run_id: The run ID to execute
-            records: Raw customer records to process
-            
-        Returns:
-            PipelineResult with execution details
-        """
-        run = self._runs.get(run_id)
-        if not run:
-            raise ValueError(f"Run {run_id} not found")
-        
-        # Update status
-        run.status = RunStatus.RUNNING
-        self._save_runs()
-        
-        # Use the standard (non-Spark) orchestrator for in-memory records (Excel/CSV uploads).
-        # Spark is reserved for large Parquet datasource runs via routes_datasource.py.
-        from api.routes_config import get_current_blocking_config, get_current_scoring_config
-
-        orchestrator = PipelineOrchestrator(
-            blocking_config=get_current_blocking_config(),
-            scoring_config=get_current_scoring_config(),
-            progress_callback=await self._create_progress_handler(run_id),
-        )
-        self._orchestrators[run_id] = orchestrator
-        
-        try:
-            # Execute pipeline
-            result = await orchestrator.run(
-                run_id=run_id,
-                raw_records=records,
-                mode=run.mode.value
-            )
-            
-            # Update run with results
-            run.counters.records_in = result.records_in
-            run.counters.records_normalized = result.records_normalized
-            run.counters.blocks_created = result.blocks_created
-            run.counters.candidates_generated = result.candidates_generated
-            run.counters.pairs_scored = result.pairs_scored
-            run.counters.auto_links = result.auto_links
-            run.counters.review_items = result.review_items
-            run.counters.rejected = result.rejected
-            
-            run.ended_at = datetime.utcnow()
-            run.duration_seconds = (run.ended_at - run.started_at).total_seconds()
-            
-            if result.success:
-                run.status = RunStatus.COMPLETED
-                self._save_runs()
-                
-                # Process auto-links through clustering
-                auto_links = orchestrator.get_auto_links()
-                if auto_links:
-                    cluster_manager = get_cluster_manager()
-                    pairs = [(s.a_key, s.b_key) for s in auto_links]
-                    cluster_manager.process_auto_links(pairs)
-                
-                # Log completion
-                log_audit_event(
-                    AuditEventType.RUN_COMPLETED,
-                    {
-                        'run_id': run_id,
-                        'counters': asdict(run.counters),
-                        'duration_seconds': run.duration_seconds,
-                    },
-                    run_id=run_id
-                )
-            else:
-                run.status = RunStatus.FAILED
-                run.error_message = result.error_message
-                self._save_runs()
-                
-                log_audit_event(
-                    AuditEventType.RUN_FAILED,
-                    {
-                        'run_id': run_id,
-                        'error': result.error_message,
-                    },
-                    run_id=run_id
-                )
-            
-            return result
-            
-        except Exception as e:
-            run.status = RunStatus.FAILED
-            run.error_message = str(e)
-            run.ended_at = datetime.utcnow()
-            run.duration_seconds = (run.ended_at - run.started_at).total_seconds()
-            self._save_runs()
-            
-            log_audit_event(
-                AuditEventType.RUN_FAILED,
-                {
-                    'run_id': run_id,
-                    'error': str(e),
-                },
-                run_id=run_id
-            )
-            
-            raise
-    
     def cancel_run(self, run_id: str) -> bool:
         """Cancel a running pipeline."""
         run = self._runs.get(run_id)
@@ -379,7 +269,7 @@ class RunService:
         
         return False
     
-    def get_orchestrator(self, run_id: str) -> Optional[PipelineOrchestrator]:
+    def get_orchestrator(self, run_id: str) -> Optional[Any]:
         """Get the orchestrator for a run."""
         return self._orchestrators.get(run_id)
     

@@ -13,16 +13,6 @@ from engine.normalize.standardize import (
     compute_record_hash,
 )
 
-from engine.blocking.multipass_blocker import (
-    BlockingConfig,
-    BlockingResult,
-    MultiPassBlocker,
-)
-
-from engine.blocking.candidate_builder import (
-    CandidatePair,
-)
-
 from engine.structures import (
     ScoringConfig,
     MatchScore,
@@ -38,7 +28,6 @@ from pipeline.orchestrator import (
     PipelineStage,
     StageProgress,
     PipelineResult,
-    PipelineOrchestrator,
 )
 
 __all__ = [
@@ -51,20 +40,14 @@ __all__ = [
     'normalize_natid',
     'normalize_record',
     'compute_record_hash',
-    # Blocking
-    'BlockingConfig',
-    'BlockingResult',
-    'CandidatePair',
-    'MultiPassBlocker',
     # Scoring
     'ScoringConfig',
     'MatchScore',
     'MatchDecision',
     'FieldEvidence',
     'SplinkScorer',
-    # Orchestrator
+    # Shared pipeline types
     'PipelineStage',
     'StageProgress',
     'PipelineResult',
-    'PipelineOrchestrator',
 ]

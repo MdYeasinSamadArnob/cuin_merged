@@ -6,17 +6,11 @@
 // blocking rules, match confidence, segmentation, connections,
 // comparators, version history). Merged into one page per an explicit
 // request after tracing that the OLD /settings sliders were dead --
-// they write to routes_config.py's in-memory _config_store, which only
-// the legacy ad-hoc Excel/CSV upload path (api/routes_upload.py ->
-// services/run_service.py's execute_run) ever reads. The real
-// Datasource pipeline (pipeline/doris_orchestrator.py) reads
-// exclusively from
-// engine.rules.store.get_active_catalog() -- i.e. everything below
-// under "Blocking Rules" / "Matching & Confidence". That legacy config
-// mechanism is NOT removed (the Upload page and its backend path still
-// work if reached directly) -- it's demoted to a collapsed "Advanced"
-// section at the bottom so it can't be mistaken for the thing that
-// controls real results, which was the actual problem being fixed.
+// they wrote to the now-removed routes_config.py in-memory
+// _config_store, which only the legacy ad-hoc Excel/CSV upload path
+// ever read. The real Datasource pipeline (pipeline/doris_orchestrator.py)
+// reads exclusively from engine.rules.store.get_active_catalog() --
+// i.e. everything below under "Blocking Rules" / "Matching & Confidence".
 //
 // Tabbed instead of one long stack of 8 cards, so getting to "Blocking
 // Rules" doesn't require scrolling past Fields/Search/Segments/
@@ -29,7 +23,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import {
     Plus, Save, RefreshCw, Sliders, ListTree, History, Search as SearchIcon, AlertCircle,
-    Table2, GitCompareArrows, Users, Link2, RotateCcw, ChevronDown, Database, Shield,
+    Table2, GitCompareArrows, Users, Link2, RotateCcw,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { BlockingRuleCard } from "@/components/organisms/settings/BlockingRuleCard";
@@ -59,15 +53,6 @@ const TABS = [
     { id: "reference", label: "Reference & History", icon: History },
 ] as const;
 type TabId = typeof TABS[number]["id"];
-
-const LEGACY_WEIGHT_FIELDS = [
-    { id: "name_weight", label: "Name Match", color: "range-success" },
-    { id: "phone_weight", label: "Phone Match", color: "range-info" },
-    { id: "email_weight", label: "Email Match", color: "range-info" },
-    { id: "natid_weight", label: "National ID", color: "range-warning" },
-    { id: "dob_weight", label: "Date of Birth", color: "range-warning" },
-    { id: "address_weight", label: "Address Match", color: "range-error" },
-] as const;
 
 export default function SettingsPage() {
     const queryClient = useQueryClient();
@@ -331,65 +316,6 @@ export default function SettingsPage() {
         queryFn: () => api.search(debouncedSearch, { runId, pageSize: 8 }),
         enabled: debouncedSearch.length >= 2,
     });
-
-    // ---- Legacy config (Blocking Strategy / Matching Weights) -- only
-    // ever read by the ad-hoc Excel/CSV upload path (routes_upload.py ->
-    // run_service.execute_run), never by the real Datasource pipeline.
-    // Kept fully functional (same api.getConfig/updateConfig calls as
-    // before) but demoted to a collapsed, clearly-labeled section so it
-    // can't be mistaken for controlling the results above.
-    const [legacyOpen, setLegacyOpen] = useState(false);
-    const [legacyLoaded, setLegacyLoaded] = useState(false);
-    const [legacySaving, setLegacySaving] = useState(false);
-    const [legacyConfig, setLegacyConfig] = useState<any>({ blocking: {}, scoring: {} });
-
-    // Fetched on first expand, not on page mount -- this section is
-    // collapsed by default and rarely opened, no reason to make it
-    // compete with the (already slow, ~5s) precheck/redecide calls
-    // above for the browser's limited per-host connections on every
-    // settings page load.
-    useEffect(() => {
-        if (legacyOpen && !legacyLoaded) loadLegacyConfig();
-    }, [legacyOpen, legacyLoaded]);
-
-    const loadLegacyConfig = async () => {
-        try {
-            const data = await api.getConfig();
-            setLegacyConfig(data);
-            setLegacyLoaded(true);
-        } catch (error) {
-            console.error("Failed to load legacy config", error);
-        }
-    };
-
-    const handleLegacySave = async () => {
-        try {
-            setLegacySaving(true);
-            await api.updateConfig({
-                blocking_max_block_size: Number(legacyConfig.blocking.max_block_size),
-                blocking_suppress_pct: Number(legacyConfig.blocking.suppress_frequency_pct),
-                blocking_lsh_threshold: Number(legacyConfig.blocking.lsh_threshold),
-                match_name_weight: Number(legacyConfig.scoring.name_weight),
-                match_phone_weight: Number(legacyConfig.scoring.phone_weight),
-                match_email_weight: Number(legacyConfig.scoring.email_weight),
-                match_dob_weight: Number(legacyConfig.scoring.dob_weight),
-                match_natid_weight: Number(legacyConfig.scoring.natid_weight),
-                match_address_weight: Number(legacyConfig.scoring.address_weight),
-            });
-            await loadLegacyConfig();
-        } catch (error) {
-            console.error("Failed to save legacy config", error);
-        } finally {
-            setLegacySaving(false);
-        }
-    };
-
-    const updateLegacyNested = (category: "blocking" | "scoring", field: string, value: any) => {
-        setLegacyConfig((prev: any) => ({
-            ...prev,
-            [category]: { ...prev[category], [field]: value },
-        }));
-    };
 
     if (catalogLoading) {
         return <div className="p-8 text-gray-900 dark:text-white">Loading rule catalog...</div>;
@@ -688,121 +614,6 @@ export default function SettingsPage() {
                 </motion.div>
             </AnimatePresence>
 
-            {/* Legacy config -- collapsed, clearly labeled, still fully
-                functional. Only reachable consumer is the ad-hoc Excel/CSV
-                upload path; the main Datasource pipeline above never
-                reads this. */}
-            <div className="glass-card overflow-hidden">
-                <button
-                    onClick={() => setLegacyOpen((o) => !o)}
-                    className="w-full flex items-center justify-between gap-3 p-4 text-left hover:bg-gray-50 dark:hover:bg-gray-900/30 transition-colors"
-                >
-                    <div className="flex items-center gap-3 min-w-0">
-                        <div className="p-2 rounded-lg bg-gray-100 dark:bg-gray-800 shrink-0">
-                            <Database size={18} className="text-gray-500 dark:text-gray-400" />
-                        </div>
-                        <div className="min-w-0">
-                            <h3 className="font-medium text-gray-700 dark:text-gray-300 text-sm">Advanced: ad-hoc upload config</h3>
-                            <p className="text-xs text-gray-400 truncate">
-                                Only affects small Excel/CSV test uploads -- not the Datasource pipeline configured above.
-                            </p>
-                        </div>
-                    </div>
-                    <ChevronDown size={18} className={`text-gray-400 shrink-0 transition-transform ${legacyOpen ? "rotate-180" : ""}`} />
-                </button>
-                <AnimatePresence>
-                    {legacyOpen && (
-                        <motion.div
-                            initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }}
-                            transition={{ duration: 0.2 }} className="overflow-hidden"
-                        >
-                            <div className="p-6 pt-2 border-t border-gray-200 dark:border-gray-700">
-                                {!legacyLoaded ? (
-                                    <p className="text-xs text-gray-400">Loading...</p>
-                                ) : (
-                                    <>
-                                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                                            <div>
-                                                <div className="flex items-center gap-2 mb-4">
-                                                    <Database size={16} className="text-blue-500" />
-                                                    <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Blocking Strategy</h4>
-                                                </div>
-                                                <div className="space-y-5">
-                                                    <div>
-                                                        <div className="flex justify-between mb-2">
-                                                            <label className="text-xs text-gray-600 dark:text-gray-300">Max Block Size</label>
-                                                            <span className="text-xs text-blue-600 dark:text-blue-400">{legacyConfig.blocking.max_block_size} records</span>
-                                                        </div>
-                                                        <input
-                                                            type="number"
-                                                            value={legacyConfig.blocking.max_block_size || 200}
-                                                            onChange={(e) => updateLegacyNested("blocking", "max_block_size", e.target.value)}
-                                                            className="input input-sm w-full bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white"
-                                                        />
-                                                    </div>
-                                                    <div>
-                                                        <div className="flex justify-between mb-2">
-                                                            <label className="text-xs text-gray-600 dark:text-gray-300">Suppression Frequency</label>
-                                                            <span className="text-xs text-blue-600 dark:text-blue-400">{legacyConfig.blocking.suppress_frequency_pct}%</span>
-                                                        </div>
-                                                        <input
-                                                            type="range" min="0.1" max="100" step="0.1"
-                                                            value={legacyConfig.blocking.suppress_frequency_pct || 5.0}
-                                                            onChange={(e) => updateLegacyNested("blocking", "suppress_frequency_pct", e.target.value)}
-                                                            className="range range-xs range-primary"
-                                                        />
-                                                    </div>
-                                                    <div>
-                                                        <div className="flex justify-between mb-2">
-                                                            <label className="text-xs text-gray-600 dark:text-gray-300">LSH Threshold (MinHash)</label>
-                                                            <span className="text-xs text-blue-600 dark:text-blue-400">{legacyConfig.blocking.lsh_threshold}</span>
-                                                        </div>
-                                                        <input
-                                                            type="range" min="0.1" max="0.9" step="0.05"
-                                                            value={legacyConfig.blocking.lsh_threshold || 0.5}
-                                                            onChange={(e) => updateLegacyNested("blocking", "lsh_threshold", e.target.value)}
-                                                            className="range range-xs range-secondary"
-                                                        />
-                                                    </div>
-                                                </div>
-                                            </div>
-
-                                            <div>
-                                                <div className="flex items-center gap-2 mb-4">
-                                                    <Shield size={16} className="text-emerald-500" />
-                                                    <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Matching Weights</h4>
-                                                </div>
-                                                <div className="space-y-3">
-                                                    {LEGACY_WEIGHT_FIELDS.map((field) => (
-                                                        <div key={field.id}>
-                                                            <div className="flex justify-between mb-1">
-                                                                <label className="text-[11px] text-gray-600 dark:text-gray-300 uppercase font-semibold">{field.label}</label>
-                                                                <span className="text-[11px] font-mono text-gray-900 dark:text-white">{legacyConfig.scoring[field.id]}</span>
-                                                            </div>
-                                                            <input
-                                                                type="range" min="0" max="2.0" step="0.05"
-                                                                value={legacyConfig.scoring[field.id] || 0}
-                                                                onChange={(e) => updateLegacyNested("scoring", field.id, e.target.value)}
-                                                                className={`range range-xs ${field.color}`}
-                                                            />
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div className="flex justify-end mt-6 pt-4 border-t border-gray-200 dark:border-gray-700">
-                                            <button onClick={handleLegacySave} disabled={legacySaving} className="btn btn-ghost gap-2 !py-1.5 !px-3 text-xs disabled:opacity-40">
-                                                {legacySaving ? <RefreshCw className="animate-spin" size={14} /> : <Save size={14} />}
-                                                Save ad-hoc upload config
-                                            </button>
-                                        </div>
-                                    </>
-                                )}
-                            </div>
-                        </motion.div>
-                    )}
-                </AnimatePresence>
-            </div>
         </div>
     );
 }

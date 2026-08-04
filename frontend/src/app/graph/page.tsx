@@ -245,23 +245,6 @@ export default function GraphPage() {
         }
     };
 
-    const handleSaveConfig = async (config: any) => {
-        try {
-            await api.updateConfig({
-                match_name_weight: config.name_weight,
-                match_phone_weight: config.phone_weight,
-                match_email_weight: config.email_weight,
-                match_dob_weight: config.dob_weight,
-                match_natid_weight: config.natid_weight,
-                match_address_weight: config.address_weight,
-                auto_link_threshold: config.auto_link_threshold,
-                review_threshold: config.review_threshold,
-            });
-        } catch (err) {
-            console.error('Failed to save config:', err);
-        }
-    };
-
     return (
         <div className="space-y-6">
             <div className="flex flex-wrap justify-between items-center gap-4">
@@ -392,7 +375,7 @@ export default function GraphPage() {
                                         <Sliders size={14} /> Clustering Logic
                                     </h2>
                                     <TuningPanel
-                                        onPreview={handlePreview} onSave={handleSaveConfig}
+                                        onPreview={handlePreview}
                                         loading={classicLoading} isOpen={showTuning} setIsOpen={setShowTuning}
                                     />
                                 </div>

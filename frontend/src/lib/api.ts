@@ -82,19 +82,6 @@ class ApiClient {
         });
     }
 
-    // Config (legacy -- superseded by the rules API below, kept for
-    // /settings' existing blocking/weight sliders)
-    async getConfig() {
-        return this.request('/config');
-    }
-
-    async updateConfig(config: any) {
-        return this.request('/config', {
-            method: 'POST',
-            body: JSON.stringify(config),
-        });
-    }
-
     // Rules (typed blocking-rule catalog + scoring thresholds, versioned)
     async getActiveRules() {
         return this.request('/rules');
