@@ -119,13 +119,11 @@ def _check_rate_limit() -> None:
 
 
 # ----------------------------------------------------------------------
-# Run resolution -- deliberately Doris-preferring (not "any engine's
-# latest completed run"): this API's whole value proposition is
-# checking against the bank's live, production-scale identity graph,
-# which per this deployment's own convention (DatasourceStartRequest's
-# default) IS the Doris engine. An explicit run_id always wins,
-# regardless of its engine, so a caller can still pin a specific
-# DuckDB snapshot on purpose.
+# Run resolution -- deliberately Doris-preferring (not "any run" --
+# though Doris is the only engine now anyway): this API's whole value
+# proposition is checking against the bank's live, production-scale
+# identity graph. An explicit run_id always wins, so a caller can
+# still pin a specific historical run on purpose.
 # ----------------------------------------------------------------------
 
 def _resolve_screening_run(run_id: Optional[str]):
@@ -296,10 +294,10 @@ def _find_candidate_codes(session, mobile_norm, email_norm, doc_type_norm, doc_v
 
 
 def _parse_token_array(value) -> List[str]:
-    """customer_scalars.name_tokens comes back as a native Python list on DuckDB but as a JSON-encoded
-    string (e.g. '["SYED", "ASAD"]') on Doris -- session.con's shared .execute()/.fetchall() surface
-    doesn't normalize array-typed columns across engines. Handle both; list(str) would otherwise
-    silently explode the string into individual characters."""
+    """customer_scalars.name_tokens comes back from Doris as a JSON-encoded string (e.g.
+    '["SYED", "ASAD"]'), not a native Python list -- session.con's .execute()/.fetchall() surface
+    doesn't deserialize array-typed columns. list(str) would otherwise silently explode the string
+    into individual characters."""
     if not value:
         return []
     if isinstance(value, list):

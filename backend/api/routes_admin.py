@@ -99,9 +99,9 @@ async def reset_all_data():
             logger.warning(f"Failed to clear lake root: {e}")
 
         # 2d. Drop every per-run Doris database (cuin_run_*). Without
-        # this, `data/runs/*.duckdb` files disappearing in step 1 has
-        # no Doris-side equivalent -- run databases accumulate in Doris
-        # forever across resets, which is exactly the durability/
+        # this, step 1's local file deletion has no Doris-side
+        # equivalent -- run databases accumulate in Doris forever
+        # across resets, which is exactly the durability/
         # cleanup gap the lakehouse migration plan flagged (Doris data
         # now survives container restarts via named volumes, so it
         # doesn't disappear on its own the way an ephemeral container's

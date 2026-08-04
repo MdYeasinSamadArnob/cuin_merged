@@ -14,8 +14,7 @@ check against (e.g. "segmentation_off" or "active_policy_v4") -- see
 capture_baseline.py's docstring for why there is more than one.
 Exits non-zero (and prints exactly what differs) if the run doesn't
 match. Does not run the pipeline itself -- trigger a run via
-POST /datasource/demo first (engine=duckdb or engine=doris), wait for
-COMPLETED, then pass its run_id here.
+POST /datasource/demo first, wait for COMPLETED, then pass its run_id here.
 """
 
 import json

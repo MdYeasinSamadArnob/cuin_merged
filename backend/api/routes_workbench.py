@@ -8,10 +8,10 @@ as they are (see the plan's "keep /explorer and /graph as legacy,
 untouched" decision).
 
 Read endpoints route per-run browse/search through
-engine.ports.run_session.open_run_readonly -- the SAME engine-agnostic
-seam /rules/precheck, /rules/redecide, and /search already use, so a
-DuckDB-backed and a Doris-backed run answer identically without this
-module needing to know which engine produced them. Entity identity,
+engine.ports.run_session.open_run_readonly -- the SAME seam
+/rules/precheck, /rules/redecide, and /search already use, so this
+module never has to touch a run's underlying Doris database directly.
+Entity identity,
 officer overrides, and audit trail come from Postgres (migrations 005
 and 006) via services.workbench_service, which owns write durability
 and the hash-chained audit log.
@@ -72,21 +72,17 @@ def _table_exists(session, name: str) -> bool:
 
 def _parse_array_cell(v):
     """
-    engine.scoring.evidence.load_pair_evidence was written and, until
-    now, exclusively called against real duckdb.DuckDBPyConnection
-    objects (see its own test suite and engine.scoring.tiers/confidence
-    -- every existing caller is DuckDB-only), where LIST-typed columns
-    deserialize to native Python lists. This is the first caller to run
-    it against a Doris session: DorisConnection is a thin pymysql
-    wrapper (engine/ports/doris_conn.py) with no array deserialization,
-    so Doris's ARRAY<STRING> columns come back as their JSON-text wire
-    representation (e.g. '["01713366500"]', or '[]' for an empty
-    array) -- a non-empty STRING even when the array itself is empty,
-    which silently corrupted has_intersection/similarity_score checks
-    that assume `len(value) > 0` means "list has elements". Normalizing
-    here (not inside engine.scoring.evidence itself, which every other,
-    DuckDB-only caller already works correctly against) keeps this fix
-    scoped to the one new call site that actually needs it.
+    engine.scoring.evidence.load_pair_evidence's LIST-typed columns
+    were originally read from a real duckdb.DuckDBPyConnection, which
+    deserializes them to native Python lists. Doris (the only engine
+    now) uses DorisConnection, a thin pymysql wrapper (engine/ports/
+    doris_conn.py) with no array deserialization -- ARRAY<STRING>
+    columns come back as their JSON-text wire representation (e.g.
+    '["01713366500"]', or '[]' for an empty array) -- a non-empty
+    STRING even when the array itself is empty, which silently
+    corrupted has_intersection/similarity_score checks that assume
+    `len(value) > 0` means "list has elements". Normalized here at the
+    call site rather than inside engine.scoring.evidence itself.
     """
     if isinstance(v, list):
         return v
@@ -348,9 +344,8 @@ async def pair_breakdown(a_key: str, b_key: str, run_id: Optional[str] = None):
         # it. Reuses engine.scoring.evidence's load_pair_evidence /
         # evidence_to_field_evidence UNCHANGED against
         # pair_identifier_evidence / pair_name_dob_evidence -- the exact
-        # tables the real pipeline run (DuckDB or Doris, same function on
-        # both via engine.scoring.evidence_dialect) persisted while
-        # computing THIS pair's actual, audited score. Never re-derives
+        # tables the real pipeline run (via engine.scoring.evidence_dialect)
+        # persisted while computing THIS pair's actual, audited score. Never re-derives
         # anything from scratch (that's what the legacy /matches/{pair_id}
         # endpoint's _compute_pair_evidence_fresh does, via a DIFFERENT,
         # simpler tier classifier -- its "99%"-style score is an
@@ -502,7 +497,7 @@ async def list_entities(
     rid = _resolve_run_id(run_id)
 
     # `q` (name/identifier) matching and the record_type filter both need
-    # the run engine (Doris/DuckDB); member_names_preview does too. Open
+    # a run session; member_names_preview does too. Open
     # one session for all three. If the run's data is unavailable (e.g. a
     # very old run whose per-run database was cleaned up), degrade to
     # Postgres-only filtering (global_ref/customer_code) and bare-code

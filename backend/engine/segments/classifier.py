@@ -138,10 +138,9 @@ def classify_segment_python(name_norm: Optional[str], config: SegmentationConfig
 def segment_sql_expr(name_column: str, config: SegmentationConfig, dialect) -> str:
     """
     SQL CASE expression computing the same classification as
-    classify_segment_python(), portable across DuckDB/Doris via the
-    dialect's regexp_matches() (RE2 on DuckDB, REGEXP on Doris -- both
-    support the plain alternation/character-class/group syntax used
-    here). Callers should short-circuit around this entirely when
+    classify_segment_python(), via the dialect's regexp_matches()
+    (Doris's REGEXP supports the plain alternation/character-class/
+    group syntax used here). Callers should short-circuit around this entirely when
     `not config.enabled` (see build_customer_segments below) rather
     than emit a CASE that always evaluates to 'ALL' -- both are
     correct, but skipping the computation is cheaper and makes the

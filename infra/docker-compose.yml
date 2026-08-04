@@ -2,8 +2,8 @@
 # CUIN v2 - Full Stack Docker Compose
 # ============================================
 # Builds and runs the entire application: Postgres, Neo4j, Redis,
-# the FastAPI backend (DuckDB entity-resolution pipeline), the Next.js
-# frontend, and the PgAdmin/RedisInsight management UIs.
+# the FastAPI backend (Apache Doris entity-resolution pipeline), the
+# Next.js frontend, and the PgAdmin/RedisInsight management UIs.
 #
 # Quick start:
 #   cp infra/.env.example infra/.env      # adjust PUBLIC_HOST + ports
@@ -85,7 +85,7 @@ services:
     restart: unless-stopped
 
   # ------------------------------------------------------------
-  # Apache Doris -- alternate MPP execution engine (see
+  # Apache Doris -- the pipeline's execution engine (see
   # pipeline.doris_orchestrator). All-in-one image (FE+BE in one
   # container) for single-node / low-resource deployments; a real
   # multi-BE cluster would split these into separate services.
@@ -133,9 +133,10 @@ services:
       # mean the container filesystem root), so these must be mounted
       # under /opt/apache-doris/be/, at the SAME relative subpath names
       # the backend service uses from ITS working directory (/app) --
-      # that symmetry is what lets both engines address the same file
-      # with the same relative path string. Read-only: Doris only ever
-      # reads the lake via LOCAL(); DuckDB is what writes it.
+      # that symmetry is what lets Doris (LOCAL() TVF) and the backend
+      # (pyarrow) address the same static source Parquet file with the
+      # same relative path string. Read-only: nothing writes into this
+      # mount, it's the original, unmodified source dataset.
       - ../backend/data_source:/opt/apache-doris/be/data_source:ro
       - ../backend/data:/opt/apache-doris/be/data:ro
     healthcheck:
@@ -147,7 +148,7 @@ services:
     restart: unless-stopped
 
   # ------------------------------------------------------------
-  # Backend API — FastAPI + DuckDB/Doris entity-resolution pipeline
+  # Backend API — FastAPI + Doris entity-resolution pipeline
   # ------------------------------------------------------------
   backend:
     build:
@@ -170,8 +171,6 @@ services:
       - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password123}
       - REDIS_URL=redis://redis:6379/0
       - CORS_ORIGINS=http://${PUBLIC_HOST:-localhost}:${FRONTEND_PORT:-30011},http://localhost:${FRONTEND_PORT:-30011}
-      - DUCKDB_MEMORY_LIMIT=${DUCKDB_MEMORY_LIMIT:-4GB}
-      - DUCKDB_THREADS=${DUCKDB_THREADS:-4}
       - PERSIST_TO_POSTGRES=true
       - DORIS_HOST=doris
       - DORIS_MYSQL_PORT=9030
@@ -194,7 +193,7 @@ services:
       redis:
         condition: service_healthy
       doris:
-        condition: service_started # not service_healthy -- Doris is optional; DuckDB path must work without it
+        condition: service_healthy # Doris is the only engine now -- the backend genuinely can't do useful work without it
     restart: unless-stopped
 
   # ------------------------------------------------------------

@@ -8,11 +8,11 @@ the instant redecide/reblock endpoints that make a threshold slider or
 blocking-rule edit return in milliseconds/seconds instead of requiring
 a full pipeline re-run.
 
-redecide/reblock are NON-DESTRUCTIVE previews: they operate on an
-in-memory scratch copy of the run's persisted evidence tables (see
-_open_scratch_db), never mutating the run's actual .duckdb file. This
-replaces routes_graph.py's /preview, which re-scored with the legacy
-Splink scorer and silently truncated to 500 records.
+redecide/reblock are NON-DESTRUCTIVE previews: they operate on a
+scratch copy of the run's persisted evidence tables (see
+_open_scratch_db), never mutating the run's actual Doris database.
+This replaces routes_graph.py's /preview, which re-scored with the
+legacy Splink scorer and silently truncated to 500 records.
 """
 
 import time
@@ -53,9 +53,7 @@ def _table_exists(session: RunSession, name: str) -> bool:
     # cluster, not just the current connection's -- without scoping by
     # DATABASE(), a same-named table in an unrelated run's database
     # (every run has its own `identifiers`, `candidate_pairs`, etc.)
-    # would register as a false positive. DuckDB has no such function
-    # and doesn't need scoping: each scratch connection here is its
-    # own isolated :memory: database. Verified live against Doris.
+    # would register as a false positive. Verified live against Doris.
     if session.engine == "doris":
         row = session.con.execute(
             "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ? AND table_schema = DATABASE()",

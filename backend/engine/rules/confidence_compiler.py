@@ -6,8 +6,8 @@ for engine.rules.decision_compiler.compile_decision_sql(). Compiles a
 MatchRuleset into one `CREATE OR REPLACE TABLE pair_decisions AS ...`
 statement over the SAME pair_identifier_evidence / pair_name_dob_evidence
 tables the legacy compiler reads, through the same
-engine.ports.dialect.SqlDialect seam so it runs unchanged on DuckDB
-and Doris.
+engine.ports.dialect.SqlDialect seam the rest of the rule-compiler
+subtree uses.
 
 Driven from `candidate_pairs` (LEFT JOIN onto both evidence tables),
 not from pair_name_dob_evidence as the legacy compiler was -- a

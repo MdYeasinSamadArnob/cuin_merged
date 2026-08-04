@@ -11,7 +11,7 @@ The entire stack — Postgres, Neo4j, Redis, the backend API, and the frontend d
 **Docker** and **Docker Compose**. That's it — no local Python/Node install needed.
 
 ### 2. One-time host setup for Apache Doris
-The stack includes **Apache Doris** as a second, MPP execution engine (selectable per run alongside the default DuckDB engine — see the engine picker on the Datasource page). Doris's storage node refuses to start unless the **host** kernel allows enough memory-mapped areas — this is a real Linux kernel setting, not something Docker Compose can set on your behalf:
+**Apache Doris** is the pipeline's execution engine — required, not optional. Doris's storage node refuses to start unless the **host** kernel allows enough memory-mapped areas — this is a real Linux kernel setting, not something Docker Compose can set on your behalf:
 ```bash
 echo 'vm.max_map_count=2000000' | sudo tee /etc/sysctl.d/99-doris.conf
 sudo sysctl --system
@@ -69,7 +69,7 @@ docker compose up --build -d frontend   # frontend code changed (re-bakes NEXT_P
 
 ## 🏦 One Command, Any Environment (Local or Restricted/Banking)
 
-The exact same command brings the stack up whether you're on a laptop or deploying inside a locked-down bank environment (no `sudo`, no privileged containers, no hardcoded secrets):
+The exact same command brings the stack up whether you're on a laptop or deploying inside a locked-down bank environment (no privileged containers, no hardcoded secrets):
 ```bash
 cd infra && cp -n .env.example .env && docker compose up --build -d
 ```
@@ -78,10 +78,11 @@ cd infra && cp -n .env.example .env && docker compose up --build -d
 Why this one command works in both places:
 *   **No privileged containers.** Every service — including RedisInsight, which previously ran with `privileged: true` purely to write its bind-mounted data folder — now runs under standard container permissions. Passes Pod Security Standards "restricted" / OPA / Kyverno-style admission policies without exceptions.
 *   **No hardcoded secrets.** Every port, credential, and hostname comes from `infra/.env` (see step 3 above) — set real values for a bank deployment, keep the defaults for local; the command itself never changes.
-*   **No host kernel changes required**, as long as you skip Apache Doris — the DuckDB engine is the default and needs nothing extra (see the Doris troubleshooting note below). Bank hosts frequently don't grant `sudo` for the `vm.max_map_count` tweak Doris needs; the app is fully functional without it.
 *   **Runs as a non-root, fixed UID/GID** (`BACKEND_UID`/`BACKEND_GID` in `.env`) rather than requiring root inside the container.
 
-One caveat worth being upfront about: `docker compose up --build` still needs the base images (`postgres:16-alpine`, `neo4j:5.15.0`, `redis:7-alpine`, `apache/doris:*`, `python`, `node`) to be reachable — either from the internet or a private registry mirror. A fully air-gapped host needs those images pre-pulled/pushed to an internal registry first; that's an infrastructure decision for the bank's ops team, not something a single command can paper over.
+Two things worth being upfront about, honestly, rather than papering over:
+*   **The `vm.max_map_count` host kernel setting from step 2 is mandatory everywhere, including restricted hosts.** Apache Doris is the only pipeline engine — there is no in-process fallback that avoids this requirement. If the host genuinely cannot grant `sudo` to run that one `sysctl` command, that's a real blocker to raise with the platform/ops team before deployment, not something this command can work around.
+*   `docker compose up --build` still needs the base images (`postgres:16-alpine`, `neo4j:5.15.0`, `redis:7-alpine`, `apache/doris:*`, `python`, `node`) to be reachable — either from the internet or a private registry mirror. A fully air-gapped host needs those images pre-pulled/pushed to an internal registry first; that's an infrastructure decision for the bank's ops team, not something a single command can paper over.
 
 ---
 
@@ -94,7 +95,7 @@ docker-compose up -d --build
 ```
 This starts Postgres (`5433`), Neo4j (`7474`), Redis (`6380`), PgAdmin (`18080`), and RedisInsight (`15540`) from the **root** `docker-compose.yml` (infra services only — no backend/frontend containers).
 
-This root compose file does **not** include Doris (the DuckDB engine needs nothing extra and is the default). To also test the Doris engine locally, either run the full `infra/docker-compose.yml` stack instead (step 2 above — do the `vm.max_map_count` host setup first), or start just the `doris` service from it: `cd infra && docker compose up -d doris`.
+This root compose file does **not** include Doris — but Doris is the pipeline's only execution engine, so it's still required even in this "fast local iteration" mode. Do the `vm.max_map_count` host setup from step 2 above, then start just the `doris` service from the full stack's compose file: `cd infra && docker compose up -d doris`. No further configuration needed — `backend/api/config.py`'s defaults (`DORIS_HOST=127.0.0.1`, `DORIS_MYSQL_PORT=9130`, `DORIS_HTTP_PORT=8130`) already match the host ports `infra/docker-compose.yml` publishes Doris on.
 
 ### 2. Run the backend
 ```bash
@@ -142,8 +143,8 @@ docker-compose down      # or: make docker-down
 ---
 
 ## 🧠 System Architecture
-*   **Ingest**: Loads CSVs into Postgres (`customers_norm` table).
-*   **Matching**: Uses **Splink** (Probabilistic Matching) to find duplicates.
+*   **Ingest**: Loads the source dataset into Apache Doris; CSVs also land in Postgres (`customers_norm` table).
+*   **Matching**: Deterministic, rule-based blocking and confidence scoring (Ruleset v2) compiled to Doris SQL — see the Settings page's rule editor.
 *   **Graph**: Projects the results into **Neo4j** for visualization.
 *   **Auto-Healing**: on startup, `db_init.py` checks and repairs the database schema.
 
@@ -157,7 +158,10 @@ Almost always the host kernel setting from step 2 above. Check:
 cat /proc/sys/vm/max_map_count   # must be >= 2000000
 docker compose logs doris | tail -30
 ```
-If the log mentions `vm.max_map_count`, set it (see step 2) and `docker compose restart doris`. Don't have sudo on this host? Runs against DuckDB (the default engine) work fully without Doris — it's an optional second engine, not a hard dependency.
+If the log mentions `vm.max_map_count`, set it (see step 2) and `docker compose restart doris`. Doris is the pipeline's only execution engine — there is no fallback that works without it, so this setting genuinely has to be applied, even on a restricted host (raise it with whoever manages the host if you don't have `sudo` yourself).
+
+### Doris reports healthy but the first pipeline run fails ("Failed to find enough backend")
+A transient race on a **freshly-created** Doris deployment (empty volumes) — the BE can report itself healthy on its HTTP endpoint slightly before it's finished registering its storage/disk info with the FE. Wait ~30 seconds after `docker compose ps` first shows `doris` healthy, then retry. Only seen on a brand new deployment (fresh volumes); does not recur on subsequent runs against the same Doris instance.
 
 ### Port already in use
 On a shared machine, another project may already be using one of this stack's ports (`5433`, `7474`, `7687`, `8000`, `3000`, `8110`, `30011`, etc.). If `docker-compose up` or a dev server fails with `port is already allocated` / `address already in use`:
