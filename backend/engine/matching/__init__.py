@@ -1,1 +1,1 @@
-from engine.matching.splink_engine import SplinkScorer
+from engine.matching.custom_scorer import CustomProbabilisticScorer

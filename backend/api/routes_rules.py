@@ -12,7 +12,7 @@ redecide/reblock are NON-DESTRUCTIVE previews: they operate on a
 scratch copy of the run's persisted evidence tables (see
 _open_scratch_db), never mutating the run's actual Doris database.
 This replaces routes_graph.py's /preview, which re-scored with the
-legacy Splink scorer and silently truncated to 500 records.
+custom probabilistic scorer and silently truncated to 500 records.
 """
 
 import time

@@ -1,7 +1,10 @@
 """
-CUIN v2 - Splink Scoring Module
+CUIN v2 - Custom Probabilistic Scoring Module
 
-Probabilistic record matching using Splink logic (custom implementation for control).
+Hand-written Fellegi-Sunter-style probabilistic record matching --
+historically named after the Splink library this codebase used to run
+on, but has zero dependency on it. Powers the live "Run Preview"
+what-if clustering feature (api/routes_graph.py's /graph/preview).
 """
 
 import json
@@ -20,10 +23,10 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-class SplinkScorer:
+class CustomProbabilisticScorer:
     """
-    Splink-based probabilistic record matcher.
-    
+    Custom probabilistic record matcher.
+
     Uses a combination of exact and fuzzy matching with
     explainable evidence for each comparison.
     """

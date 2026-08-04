@@ -20,8 +20,8 @@ from engine.structures import (
     FieldEvidence,
 )
 
-from engine.matching.splink_engine import (
-    SplinkScorer,
+from engine.matching.custom_scorer import (
+    CustomProbabilisticScorer,
 )
 
 from pipeline.orchestrator import (
@@ -45,7 +45,7 @@ __all__ = [
     'MatchScore',
     'MatchDecision',
     'FieldEvidence',
-    'SplinkScorer',
+    'CustomProbabilisticScorer',
     # Shared pipeline types
     'PipelineStage',
     'StageProgress',

@@ -19,7 +19,7 @@ import os
 import time
 from engine.clustering import ClusterManager, get_cluster_manager
 from engine.structures import GoldenRecord, ScoringConfig, MatchDecision
-from engine.matching.splink_engine import SplinkScorer
+from engine.matching.custom_scorer import CustomProbabilisticScorer
 from engine.decisioning.decision_engine import DecisionEngine
 from services.run_service import get_run_service
 
@@ -80,7 +80,7 @@ class ClusterListResponse(BaseModel):
 
 
 from services.run_service import get_run_service
-from engine.matching.splink_engine import SplinkScorer
+from engine.matching.custom_scorer import CustomProbabilisticScorer
 from engine.decisioning.decision_engine import DecisionEngine
 
 
@@ -160,7 +160,7 @@ async def preview_clustering(request: PreviewRequest):
                         candidates.append((keys[i], keys[j]))
 
     # 4. Re-Score & Decide
-    scorer = SplinkScorer(scoring_config)
+    scorer = CustomProbabilisticScorer(scoring_config)
     decision_engine = DecisionEngine(scoring_config)
     temp_manager = ClusterManager()
     
@@ -937,7 +937,7 @@ async def preview_clustering(request: PreviewRequest):
              raise HTTPException(status_code=400, detail="Too many records for preview without active run")
 
     # 4. Re-Score & Decide
-    scorer = SplinkScorer(scoring_config)
+    scorer = CustomProbabilisticScorer(scoring_config)
     decision_engine = DecisionEngine(scoring_config)
     temp_manager = ClusterManager()
     
