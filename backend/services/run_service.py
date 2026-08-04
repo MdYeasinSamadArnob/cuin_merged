@@ -269,6 +269,26 @@ class RunService:
         
         return False
     
+    def delete_run(self, run_id: str) -> bool:
+        """
+        Remove a run from the registry (self._runs / data/runs_index.json)
+        and evict its live orchestrator if the process is warm. Only the
+        registry piece -- callers (api/routes_runs.py's DELETE endpoint)
+        are responsible for the run's Doris database, Postgres footprint,
+        and file artifacts, which live outside this service.
+        """
+        run = self._runs.get(run_id)
+        if not run:
+            return False
+
+        if run.status == RunStatus.RUNNING:
+            return False
+
+        self._runs.pop(run_id, None)
+        self._orchestrators.pop(run_id, None)
+        self._save_runs()
+        return True
+
     def get_orchestrator(self, run_id: str) -> Optional[Any]:
         """Get the orchestrator for a run."""
         return self._orchestrators.get(run_id)

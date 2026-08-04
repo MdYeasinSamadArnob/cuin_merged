@@ -1,14 +1,11 @@
 """
 CUIN v2 - Postgres Persistence Repository (Ruleset v2)
 
-Bulk-persists Doris pipeline results into Postgres, closing the gap
-the audit found: the Spark datasource pipeline wrote NOTHING to
-Postgres or Neo4j -- verified empirically as 0 rows across all 8
-tables despite a "completed" run reporting thousands of links. Every
-run's evidence, decisions, and clusters are now durable and queryable
-via the schema already defined in db/schema.sql (candidate_pairs,
-match_scores, match_decisions, clusters) plus the ruleset/fingerprint
-columns added in db/migrations/002_identity_sets_and_ruleset.sql.
+Bulk-persists Doris pipeline results into Postgres. Every run's
+evidence, decisions, and clusters are durable and queryable via the
+schema already defined in db/schema.sql (candidate_pairs, match_scores,
+match_decisions, clusters) plus the ruleset/fingerprint columns added
+in db/migrations/002_identity_sets_and_ruleset.sql.
 
 Only customers that appear in at least one candidate pair are
 persisted to customers_norm -- not the full 1.5M-row source dataset.
@@ -467,4 +464,28 @@ def ensure_run_row(pg_conn, run_id: str, mode: str, description: str) -> None:
             VALUES (%s, %s, 1, 'RUNNING', %s)
             ON CONFLICT (run_id) DO NOTHING
         """, (run_id, mode, description))
+    pg_conn.commit()
+
+
+def delete_run(pg_conn, run_id: str) -> None:
+    """
+    Hard-deletes a run's Postgres footprint. candidate_pairs,
+    match_scores, match_decisions, review_queue, referee_explanations,
+    identifier_frequency, and entity_relationships all declare
+    ON DELETE CASCADE from runs, so deleting the `runs` row cleans those
+    up automatically. audit_events.run_id has no cascade (append-only
+    table, deletes disallowed by design) -- null it out first so the
+    hash-chained audit trail survives untouched (run_id isn't part of
+    the hash input, see schema.sql's compute_audit_hash).
+
+    Deliberately does NOT touch entities/entity_members/entity_lineage/
+    resolution_overrides/review_decisions/customers_norm -- those are
+    global platform state with no single owning run (an entity can be
+    carry-forward-updated by any later run, see
+    engine/clustering/entity_resolver.py), so they must survive
+    regardless of which run created or last touched them.
+    """
+    with pg_conn.cursor() as cur:
+        cur.execute("UPDATE audit_events SET run_id = NULL WHERE run_id = %s", (run_id,))
+        cur.execute("DELETE FROM runs WHERE run_id = %s", (run_id,))
     pg_conn.commit()

@@ -71,6 +71,10 @@ class ApiClient {
         return this.request(`/runs/${runId}`);
     }
 
+    async deleteRun(runId: string) {
+        return this.request(`/runs/${runId}`, { method: 'DELETE' });
+    }
+
     async startDatasourcePipeline(mode: string) {
         // The backend route is /datasource/demo -- /datasource/pipeline/start
         // does not exist and was 404ing every "Start New Run" click on

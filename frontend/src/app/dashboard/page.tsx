@@ -77,7 +77,26 @@ export default function DashboardPage() {
             window.location.reload();
         } catch (err) {
             console.error('Failed to reset data:', err);
-            alert('❌ Failed to reset data. Please check the console for details.');
+        }
+    };
+
+    const handleDeleteRun = async (runId: string) => {
+        const confirmed = window.confirm(
+            `Delete run ${runId.slice(0, 8)}...?\n\n` +
+            'This permanently removes its Doris database, evidence/decisions, ' +
+            'and review-queue entries. Entities and Global IDs it contributed ' +
+            'to are NOT affected -- they are shared platform state, not owned ' +
+            'by any single run.\n\nThis cannot be undone.'
+        );
+        if (!confirmed) return;
+
+        try {
+            await api.deleteRun(runId);
+            setRecentRuns((prev) => prev.filter((r) => r.run_id !== runId));
+            fetchDashboardData();
+        } catch (err) {
+            console.error('Failed to delete run:', err);
+            alert('Failed to delete run -- check the console for details.');
         }
     };
 
@@ -281,6 +300,7 @@ export default function DashboardPage() {
                                     <th className="pb-3">Auto-Link</th>
                                     <th className="pb-3">Review</th>
                                     <th className="pb-3">Duration</th>
+                                    <th className="pb-3 pr-2"></th>
                                 </tr>
                             </thead>
                             <tbody className="text-gray-700 dark:text-gray-300">
@@ -308,6 +328,17 @@ export default function DashboardPage() {
                                         <td className="py-3 text-yellow-600 dark:text-yellow-400">{run.counters.review_items}</td>
                                         <td className="py-3 text-gray-500 dark:text-gray-400">
                                             {formatDuration(run.duration_seconds)}
+                                        </td>
+                                        <td className="py-3 pr-2 text-right">
+                                            {run.status !== 'RUNNING' && (
+                                                <button
+                                                    onClick={() => handleDeleteRun(run.run_id)}
+                                                    className="text-xs text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                                                    title="Delete this run"
+                                                >
+                                                    Delete
+                                                </button>
+                                            )}
                                         </td>
                                     </tr>
                                 ))}
