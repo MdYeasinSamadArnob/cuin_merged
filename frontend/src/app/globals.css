@@ -250,12 +250,26 @@ textarea:focus {
 }
 
 .btn-ghost {
+  /* #d1d5db (gray-300) reads fine on a dark background but is nearly
+     invisible on the light-mode white/glass-card background this same
+     class renders on -- this rule had no light-mode variant at all,
+     which is why "ghost" buttons (Previous/Next pagination, Clear,
+     Reset, most secondary actions app-wide) disappeared in light mode. */
   --focus-color: #6b7280;
   background-color: transparent;
-  color: #d1d5db;
+  color: #4b5563;
 }
 
 .btn-ghost:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+  color: #111827;
+}
+
+.dark .btn-ghost {
+  color: #d1d5db;
+}
+
+.dark .btn-ghost:hover {
   background-color: rgba(255, 255, 255, 0.1);
   color: white;
 }

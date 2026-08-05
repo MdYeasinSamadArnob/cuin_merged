@@ -124,11 +124,11 @@ export default function DataViewerPage() {
 
     const formatCell = (col: ColumnInfo, value: unknown) => {
         if (value === null || value === undefined || value === "") {
-            return <span className="text-gray-300 dark:text-gray-600">—</span>;
+            return <span className="text-gray-400 dark:text-gray-500">—</span>;
         }
         if (col.is_array) {
             const arr = value as unknown[];
-            if (arr.length === 0) return <span className="text-gray-300 dark:text-gray-600">—</span>;
+            if (arr.length === 0) return <span className="text-gray-400 dark:text-gray-500">—</span>;
             return (
                 <div className="flex flex-wrap gap-1 max-w-[220px]">
                     {arr.slice(0, 2).map((v, i) => (
@@ -200,7 +200,7 @@ export default function DataViewerPage() {
 
             {!statusLoading && !status?.materialized && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-card p-10 text-center">
-                    <Database size={32} className="mx-auto text-gray-300 dark:text-gray-600 mb-3" />
+                    <Database size={32} className="mx-auto text-gray-400 dark:text-gray-500 mb-3" />
                     <p className="text-gray-500 dark:text-gray-400 text-sm mb-4">
                         Load the raw source file to start browsing -- this reads it in place, no copy kept
                         elsewhere, and only takes a couple of seconds even at millions of rows.
@@ -411,12 +411,12 @@ export default function DataViewerPage() {
                                                             <span key={i} className="px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-xs">{String(v)}</span>
                                                         ))}
                                                     </div>
-                                                ) : <span className="text-gray-300 dark:text-gray-600 text-sm">—</span>
+                                                ) : <span className="text-gray-400 dark:text-gray-500 text-sm">—</span>
                                             ) : (
                                                 <span className="text-sm text-gray-900 dark:text-white break-words">
                                                     {value !== null && value !== undefined && value !== ""
                                                         ? String(value)
-                                                        : <span className="text-gray-300 dark:text-gray-600">—</span>}
+                                                        : <span className="text-gray-400 dark:text-gray-500">—</span>}
                                                 </span>
                                             )}
                                         </div>
