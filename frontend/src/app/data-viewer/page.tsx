@@ -102,7 +102,13 @@ export default function DataViewerPage() {
     const totalPages = rowsData ? Math.max(1, Math.ceil(rowsData.total / pageSize)) : 1;
 
     const addFilterRow = () => {
-        setFilters((prev) => [...prev, { id: `f_${Date.now()}`, column: columns[0]?.name || "", op: "contains", value: "" }]);
+        const firstCol = columns[0];
+        setFilters((prev) => [...prev, {
+            id: `f_${Date.now()}`,
+            column: firstCol?.name || "",
+            op: firstCol?.is_array ? "array_contains" : "contains",
+            value: "",
+        }]);
         setShowFilters(true);
     };
     const updateFilterRow = (id: string, patch: Partial<FilterRow>) => {
@@ -259,7 +265,13 @@ export default function DataViewerPage() {
                                                 <div key={f.id} className="flex items-center gap-2">
                                                     <select
                                                         value={f.column}
-                                                        onChange={(e) => updateFilterRow(f.id, { column: e.target.value, op: "contains" })}
+                                                        onChange={(e) => {
+                                                            const newCol = columns.find((c) => c.name === e.target.value);
+                                                            updateFilterRow(f.id, {
+                                                                column: e.target.value,
+                                                                op: newCol?.is_array ? "array_contains" : "contains",
+                                                            });
+                                                        }}
                                                         className="text-xs py-1.5 w-40 shrink-0"
                                                     >
                                                         {columns.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
@@ -332,18 +344,18 @@ export default function DataViewerPage() {
                                                     {sortCol === c.name && (sortDir === "asc" ? " ↑" : " ↓")}
                                                 </th>
                                             ))}
-                                            <th className="pb-2 w-8"></th>
+                                            <th className="pb-2 pl-2 w-8 sticky right-0 bg-white dark:bg-gray-900"></th>
                                         </tr>
                                     </thead>
                                     <tbody className="text-gray-700 dark:text-gray-300">
                                         {rowsData?.rows.map((row: Record<string, unknown>, i: number) => (
-                                            <tr key={i} className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/30">
+                                            <tr key={i} className="border-b border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/30 group">
                                                 {columns.map((c) => (
                                                     <td key={c.name} className="py-2 pr-4">
                                                         {formatCell(c, row[c.name])}
                                                     </td>
                                                 ))}
-                                                <td className="py-2">
+                                                <td className="py-2 pl-2 sticky right-0 bg-white dark:bg-gray-900 group-hover:bg-gray-50 dark:group-hover:bg-gray-800/30">
                                                     <button onClick={() => setSelectedRow(row)} className="text-gray-400 hover:text-blue-500 p-1" title="View full record">
                                                         <Eye size={14} />
                                                     </button>
