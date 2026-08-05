@@ -5,6 +5,7 @@ This is the main entry point for the CUIN v2 backend API.
 It configures the FastAPI application with all routes, middleware,
 and WebSocket support.
 """
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -71,7 +72,16 @@ async def lifespan(app: FastAPI):
     
     run_service.set_progress_callback(ws_progress_callback)
     logger.info("✅ RunService hooked up to WebSockets with enhanced payload support")
-    
+
+    # Fire-and-forget: warms routes_schema's disk+memory cache in the
+    # background so the (17-34s on the real dataset) source-file
+    # profiling scan is usually already done before the first person
+    # actually opens Settings, instead of them being the unlucky
+    # request that triggers it synchronously. Not awaited -- must not
+    # delay startup/health-checks.
+    from api.routes_schema import warm_schema_cache
+    asyncio.create_task(warm_schema_cache())
+
     yield
     
     # Shutdown
