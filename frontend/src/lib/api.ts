@@ -487,6 +487,36 @@ class ApiClient {
     async getApiToken() {
         return this.request('/admin/api-token');
     }
+
+    // -- Data Viewer: browse the raw, un-normalized source Parquet
+    // file directly (before running any pipeline), backed by a
+    // materialized Doris table with inverted-index search. See
+    // backend/engine/ports/doris_raw_preview.py.
+    async getDataViewerStatus() {
+        return this.request('/data-viewer/status');
+    }
+
+    async refreshDataViewer() {
+        return this.request('/data-viewer/refresh', { method: 'POST' });
+    }
+
+    async getDataViewerRows(params: {
+        page: number;
+        pageSize: number;
+        q?: string;
+        filters?: Array<{ column: string; op: string; value?: string }>;
+        sortCol?: string;
+        sortDir?: 'asc' | 'desc';
+    }) {
+        const p = new URLSearchParams();
+        p.set('page', String(params.page));
+        p.set('page_size', String(params.pageSize));
+        if (params.q) p.set('q', params.q);
+        if (params.filters && params.filters.length > 0) p.set('filters', JSON.stringify(params.filters));
+        if (params.sortCol) p.set('sort_col', params.sortCol);
+        if (params.sortDir) p.set('sort_dir', params.sortDir);
+        return this.request(`/data-viewer/rows?${p.toString()}`);
+    }
 }
 
 export const api = new ApiClient(API_BASE_URL);

@@ -221,6 +221,12 @@ app.include_router(search_router, prefix="/search", tags=["Search"])
 from api.routes_schema import router as schema_router
 app.include_router(schema_router, prefix="/datasource/schema", tags=["Schema"])
 
+# Raw source data viewer -- lets a bank officer browse the raw,
+# un-normalized source Parquet file directly, before running any
+# pipeline. See engine/ports/doris_raw_preview.py's module docstring.
+from api.routes_data_viewer import router as data_viewer_router
+app.include_router(data_viewer_router, prefix="/data-viewer", tags=["Data Viewer"])
+
 # Entity resolution workbench (Stage 4 of the plan) -- purely additive,
 # does not touch/redirect any /graph, /explorer, /matches, or legacy
 # /review endpoint. See api/routes_workbench.py's module docstring.

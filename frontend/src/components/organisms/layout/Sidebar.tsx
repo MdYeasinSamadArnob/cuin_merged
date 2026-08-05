@@ -17,6 +17,7 @@ import {
     Moon,
     Database,
     Webhook,
+    Table2,
 } from "lucide-react";
 import { useState } from "react";
 import { clsx } from "clsx";
@@ -31,6 +32,7 @@ import { useAppStore } from "@/stores/useAppStore";
 // tabbed page now), see /settings/page.tsx.
 const navigation = [
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+    { name: "Data Viewer", href: "/data-viewer", icon: Table2 },
     { name: "Datasource", href: "/datasource", icon: Database },
     { name: "Pipeline", href: "/pipeline", icon: GitBranch },
     { name: "Explorer", href: "/explorer", icon: Search },
