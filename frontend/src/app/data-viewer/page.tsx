@@ -399,10 +399,10 @@ export default function DataViewerPage() {
                     >
                         <motion.div
                             initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.96 }}
-                            className="glass-card p-6 max-w-2xl w-full max-h-[80vh] overflow-y-auto"
+                            className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-xl rounded-2xl p-6 max-w-2xl w-full max-h-[80vh] overflow-y-auto"
                             onClick={(e) => e.stopPropagation()}
                         >
-                            <div className="flex items-center justify-between mb-4">
+                            <div className="flex items-center justify-between mb-4 pb-3 border-b border-gray-200 dark:border-gray-700">
                                 <h3 className="font-semibold text-gray-900 dark:text-white">Record Details</h3>
                                 <button onClick={() => setSelectedRow(null)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
                                     <X size={18} />
@@ -413,14 +413,14 @@ export default function DataViewerPage() {
                                     const value = selectedRow[c.name];
                                     return (
                                         <div key={c.name} className="border-b border-gray-100 dark:border-gray-800 pb-2">
-                                            <div className="text-[11px] uppercase tracking-wide text-gray-400 mb-1">
-                                                {c.name} <span className="lowercase text-gray-300">({c.doris_type})</span>
+                                            <div className="text-[11px] uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">
+                                                {c.name} <span className="lowercase text-gray-400 dark:text-gray-500">({c.doris_type})</span>
                                             </div>
                                             {c.is_array ? (
                                                 (value as unknown[])?.length > 0 ? (
                                                     <div className="flex flex-wrap gap-1">
                                                         {(value as unknown[]).map((v, i) => (
-                                                            <span key={i} className="px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-xs">{String(v)}</span>
+                                                            <span key={i} className="px-2 py-0.5 rounded bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border border-blue-100 dark:border-blue-800/50 text-xs">{String(v)}</span>
                                                         ))}
                                                     </div>
                                                 ) : <span className="text-gray-400 dark:text-gray-500 text-sm">—</span>
