@@ -276,6 +276,12 @@ def query_rows(
     order_sql = ""
     if sort_col:
         sort_column = _validate_column(columns, sort_col)
+        if sort_column.is_array:
+            # Doris rejects ORDER BY on an ARRAY<TEXT> column outright
+            # (INTERNAL_ERROR "meet invalid type") -- reject cleanly
+            # here instead of letting that opaque engine error reach
+            # the API response.
+            raise ValueError(f"Cannot sort by array column {sort_column.name!r}")
         direction = "DESC" if sort_dir.lower() == "desc" else "ASC"
         order_sql = f"ORDER BY {sort_column.name} {direction}"
 

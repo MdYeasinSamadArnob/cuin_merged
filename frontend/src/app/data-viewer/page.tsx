@@ -113,9 +113,12 @@ export default function DataViewerPage() {
     };
     const applyFilters = () => { setAppliedFilters(filters); setPage(1); };
     const clearFilters = () => { setFilters([]); setAppliedFilters([]); setPage(1); };
-    const toggleSort = (colName: string) => {
-        if (sortCol === colName) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-        else { setSortCol(colName); setSortDir("asc"); }
+    const toggleSort = (col: ColumnInfo) => {
+        // Doris rejects ORDER BY on an ARRAY<TEXT> column outright --
+        // never send that request in the first place.
+        if (col.is_array) return;
+        if (sortCol === col.name) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+        else { setSortCol(col.name); setSortDir("asc"); }
         setPage(1);
     };
 
@@ -316,9 +319,13 @@ export default function DataViewerPage() {
                                             {columns.map((c) => (
                                                 <th
                                                     key={c.name}
-                                                    onClick={() => toggleSort(c.name)}
-                                                    className="pb-2 pr-4 cursor-pointer select-none hover:text-gray-700 dark:hover:text-gray-200 whitespace-nowrap"
-                                                    title={c.doris_type}
+                                                    onClick={() => toggleSort(c)}
+                                                    className={`pb-2 pr-4 select-none whitespace-nowrap ${
+                                                        c.is_array
+                                                            ? "cursor-default"
+                                                            : "cursor-pointer hover:text-gray-700 dark:hover:text-gray-200"
+                                                    }`}
+                                                    title={c.is_array ? `${c.doris_type} -- not sortable` : c.doris_type}
                                                 >
                                                     {c.name}
                                                     {c.searchable && <span className="text-blue-400 ml-1" title="Full-text searchable">•</span>}
