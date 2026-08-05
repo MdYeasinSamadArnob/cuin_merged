@@ -6,16 +6,22 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 
-// Same reasoning as src/lib/api.ts's resolveApiBaseUrl -- "localhost"
-// only reaches the backend when the browser IS the backend's machine.
-// Derive from wherever the page was actually loaded from instead.
+// Same reasoning and fix as src/lib/api.ts's resolveApiBaseUrl -- the
+// hostname must always come from window.location (both to reach the
+// right machine at all, and because a mismatched baked-in private-IP
+// host trips Chrome's Private Network Access block when the page
+// itself was loaded from a different origin), while the port is kept
+// from NEXT_PUBLIC_WS_URL since it's genuine deployment config.
 function resolveWsUrl(): string {
-    if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
     if (typeof window !== 'undefined') {
         const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        return `${proto}//${window.location.hostname}:8000/ws`;
+        let port = '8000';
+        if (process.env.NEXT_PUBLIC_WS_URL) {
+            try { port = new URL(process.env.NEXT_PUBLIC_WS_URL.replace(/^ws/, 'http')).port || port; } catch { /* keep default */ }
+        }
+        return `${proto}//${window.location.hostname}:${port}/ws`;
     }
-    return 'ws://localhost:8000/ws';
+    return process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws';
 }
 
 interface WebSocketMessage {

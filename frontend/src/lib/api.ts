@@ -8,20 +8,38 @@
  * `http://localhost:8000` only resolves to the backend when the
  * BROWSER itself is running on the same machine as the backend. Any
  * other viewer -- someone on the LAN hitting this app by IP/hostname,
- * a real deployment behind a domain -- has "localhost" resolve to
- * THEIR OWN machine instead, so every API call fails silently (caught,
- * console.error'd, UI stuck on a loading state forever, with no
- * visible error). Deriving the API host from wherever the page itself
- * was loaded from fixes this for every access pattern without any
- * per-environment config. NEXT_PUBLIC_API_URL (baked in at build
- * time) is kept as an explicit override for setups where the API
- * genuinely lives elsewhere (e.g. reverse-proxied to a different
- * host/port in production).
+ * a public IP forwarded to the same host, a real deployment behind a
+ * domain -- has "localhost" resolve to THEIR OWN machine instead, so
+ * every API call fails silently.
+ *
+ * NEXT_PUBLIC_API_URL is baked into the JS bundle at BUILD time to
+ * ONE specific host (infra/docker-compose.yml sets it to
+ * PUBLIC_HOST, e.g. "10.11.200.99") -- since it's always set for the
+ * Docker build, it used to be checked FIRST here, which meant the
+ * "derive from wherever the page was loaded" fallback below never
+ * actually ran despite that being the documented intent. That's not
+ * just a wrong-host 404: when a browser at a DIFFERENT origin (e.g.
+ * a public IP like 27.147.147.107 forwarded to this same host) calls
+ * a private RFC1918 address like 10.11.200.99, Chrome's Private
+ * Network Access policy outright BLOCKS the request as a CORS
+ * failure ("resource is in more-private address space") -- it
+ * doesn't matter that the backend's own CORS headers allow "*".
+ *
+ * Fix: always derive the HOSTNAME from window.location (so the
+ * request stays same-origin-address-space as the page itself,
+ * whatever that happens to be), but keep the PORT from
+ * NEXT_PUBLIC_API_URL -- that's genuinely deployment-specific
+ * (BACKEND_PORT) and not guessable from window.location alone.
  */
 function resolveApiBaseUrl(): string {
-    if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
-    if (typeof window !== 'undefined') return `${window.location.protocol}//${window.location.hostname}:8000`;
-    return 'http://localhost:8000';
+    if (typeof window !== 'undefined') {
+        let port = '8000';
+        if (process.env.NEXT_PUBLIC_API_URL) {
+            try { port = new URL(process.env.NEXT_PUBLIC_API_URL).port || port; } catch { /* keep default */ }
+        }
+        return `${window.location.protocol}//${window.location.hostname}:${port}`;
+    }
+    return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 }
 
 export const API_BASE_URL = resolveApiBaseUrl();
@@ -218,27 +236,6 @@ class ApiClient {
 
     async getMatchDetails(pairId: string) {
         return this.request(`/matches/${pairId}`);
-    }
-
-    // Audit
-    async getAuditEvents(eventType?: string, entityId?: string, page: number = 1, pageSize: number = 50) {
-        const params = new URLSearchParams({
-            page: page.toString(),
-            page_size: pageSize.toString(),
-        });
-        if (eventType) params.append('event_type', eventType);
-        if (entityId) params.append('entity_id', entityId);
-        return this.request(`/audit/events?${params.toString()}`);
-    }
-
-    async getComplianceReport() {
-        // Backend route is /audit/compliance/report, not /compliance-report.
-        return this.request('/audit/compliance/report');
-    }
-
-    async verifyAuditChain() {
-        // Backend route is /audit/verify, not /verify-chain.
-        return this.request('/audit/verify');
     }
 
     // Admin

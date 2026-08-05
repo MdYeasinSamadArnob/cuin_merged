@@ -8,7 +8,6 @@ import {
     GitBranch,
     Search,
     ClipboardCheck,
-    Shield,
     Network,
     Settings,
     ChevronLeft,
@@ -37,7 +36,6 @@ const navigation = [
     { name: "Pipeline", href: "/pipeline", icon: GitBranch },
     { name: "Explorer", href: "/explorer", icon: Search },
     { name: "Review", href: "/review", icon: ClipboardCheck },
-    { name: "Compliance", href: "/compliance", icon: Shield },
     { name: "Graph", href: "/graph", icon: Network },
     { name: "API", href: "/api-docs", icon: Webhook },
 ];

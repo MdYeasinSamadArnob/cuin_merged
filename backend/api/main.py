@@ -16,7 +16,6 @@ from fastapi.responses import JSONResponse
 from api import db_init
 from api.config import settings
 from api.routes_admin import router as admin_router
-from api.routes_audit import router as audit_router
 from api.routes_candidates import router as candidates_router
 from api.routes_graph import router as graph_router
 from api.routes_matches import router as matches_router
@@ -202,7 +201,6 @@ app.include_router(runs_router, prefix="/runs", tags=["Runs"])
 app.include_router(candidates_router, prefix="/candidates", tags=["Candidates"])
 app.include_router(matches_router, prefix="/matches", tags=["Matches"])
 app.include_router(review_router, prefix="/review", tags=["Review"])
-app.include_router(audit_router, prefix="/audit", tags=["Audit"])
 app.include_router(metrics_router, prefix="/metrics", tags=["Metrics"])
 app.include_router(graph_router, prefix="/graph", tags=["Graph"])
 
