@@ -15,6 +15,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from api.config import settings
 from engine.ports import doris_conn, doris_raw_preview
@@ -29,6 +30,51 @@ def _connect():
         host=settings.DORIS_HOST, port=settings.DORIS_MYSQL_PORT,
         user=settings.DORIS_USER, password=settings.DORIS_PASSWORD,
     )
+
+
+# Every doris_raw_preview.* call below goes through pymysql (blocking,
+# synchronous network I/O) -- connecting, DESCRIBE/COUNT, CTAS + 10
+# CREATE INDEX statements for a full refresh (~2s measured live),
+# SELECT/COUNT for a rows query. None of that is awaitable, so calling
+# it directly in an `async def` route blocks FastAPI's single-threaded
+# event loop for its full duration -- every OTHER concurrent request
+# (Dashboard polling, WebSocket messages, a different user entirely)
+# queues up behind it. Same root-cause class already found and fixed
+# twice this session (routes_schema.py's profile_source(), the
+# schema-cache warm-up) -- each handler's full synchronous body
+# (connect -> query -> close) now runs inside run_in_threadpool as one
+# unit, off the event loop.
+
+def _sync_get_status():
+    con = _connect()
+    try:
+        status = doris_raw_preview.get_status(con)
+        if status is None:
+            return {"materialized": False, "row_count": 0, "columns": []}
+        return {"materialized": True, **status}
+    finally:
+        con.close()
+
+
+def _sync_refresh():
+    con = _connect()
+    try:
+        return doris_raw_preview.materialize(con)
+    finally:
+        con.close()
+
+
+def _sync_get_rows(page, page_size, q, parsed_filters, sort_col, sort_dir):
+    con = _connect()
+    try:
+        if not doris_raw_preview.table_exists(con):
+            return None
+        return doris_raw_preview.query_rows(
+            con, page=page, page_size=page_size, q=q,
+            filters=parsed_filters, sort_col=sort_col, sort_dir=sort_dir,
+        )
+    finally:
+        con.close()
 
 
 class FilterCondition(BaseModel):
@@ -53,17 +99,11 @@ async def get_status():
     (DESCRIBE + COUNT, not a full re-profile), safe to call on every
     page load.
     """
-    con = _connect()
     try:
-        status = doris_raw_preview.get_status(con)
-        if status is None:
-            return {"materialized": False, "row_count": 0, "columns": []}
-        return {"materialized": True, **status}
+        return await run_in_threadpool(_sync_get_status)
     except Exception as e:
         logger.error(f"Failed to get data viewer status: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to reach Doris: {e}")
-    finally:
-        con.close()
 
 
 @router.post("/refresh")
@@ -74,15 +114,12 @@ async def refresh():
     data_source/oracle_data.parquet with a new upload -- the preview
     otherwise keeps showing whatever was last materialized.
     """
-    con = _connect()
     try:
-        result = doris_raw_preview.materialize(con)
+        result = await run_in_threadpool(_sync_refresh)
         return {"success": True, **result}
     except Exception as e:
         logger.error(f"Failed to refresh data viewer preview: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to materialize source data: {e}")
-    finally:
-        con.close()
 
 
 @router.get("/rows", response_model=RowsResponse)
@@ -115,23 +152,19 @@ async def get_rows(
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="filters must be valid JSON")
 
-    con = _connect()
     try:
-        if not doris_raw_preview.table_exists(con):
-            raise HTTPException(
-                status_code=404,
-                detail="Raw data preview has not been materialized yet -- POST /data-viewer/refresh first.",
-            )
-        return doris_raw_preview.query_rows(
-            con, page=page, page_size=page_size, q=q,
-            filters=parsed_filters, sort_col=sort_col, sort_dir=sort_dir,
+        result = await run_in_threadpool(
+            _sync_get_rows, page, page_size, q, parsed_filters, sort_col, sort_dir,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Failed to query data viewer rows: {e}")
         raise HTTPException(status_code=500, detail=f"Query failed: {e}")
-    finally:
-        con.close()
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Raw data preview has not been materialized yet -- POST /data-viewer/refresh first.",
+        )
+    return result
