@@ -11,6 +11,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from services.run_service import get_run_service, RunStatus
 
@@ -75,12 +76,11 @@ async def get_run(run_id: str) -> dict:
     return run.to_dict()
 
 
-@router.post("/{run_id}/cancel")
-async def cancel_run(run_id: str) -> dict:
+def _sync_cancel_run(run_id: str) -> dict:
     """
-    Cancel a currently-running pipeline. Does not delete anything --
-    the run stays in the registry with status CANCELLED. See DELETE
-    /runs/{run_id} to actually remove a run.
+    Full synchronous body of cancel_run -- run_service.cancel_run()
+    calls self._save_runs(), a blocking write of data/runs_index.json,
+    so this runs off the event loop via run_in_threadpool.
     """
     run_service = get_run_service()
     success = run_service.cancel_run(run_id)
@@ -94,26 +94,24 @@ async def cancel_run(run_id: str) -> dict:
     return {"message": "Run cancelled", "run_id": run_id}
 
 
-@router.delete("/{run_id}", response_model=DeleteRunResponse)
-async def delete_run(run_id: str) -> DeleteRunResponse:
+@router.post("/{run_id}/cancel")
+async def cancel_run(run_id: str) -> dict:
     """
-    Permanently delete a run: its dedicated Doris database
-    (cuin_run_<run_id>), its Postgres footprint (candidate_pairs,
-    match_scores, match_decisions, review_queue, referee_explanations,
-    identifier_frequency, and entity_relationships all cascade from the
-    `runs` row; audit_events.run_id is nulled, not deleted, to keep the
-    append-only hash-chained audit trail intact), its file artifacts
-    under data/runs/, its entries in the review-queue pair index, and
-    its entry in the run registry.
+    Cancel a currently-running pipeline. Does not delete anything --
+    the run stays in the registry with status CANCELLED. See DELETE
+    /runs/{run_id} to actually remove a run.
+    """
+    return await run_in_threadpool(_sync_cancel_run, run_id)
 
-    Deliberately does NOT touch entities/entity_members/entity_lineage/
-    resolution_overrides/review_decisions/customers_norm -- those are
-    global platform state with no single owning run (a later run's
-    carry_forward can update an entity an earlier run created), so
-    deleting one run must never delete data another run depends on.
 
-    Cannot delete a currently-RUNNING run -- cancel it first via POST
-    /runs/{run_id}/cancel.
+def _sync_delete_run(run_id: str) -> DeleteRunResponse:
+    """
+    Full synchronous body of delete_run -- drops a Doris database
+    (pymysql DDL), deletes the Postgres footprint (psycopg2), unlinks
+    file artifacts under data/runs/, rewrites the review-queue pair
+    index, and rewrites data/runs_index.json, all of which are
+    blocking I/O, so this runs off the event loop as one
+    run_in_threadpool dispatch.
     """
     run_service = get_run_service()
     run = run_service.get_run(run_id)
@@ -207,3 +205,27 @@ async def delete_run(run_id: str) -> DeleteRunResponse:
         message=f"Run {run_id} deleted",
         run_id=run_id,
     )
+
+
+@router.delete("/{run_id}", response_model=DeleteRunResponse)
+async def delete_run(run_id: str) -> DeleteRunResponse:
+    """
+    Permanently delete a run: its dedicated Doris database
+    (cuin_run_<run_id>), its Postgres footprint (candidate_pairs,
+    match_scores, match_decisions, review_queue, referee_explanations,
+    identifier_frequency, and entity_relationships all cascade from the
+    `runs` row; audit_events.run_id is nulled, not deleted, to keep the
+    append-only hash-chained audit trail intact), its file artifacts
+    under data/runs/, its entries in the review-queue pair index, and
+    its entry in the run registry.
+
+    Deliberately does NOT touch entities/entity_members/entity_lineage/
+    resolution_overrides/review_decisions/customers_norm -- those are
+    global platform state with no single owning run (a later run's
+    carry_forward can update an entity an earlier run created), so
+    deleting one run must never delete data another run depends on.
+
+    Cannot delete a currently-RUNNING run -- cancel it first via POST
+    /runs/{run_id}/cancel.
+    """
+    return await run_in_threadpool(_sync_delete_run, run_id)

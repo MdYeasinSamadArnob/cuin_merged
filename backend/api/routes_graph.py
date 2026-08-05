@@ -9,6 +9,7 @@ routes_graph_v2.py instead).
 """
 
 from fastapi import APIRouter, HTTPException, Query
+from starlette.concurrency import run_in_threadpool
 from typing import Optional, List
 from pydantic import BaseModel
 from datetime import datetime
@@ -89,8 +90,7 @@ class PreviewRequest(BaseModel):
     scoring: dict
 
 
-@router.post("/preview", response_model=GraphResponse)
-async def preview_clustering(request: PreviewRequest):
+def _sync_preview_clustering(request: PreviewRequest) -> GraphResponse:
     """
     Preview clustering results with temporary configuration.
     """
@@ -311,6 +311,14 @@ async def preview_clustering(request: PreviewRequest):
     )
 
 
+@router.post("/preview", response_model=GraphResponse)
+async def preview_clustering(request: PreviewRequest):
+    """
+    Preview clustering results with temporary configuration.
+    """
+    return await run_in_threadpool(_sync_preview_clustering, request)
+
+
 # Cache of {run_id: {customer_key: record_dict}} loaded from
 # data/runs/{run_id}_records.json, so the tier-2 disk fallback below
 # (used by every get_record_profile() call whose caller didn't already
@@ -392,13 +400,12 @@ def get_record_profile(rid: str, run_records: Optional[dict] = None, run_id: Opt
     }
 
 
-@router.get("/entities", response_model=ClusterListResponse)
-async def list_clusters(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=5000),
-    min_size: int = Query(1, ge=1, description="Minimum cluster size to include"),
-    run_id: Optional[str] = Query(None, description="Filter by run ID (optional)")
-):
+def _sync_list_clusters(
+    page: int,
+    page_size: int,
+    min_size: int,
+    run_id: Optional[str],
+) -> ClusterListResponse:
     """
     List resolved entities (clusters) with pagination.
     Returns rich profiles for display in the Explorer.
@@ -484,16 +491,29 @@ async def list_clusters(
     )
 
 
-@router.get("/clusters", response_model=GraphResponse)
-async def get_cluster_graph(
-    cluster_id: Optional[str] = Query(None, description="Filter to specific cluster"),
-    limit: int = Query(500, le=2000, description="Max nodes to return"),
-    run_id: Optional[str] = Query(None, description="Filter by run ID (optional)"),
-    include_singletons: bool = Query(True, description="Include singleton clusters (size=1)"),
+@router.get("/entities", response_model=ClusterListResponse)
+async def list_clusters(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=5000),
+    min_size: int = Query(1, ge=1, description="Minimum cluster size to include"),
+    run_id: Optional[str] = Query(None, description="Filter by run ID (optional)")
 ):
     """
+    List resolved entities (clusters) with pagination.
+    Returns rich profiles for display in the Explorer.
+    """
+    return await run_in_threadpool(_sync_list_clusters, page, page_size, min_size, run_id)
+
+
+def _sync_get_cluster_graph(
+    cluster_id: Optional[str],
+    limit: int,
+    run_id: Optional[str],
+    include_singletons: bool,
+) -> GraphResponse:
+    """
     Get cluster graph for visualization.
-    
+
     Returns nodes and edges suitable for D3.js or similar graph libraries.
     """
     manager = get_cluster_manager()
@@ -665,6 +685,23 @@ async def get_cluster_graph(
     )
 
 
+@router.get("/clusters", response_model=GraphResponse)
+async def get_cluster_graph(
+    cluster_id: Optional[str] = Query(None, description="Filter to specific cluster"),
+    limit: int = Query(500, le=2000, description="Max nodes to return"),
+    run_id: Optional[str] = Query(None, description="Filter by run ID (optional)"),
+    include_singletons: bool = Query(True, description="Include singleton clusters (size=1)"),
+):
+    """
+    Get cluster graph for visualization.
+
+    Returns nodes and edges suitable for D3.js or similar graph libraries.
+    """
+    return await run_in_threadpool(
+        _sync_get_cluster_graph, cluster_id, limit, run_id, include_singletons
+    )
+
+
 @router.get("/cluster/{cluster_id}", response_model=ClusterSummary)
 async def get_cluster_details(cluster_id: str):
     """Get details for a specific cluster."""
@@ -766,12 +803,7 @@ async def get_graph_data(
     )
 
 
-@router.get("/uniques")
-async def get_unique_records(
-    run_id: Optional[str] = Query(None),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=5000),
-):
+def _sync_get_unique_records(run_id: Optional[str], page: int, page_size: int) -> dict:
     """
     Returns singleton records - customer IDs that belong to no accepted
     cluster for this run. Used by the Explorer UNIQUE tab.
@@ -857,6 +889,19 @@ async def get_unique_records(
         "page": page,
         "page_size": page_size,
     }
+
+
+@router.get("/uniques")
+async def get_unique_records(
+    run_id: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=5000),
+):
+    """
+    Returns singleton records for the Explorer UNIQUE tab. See
+    _sync_get_unique_records for the full explanation of the data source.
+    """
+    return await run_in_threadpool(_sync_get_unique_records, run_id, page, page_size)
 
 
 @router.get("/cluster-entities", response_model=ClusterListResponse)

@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional
 import psycopg2
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from api.config import settings
 from engine.ports.run_session import open_run_readonly
@@ -164,8 +165,7 @@ def _attach_officer_decisions(items: List[Dict[str, Any]]) -> None:
 # Populations
 # ----------------------------------------------------------------------
 
-@router.get("/populations")
-async def get_populations(run_id: Optional[str] = None):
+def _sync_get_populations(run_id: Optional[str]):
     rid = _resolve_run_id(run_id)
     session = open_run_readonly(rid)
     try:
@@ -211,6 +211,11 @@ async def get_populations(run_id: Optional[str] = None):
     }
 
 
+@router.get("/populations")
+async def get_populations(run_id: Optional[str] = None):
+    return await run_in_threadpool(_sync_get_populations, run_id)
+
+
 @router.get("/runs")
 async def list_runs(page: int = 1, page_size: int = 20):
     all_runs, total = get_run_service().list_runs(page=page, page_size=page_size)
@@ -231,12 +236,11 @@ async def list_runs(page: int = 1, page_size: int = 20):
 _VALID_RECORD_TYPES = {"ALL", "COMPANY", "INDIVIDUAL"}
 
 
-@router.get("/pairs")
-async def list_pairs(
-    run_id: Optional[str] = None, decision: Optional[str] = None,
-    min_conf: Optional[float] = None, max_conf: Optional[float] = None, has_veto: Optional[bool] = None,
-    q: Optional[str] = None, record_type: Optional[str] = None,
-    page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=200),
+def _sync_list_pairs(
+    run_id: Optional[str], decision: Optional[str],
+    min_conf: Optional[float], max_conf: Optional[float], has_veto: Optional[bool],
+    q: Optional[str], record_type: Optional[str],
+    page: int, page_size: int,
 ):
     if record_type is not None and record_type.upper() not in _VALID_RECORD_TYPES:
         raise HTTPException(status_code=400, detail=f"record_type must be one of {sorted(_VALID_RECORD_TYPES)}")
@@ -312,8 +316,19 @@ async def list_pairs(
     return {"items": items, "total": total, "page": page, "page_size": page_size, "run_id": rid, "engine": engine}
 
 
-@router.get("/pairs/{a_key}/{b_key}/breakdown")
-async def pair_breakdown(a_key: str, b_key: str, run_id: Optional[str] = None):
+@router.get("/pairs")
+async def list_pairs(
+    run_id: Optional[str] = None, decision: Optional[str] = None,
+    min_conf: Optional[float] = None, max_conf: Optional[float] = None, has_veto: Optional[bool] = None,
+    q: Optional[str] = None, record_type: Optional[str] = None,
+    page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=200),
+):
+    return await run_in_threadpool(
+        _sync_list_pairs, run_id, decision, min_conf, max_conf, has_veto, q, record_type, page, page_size,
+    )
+
+
+def _sync_pair_breakdown(a_key: str, b_key: str, run_id: Optional[str]):
     rid = _resolve_run_id(run_id)
     session = open_run_readonly(rid)
     try:
@@ -375,12 +390,16 @@ async def pair_breakdown(a_key: str, b_key: str, run_id: Optional[str] = None):
     return result
 
 
+@router.get("/pairs/{a_key}/{b_key}/breakdown")
+async def pair_breakdown(a_key: str, b_key: str, run_id: Optional[str] = None):
+    return await run_in_threadpool(_sync_pair_breakdown, a_key, b_key, run_id)
+
+
 # ----------------------------------------------------------------------
 # Records
 # ----------------------------------------------------------------------
 
-@router.get("/records/{customer_code}")
-async def get_record(customer_code: str, run_id: Optional[str] = None):
+def _sync_get_record(customer_code: str, run_id: Optional[str]):
     """Real record detail -- never the fabricating get_record_profile() the legacy /graph page still uses."""
     rid = _resolve_run_id(run_id)
     session = open_run_readonly(rid)
@@ -425,12 +444,16 @@ async def get_record(customer_code: str, run_id: Optional[str] = None):
     }
 
 
+@router.get("/records/{customer_code}")
+async def get_record(customer_code: str, run_id: Optional[str] = None):
+    return await run_in_threadpool(_sync_get_record, customer_code, run_id)
+
+
 # ----------------------------------------------------------------------
 # Search
 # ----------------------------------------------------------------------
 
-@router.get("/search")
-async def search(q: str = Query(..., min_length=1), run_id: Optional[str] = None, page: int = 1, page_size: int = 20):
+def _sync_search(q: str, run_id: Optional[str], page: int, page_size: int):
     rid = _resolve_run_id(run_id)
     session = open_run_readonly(rid)
     try:
@@ -481,15 +504,19 @@ async def search(q: str = Query(..., min_length=1), run_id: Optional[str] = None
     return {"run_id": rid, "engine": session.engine, "query": q, "total": total, "page": page, "page_size": page_size, "results": results}
 
 
+@router.get("/search")
+async def search(q: str = Query(..., min_length=1), run_id: Optional[str] = None, page: int = 1, page_size: int = 20):
+    return await run_in_threadpool(_sync_search, q, run_id, page, page_size)
+
+
 # ----------------------------------------------------------------------
 # Entities
 # ----------------------------------------------------------------------
 
-@router.get("/entities")
-async def list_entities(
-    page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=200),
-    has_global_ref: Optional[bool] = None, q: Optional[str] = None,
-    record_type: Optional[str] = None, run_id: Optional[str] = None,
+def _sync_list_entities(
+    page: int, page_size: int,
+    has_global_ref: Optional[bool], q: Optional[str],
+    record_type: Optional[str], run_id: Optional[str],
 ):
     if record_type is not None and record_type.upper() not in _VALID_RECORD_TYPES:
         raise HTTPException(status_code=400, detail=f"record_type must be one of {sorted(_VALID_RECORD_TYPES)}")
@@ -638,8 +665,16 @@ async def list_entities(
     return {"items": items, "total": total, "page": page, "page_size": page_size, "run_id": rid}
 
 
-@router.get("/entities/{entity_id}")
-async def get_entity(entity_id: str, run_id: Optional[str] = None):
+@router.get("/entities")
+async def list_entities(
+    page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=200),
+    has_global_ref: Optional[bool] = None, q: Optional[str] = None,
+    record_type: Optional[str] = None, run_id: Optional[str] = None,
+):
+    return await run_in_threadpool(_sync_list_entities, page, page_size, has_global_ref, q, record_type, run_id)
+
+
+def _sync_get_entity(entity_id: str, run_id: Optional[str]):
     pg_conn = _pg()
     try:
         cur = pg_conn.cursor()
@@ -696,8 +731,12 @@ async def get_entity(entity_id: str, run_id: Optional[str] = None):
     }
 
 
-@router.get("/entities/{entity_id}/matches")
-async def entity_matches(entity_id: str, run_id: Optional[str] = None):
+@router.get("/entities/{entity_id}")
+async def get_entity(entity_id: str, run_id: Optional[str] = None):
+    return await run_in_threadpool(_sync_get_entity, entity_id, run_id)
+
+
+def _sync_entity_matches(entity_id: str, run_id: Optional[str]):
     """
     Every direct, scored pairwise link among this entity's CURRENT members
     -- the actual evidence a union-find over these edges collapses into one
@@ -750,6 +789,11 @@ async def entity_matches(entity_id: str, run_id: Optional[str] = None):
         "possible_pairs": possible_pairs, "directly_evidenced_pairs": len(items),
         "items": items,
     }
+
+
+@router.get("/entities/{entity_id}/matches")
+async def entity_matches(entity_id: str, run_id: Optional[str] = None):
+    return await run_in_threadpool(_sync_entity_matches, entity_id, run_id)
 
 
 # ----------------------------------------------------------------------
@@ -810,8 +854,7 @@ def _handle_workbench_error(fn, *args):
         raise HTTPException(status_code=409, detail=str(e))
 
 
-@router.post("/actions/approve")
-async def action_approve(request: PairActionRequest):
+def _sync_action_approve(request: PairActionRequest):
     pg_conn = _pg()
     try:
         return _handle_workbench_error(
@@ -821,8 +864,12 @@ async def action_approve(request: PairActionRequest):
         pg_conn.close()
 
 
-@router.post("/actions/reject")
-async def action_reject(request: PairActionRequest):
+@router.post("/actions/approve")
+async def action_approve(request: PairActionRequest):
+    return await run_in_threadpool(_sync_action_approve, request)
+
+
+def _sync_action_reject(request: PairActionRequest):
     pg_conn = _pg()
     try:
         return _handle_workbench_error(
@@ -832,8 +879,12 @@ async def action_reject(request: PairActionRequest):
         pg_conn.close()
 
 
-@router.post("/actions/merge")
-async def action_merge(request: MergeRequest):
+@router.post("/actions/reject")
+async def action_reject(request: PairActionRequest):
+    return await run_in_threadpool(_sync_action_reject, request)
+
+
+def _sync_action_merge(request: MergeRequest):
     pg_conn = _pg()
     try:
         return _handle_workbench_error(
@@ -843,8 +894,12 @@ async def action_merge(request: MergeRequest):
         pg_conn.close()
 
 
-@router.post("/actions/split")
-async def action_split(request: SplitRequest):
+@router.post("/actions/merge")
+async def action_merge(request: MergeRequest):
+    return await run_in_threadpool(_sync_action_merge, request)
+
+
+def _sync_action_split(request: SplitRequest):
     pg_conn = _pg()
     try:
         return _handle_workbench_error(
@@ -854,8 +909,12 @@ async def action_split(request: SplitRequest):
         pg_conn.close()
 
 
-@router.post("/entities/{entity_id}/global-ref")
-async def action_assign_global_ref(entity_id: str, request: GlobalRefRequest):
+@router.post("/actions/split")
+async def action_split(request: SplitRequest):
+    return await run_in_threadpool(_sync_action_split, request)
+
+
+def _sync_action_assign_global_ref(entity_id: str, request: GlobalRefRequest):
     pg_conn = _pg()
     try:
         return _handle_workbench_error(
@@ -865,11 +924,31 @@ async def action_assign_global_ref(entity_id: str, request: GlobalRefRequest):
         pg_conn.close()
 
 
-@router.delete("/entities/{entity_id}/global-ref")
-async def action_retire_global_ref(entity_id: str, request: RetireGlobalRefRequest):
+@router.post("/entities/{entity_id}/global-ref")
+async def action_assign_global_ref(entity_id: str, request: GlobalRefRequest):
+    return await run_in_threadpool(_sync_action_assign_global_ref, entity_id, request)
+
+
+def _sync_action_retire_global_ref(entity_id: str, request: RetireGlobalRefRequest):
     pg_conn = _pg()
     try:
         return _handle_workbench_error(wb.retire_global_ref, pg_conn, entity_id, request.reason, request.actor)
+    finally:
+        pg_conn.close()
+
+
+@router.delete("/entities/{entity_id}/global-ref")
+async def action_retire_global_ref(entity_id: str, request: RetireGlobalRefRequest):
+    return await run_in_threadpool(_sync_action_retire_global_ref, entity_id, request)
+
+
+def _sync_action_assign_global_ref_to_record(customer_code: str, request: RecordGlobalRefRequest):
+    pg_conn = _pg()
+    try:
+        return _handle_workbench_error(
+            wb.assign_global_ref_to_record, pg_conn, request.run_id, customer_code,
+            request.global_ref, request.state, request.reason, request.actor,
+        )
     finally:
         pg_conn.close()
 
@@ -883,14 +962,7 @@ async def action_assign_global_ref_to_record(customer_code: str, request: Record
     Global ID assigned at all. Mints a one-member entity on demand; see
     services.workbench_service.assign_global_ref_to_record.
     """
-    pg_conn = _pg()
-    try:
-        return _handle_workbench_error(
-            wb.assign_global_ref_to_record, pg_conn, request.run_id, customer_code,
-            request.global_ref, request.state, request.reason, request.actor,
-        )
-    finally:
-        pg_conn.close()
+    return await run_in_threadpool(_sync_action_assign_global_ref_to_record, customer_code, request)
 
 
 # ----------------------------------------------------------------------
@@ -905,8 +977,7 @@ class ReasonActorRequest(BaseModel):
     actor: str
 
 
-@router.post("/entities/{entity_id}/undo-merge")
-async def action_undo_merge(entity_id: str, request: ReasonActorRequest):
+def _sync_action_undo_merge(entity_id: str, request: ReasonActorRequest):
     pg_conn = _pg()
     try:
         return _handle_workbench_error(wb.undo_merge, pg_conn, entity_id, request.reason, request.actor)
@@ -914,8 +985,12 @@ async def action_undo_merge(entity_id: str, request: ReasonActorRequest):
         pg_conn.close()
 
 
-@router.post("/entities/{entity_id}/revert-global-ref")
-async def action_revert_global_ref(entity_id: str, request: ReasonActorRequest):
+@router.post("/entities/{entity_id}/undo-merge")
+async def action_undo_merge(entity_id: str, request: ReasonActorRequest):
+    return await run_in_threadpool(_sync_action_undo_merge, entity_id, request)
+
+
+def _sync_action_revert_global_ref(entity_id: str, request: ReasonActorRequest):
     pg_conn = _pg()
     try:
         return _handle_workbench_error(wb.revert_global_ref, pg_conn, entity_id, request.reason, request.actor)
@@ -923,8 +998,12 @@ async def action_revert_global_ref(entity_id: str, request: ReasonActorRequest):
         pg_conn.close()
 
 
-@router.post("/overrides/{override_id}/revoke")
-async def action_revoke_override(override_id: str, request: ReasonActorRequest):
+@router.post("/entities/{entity_id}/revert-global-ref")
+async def action_revert_global_ref(entity_id: str, request: ReasonActorRequest):
+    return await run_in_threadpool(_sync_action_revert_global_ref, entity_id, request)
+
+
+def _sync_action_revoke_override(override_id: str, request: ReasonActorRequest):
     pg_conn = _pg()
     try:
         return _handle_workbench_error(wb.revoke_override, pg_conn, override_id, request.reason, request.actor)
@@ -932,12 +1011,16 @@ async def action_revoke_override(override_id: str, request: ReasonActorRequest):
         pg_conn.close()
 
 
+@router.post("/overrides/{override_id}/revoke")
+async def action_revoke_override(override_id: str, request: ReasonActorRequest):
+    return await run_in_threadpool(_sync_action_revoke_override, override_id, request)
+
+
 # ----------------------------------------------------------------------
 # Audit
 # ----------------------------------------------------------------------
 
-@router.get("/audit/verify")
-async def audit_verify():
+def _sync_audit_verify():
     pg_conn = _pg()
     try:
         is_valid, error, checked = wb.verify_audit_chain(pg_conn)
@@ -946,8 +1029,12 @@ async def audit_verify():
     return {"valid": is_valid, "error": error, "events_checked": checked}
 
 
-@router.get("/audit")
-async def list_audit(entity_id: Optional[str] = None, run_id: Optional[str] = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=500)):
+@router.get("/audit/verify")
+async def audit_verify():
+    return await run_in_threadpool(_sync_audit_verify)
+
+
+def _sync_list_audit(entity_id: Optional[str], run_id: Optional[str], page: int, page_size: int):
     pg_conn = _pg()
     try:
         cur = pg_conn.cursor()
@@ -980,11 +1067,12 @@ async def list_audit(entity_id: Optional[str] = None, run_id: Optional[str] = No
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
-@router.get("/overrides")
-async def list_overrides(
-    page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=500),
-    verdict: Optional[str] = None, run_id: Optional[str] = None,
-):
+@router.get("/audit")
+async def list_audit(entity_id: Optional[str] = None, run_id: Optional[str] = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=500)):
+    return await run_in_threadpool(_sync_list_audit, entity_id, run_id, page, page_size)
+
+
+def _sync_list_overrides(page: int, page_size: int, verdict: Optional[str], run_id: Optional[str]):
     """
     Every active officer decision (MUST_LINK = approved, MUST_NOT_LINK =
     rejected) -- the "Approved" tab's traceability view. Unlike /pairs,
@@ -1060,3 +1148,11 @@ async def list_overrides(
             logger.warning("Could not hydrate override names for run %s", rid, exc_info=True)
 
     return {"items": items, "total": total, "page": page, "page_size": page_size, "run_id": rid}
+
+
+@router.get("/overrides")
+async def list_overrides(
+    page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=500),
+    verdict: Optional[str] = None, run_id: Optional[str] = None,
+):
+    return await run_in_threadpool(_sync_list_overrides, page, page_size, verdict, run_id)

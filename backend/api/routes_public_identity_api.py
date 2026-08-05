@@ -51,6 +51,7 @@ import psycopg2
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, model_validator
+from starlette.concurrency import run_in_threadpool
 
 from api.config import settings
 from engine.normalize.identity import (
@@ -435,9 +436,8 @@ async def list_screenable_runs(_: None = Depends(require_bearer_token)):
     ]
 
 
-@router.get("/identity/global-id/{global_id}", response_model=GlobalIdLookupResponse, tags=["Identity Recognition"])
-async def lookup_global_id(global_id: str, _: None = Depends(require_bearer_token)):
-    """Fast path for when the bank already has a candidate Global ID (e.g. from a prior screen) and just wants to confirm it's still live."""
+def _sync_lookup_global_id(global_id: str) -> GlobalIdLookupResponse:
+    """Full synchronous body of lookup_global_id -- psycopg2 connect/query/close is blocking network I/O."""
     pg_conn = _pg()
     try:
         cur = pg_conn.cursor()
@@ -459,19 +459,22 @@ async def lookup_global_id(global_id: str, _: None = Depends(require_bearer_toke
         pg_conn.close()
 
 
-@router.post("/identity/screen", response_model=IdentityScreenResponse, tags=["Identity Recognition"])
-async def screen_identity(request: IdentityScreenRequest, _: None = Depends(require_bearer_token)):
-    """
-    Screen a new applicant's details against the resolved identity
-    graph before opening an account. Returns whether this person
-    already exists, whether they already carry a confirmed Global ID,
-    and (when relevant) ranked candidate matches with the same
-    rule-by-rule explainability the officer workbench shows.
+@router.get("/identity/global-id/{global_id}", response_model=GlobalIdLookupResponse, tags=["Identity Recognition"])
+async def lookup_global_id(global_id: str, _: None = Depends(require_bearer_token)):
+    """Fast path for when the bank already has a candidate Global ID (e.g. from a prior screen) and just wants to confirm it's still live."""
+    return await run_in_threadpool(_sync_lookup_global_id, global_id)
 
-    Uses the platform's ACTIVE rule catalog (Settings > Matching &
-    Confidence) at call time -- if a bank retunes matching weights or
-    thresholds, this endpoint reflects the change on the very next
-    call, with no redeploy.
+
+def _sync_screen_identity(request: IdentityScreenRequest) -> IdentityScreenResponse:
+    """
+    Full synchronous body of screen_identity -- open_run_readonly's
+    Doris session and every _pg()/psycopg2 call below are blocking
+    network I/O, and this is the platform's real-time, bank-facing
+    endpoint (the highest-traffic, lowest-latency-expectation caller
+    in the whole backend) -- exactly the one that must never hold the
+    event loop hostage for every other concurrent request while it
+    scores a candidate pool. Runs as one run_in_threadpool dispatch,
+    same fix already applied to routes_matches.py/routes_rules.py.
     """
     t0 = time.monotonic()
     query_id = str(uuid.uuid4())
@@ -619,3 +622,20 @@ async def screen_identity(request: IdentityScreenRequest, _: None = Depends(requ
             pg_conn.close()
     finally:
         session.close()
+
+
+@router.post("/identity/screen", response_model=IdentityScreenResponse, tags=["Identity Recognition"])
+async def screen_identity(request: IdentityScreenRequest, _: None = Depends(require_bearer_token)):
+    """
+    Screen a new applicant's details against the resolved identity
+    graph before opening an account. Returns whether this person
+    already exists, whether they already carry a confirmed Global ID,
+    and (when relevant) ranked candidate matches with the same
+    rule-by-rule explainability the officer workbench shows.
+
+    Uses the platform's ACTIVE rule catalog (Settings > Matching &
+    Confidence) at call time -- if a bank retunes matching weights or
+    thresholds, this endpoint reflects the change on the very next
+    call, with no redeploy.
+    """
+    return await run_in_threadpool(_sync_screen_identity, request)

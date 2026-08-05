@@ -8,6 +8,7 @@ from typing import Optional
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, HTTPException
+from starlette.concurrency import run_in_threadpool
 
 from services.run_service import get_run_service
 from services.review_service import get_review_service
@@ -166,6 +167,10 @@ async def get_scoring_metrics(run_id: str) -> dict:
     aggregation done in SQL, not by pulling every score into Python),
     falls back to the in-memory orchestrator for non-Doris-backed runs.
     """
+    return await run_in_threadpool(_sync_get_scoring_metrics, run_id)
+
+
+def _sync_get_scoring_metrics(run_id: str) -> dict:
     if doris_run_reader.run_has_doris_data(run_id):
         dist = doris_run_reader.fetch_score_distribution(run_id)
         return {

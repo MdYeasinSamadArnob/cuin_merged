@@ -8,6 +8,7 @@ import os
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
+from starlette.concurrency import run_in_threadpool
 
 from services.run_service import get_run_service
 from engine.structures import MatchDecision
@@ -20,25 +21,17 @@ router = APIRouter()
 # Routes
 # ============================================
 
-@router.get("/run/{run_id}/scores")
-async def list_match_scores(
-    run_id: str,
-    page: int = 1,
-    page_size: int = 50,
-    min_score: Optional[float] = None,
-    max_score: Optional[float] = None
-) -> dict:
+def _sync_list_match_scores(run_id, page, page_size, min_score, max_score):
     """
-    List match scores for a run.
-
-    Reads from the run's own Doris database (pair_decisions/
-    pair_contributions) when one exists -- see api/doris_run_reader.py's
-    module docstring for why (Stage 6: candidate_pairs/match_scores/
-    match_decisions are no longer written to Postgres at all, and this
-    works regardless of whether the run's orchestrator instance is
-    still alive in RunService's registry). Falls back to the in-memory
-    orchestrator for non-Doris-backed runs (duckdb/spark engines,
-    which still populate self._scores the original way).
+    Full synchronous body of list_match_scores -- doris_run_reader's
+    calls are blocking pymysql network I/O (see its module docstring),
+    so the whole doris-check-through-fetch unit runs off the event
+    loop as one run_in_threadpool dispatch, matching the pattern
+    already fixed in routes_data_viewer.py/routes_schema.py this
+    session. The in-memory orchestrator fallback below is pure Python
+    (no I/O) and would be fine either way, but stays in the same
+    function so callers don't need two dispatch paths.
+    Returns None to signal "run not found" (404), decided by the caller.
     """
     run_service = get_run_service()
 
@@ -51,7 +44,7 @@ async def list_match_scores(
     if not orchestrator:
         run = run_service.get_run(run_id)
         if not run:
-            raise HTTPException(status_code=404, detail="Run not found")
+            return None
         return {
             "scores": [],
             "total": 0,
@@ -95,17 +88,36 @@ async def list_match_scores(
     }
 
 
-@router.get("/run/{run_id}/decisions")
-async def list_decisions(
+@router.get("/run/{run_id}/scores")
+async def list_match_scores(
     run_id: str,
-    decision: Optional[str] = None,
     page: int = 1,
-    page_size: int = 50
+    page_size: int = 50,
+    min_score: Optional[float] = None,
+    max_score: Optional[float] = None
 ) -> dict:
     """
-    List decisions for a run. See list_match_scores' docstring -- same
-    Doris-first, in-memory-orchestrator-fallback pattern.
+    List match scores for a run.
+
+    Reads from the run's own Doris database (pair_decisions/
+    pair_contributions) when one exists -- see api/doris_run_reader.py's
+    module docstring for why (Stage 6: candidate_pairs/match_scores/
+    match_decisions are no longer written to Postgres at all, and this
+    works regardless of whether the run's orchestrator instance is
+    still alive in RunService's registry). Falls back to the in-memory
+    orchestrator for non-Doris-backed runs (duckdb/spark engines,
+    which still populate self._scores the original way).
     """
+    result = await run_in_threadpool(
+        _sync_list_match_scores, run_id, page, page_size, min_score, max_score,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return result
+
+
+def _sync_list_decisions(run_id, decision, page, page_size):
+    """Full synchronous body of list_decisions -- see _sync_list_match_scores."""
     run_service = get_run_service()
 
     if doris_run_reader.run_has_doris_data(run_id):
@@ -130,7 +142,7 @@ async def list_decisions(
     if not orchestrator:
         run = run_service.get_run(run_id)
         if not run:
-            raise HTTPException(status_code=404, detail="Run not found")
+            return None
         return {
             "decisions": [],
             "total": 0,
@@ -138,10 +150,10 @@ async def list_decisions(
             "page_size": page_size,
             "message": "Run not yet executed or decisions not available"
         }
-    
+
     decisions = orchestrator.get_decisions()
     scores = orchestrator.get_scores()
-    
+
     # Build decision list with score info
     decision_list = []
     for pair_id, dec in decisions.items():
@@ -156,7 +168,7 @@ async def list_decisions(
                 "signals_hit": score_obj.signals_hit,
                 "hard_conflicts": score_obj.hard_conflicts,
             })
-    
+
     # Filter by decision type
     if decision:
         try:
@@ -164,15 +176,15 @@ async def list_decisions(
             decision_list = [d for d in decision_list if d['decision'] == dec_enum.value]
         except ValueError:
             pass
-    
+
     # Sort by score descending
     decision_list.sort(key=lambda x: x['score'], reverse=True)
-    
+
     # Paginate
     total = len(decision_list)
     start = (page - 1) * page_size
     end = start + page_size
-    
+
     return {
         "decisions": decision_list[start:end],
         "total": total,
@@ -181,19 +193,30 @@ async def list_decisions(
     }
 
 
-@router.get("/run/{run_id}/summary")
-async def get_decision_summary(run_id: str) -> dict:
+@router.get("/run/{run_id}/decisions")
+async def list_decisions(
+    run_id: str,
+    decision: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50
+) -> dict:
     """
-    Get decision summary for a run. See list_match_scores' docstring
-    -- same Doris-first, in-memory-orchestrator-fallback pattern (the
-    run.counters fallback beneath that, unchanged, still covers the
-    case where NEITHER Doris data nor a live orchestrator exists).
+    List decisions for a run. See list_match_scores' docstring -- same
+    Doris-first, in-memory-orchestrator-fallback pattern.
     """
+    result = await run_in_threadpool(_sync_list_decisions, run_id, decision, page, page_size)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return result
+
+
+def _sync_get_decision_summary(run_id):
+    """Full synchronous body of get_decision_summary -- see _sync_list_match_scores."""
     run_service = get_run_service()
     run = run_service.get_run(run_id)
 
     if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+        return None
 
     if doris_run_reader.run_has_doris_data(run_id):
         counts = doris_run_reader.fetch_decision_summary(run_id)
@@ -242,22 +265,26 @@ async def get_decision_summary(run_id: str) -> dict:
     }
 
 
-@router.get("/scores")
-async def list_match_scores_query(
-    run_id: str,
-    page: int = 1,
-    page_size: int = 50,
-    min_score: Optional[float] = None,
-    decision: Optional[str] = None,
-) -> dict:
+@router.get("/run/{run_id}/summary")
+async def get_decision_summary(run_id: str) -> dict:
     """
-    List match scores for a run using query parameters.
-    Reads from the run-specific scoring CSV saved after each pipeline run.
+    Get decision summary for a run. See list_match_scores' docstring
+    -- same Doris-first, in-memory-orchestrator-fallback pattern (the
+    run.counters fallback beneath that, unchanged, still covers the
+    case where NEITHER Doris data nor a live orchestrator exists).
+    """
+    result = await run_in_threadpool(_sync_get_decision_summary, run_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return result
 
-    `decision` filters to AUTO_LINK/REVIEW/REJECT when the CSV has a
-    `decision` column (written by the pipeline orchestrator since the
-    Ruleset v2 rework -- older CSVs without it ignore this filter rather
-    than erroring, so this stays backward compatible).
+
+def _sync_list_match_scores_query(run_id, page, page_size, min_score, decision):
+    """
+    Full synchronous body of list_match_scores_query -- pd.read_csv is
+    blocking disk I/O, same class as the pyarrow/pymysql calls fixed
+    elsewhere in this file, so the whole read-through-build unit runs
+    off the event loop as one run_in_threadpool dispatch.
     """
     import pandas as pd
 
@@ -317,6 +344,28 @@ async def list_match_scores_query(
         import logging
         logging.getLogger(__name__).error(f"Failed to read scores CSV: {e}")
         return {"scores": [], "total": 0, "page": page, "page_size": page_size}
+
+
+@router.get("/scores")
+async def list_match_scores_query(
+    run_id: str,
+    page: int = 1,
+    page_size: int = 50,
+    min_score: Optional[float] = None,
+    decision: Optional[str] = None,
+) -> dict:
+    """
+    List match scores for a run using query parameters.
+    Reads from the run-specific scoring CSV saved after each pipeline run.
+
+    `decision` filters to AUTO_LINK/REVIEW/REJECT when the CSV has a
+    `decision` column (written by the pipeline orchestrator since the
+    Ruleset v2 rework -- older CSVs without it ignore this filter rather
+    than erroring, so this stays backward compatible).
+    """
+    return await run_in_threadpool(
+        _sync_list_match_scores_query, run_id, page, page_size, min_score, decision,
+    )
 
 
 def _load_two_customer_rows(codes: list) -> dict:
@@ -494,7 +543,7 @@ async def get_match_details(pair_id: str) -> dict:
     id1, id2 = parts[0], parts[1]
 
     try:
-        raw_rows = _load_two_customer_rows([id1, id2])
+        raw_rows = await run_in_threadpool(_load_two_customer_rows, [id1, id2])
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load records: {e}")
 
@@ -652,8 +701,13 @@ async def explain_match(pair_id: str) -> dict:
     if not found_data:
         raise HTTPException(status_code=404, detail="Match pair not found in active runs")
 
-    # Generate explanation
-    explanation = referee.generate_explanation(
+    # Generate explanation -- synchronous, and in the gray-zone case
+    # (see RefereeAgent.should_invoke) calls agents/referee_agent.py's
+    # _call_ollama(), a blocking httpx.post(..., timeout=30) that can
+    # hold the event loop for up to 30s. Same event-loop-blocking class
+    # fixed elsewhere in this file, worst-case severity of any of them.
+    explanation = await run_in_threadpool(
+        referee.generate_explanation,
         pair_id=found_data['pair_id'],
         run_id=found_data['run_id'],
         record_a=found_data['record_a'],

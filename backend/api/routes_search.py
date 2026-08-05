@@ -15,6 +15,7 @@ import os
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from starlette.concurrency import run_in_threadpool
 
 from services.run_service import get_run_service
 from engine.ports.run_session import open_run_readonly, doris_database_exists, doris_run_db_name
@@ -43,6 +44,16 @@ async def search(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
 ):
+    return await run_in_threadpool(_sync_search, q, fields, run_id, page, page_size)
+
+
+def _sync_search(
+    q: str,
+    fields: Optional[str],
+    run_id: Optional[str],
+    page: int,
+    page_size: int,
+) -> dict:
     if run_id is None:
         run_id = _most_recent_completed_run_id()
         if run_id is None:

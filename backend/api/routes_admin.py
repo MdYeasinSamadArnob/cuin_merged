@@ -6,6 +6,7 @@ Administrative endpoints for system management.
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 import logging
 import os
 import shutil
@@ -26,18 +27,13 @@ class ResetResponse(BaseModel):
     deleted_doris_dbs: int = 0
 
 
-@router.post("/reset", response_model=ResetResponse)
-async def reset_all_data():
+def _sync_reset_all_data() -> ResetResponse:
     """
-    Reset all data in the system.
-    
-    This endpoint will:
-    - Delete all files in data/runs/ directory
-    - Clear the runs_index.json file
-    - Truncate all database tables (except genesis audit event)
-    - Reset in-memory state
-    
-    WARNING: This operation is irreversible!
+    Full synchronous body of reset_all_data -- does blocking file I/O
+    (shutil.rmtree/unlink over data/runs/ and the Parquet lake, JSON
+    index writes) and blocking DB calls (pymysql DDL against Doris,
+    psycopg2 TRUNCATE against Postgres), so it runs off the event loop
+    as one run_in_threadpool dispatch.
     """
     try:
         deleted_files = 0
@@ -209,6 +205,22 @@ async def reset_all_data():
         )
 
 
+@router.post("/reset", response_model=ResetResponse)
+async def reset_all_data():
+    """
+    Reset all data in the system.
+
+    This endpoint will:
+    - Delete all files in data/runs/ directory
+    - Clear the runs_index.json file
+    - Truncate all database tables (except genesis audit event)
+    - Reset in-memory state
+
+    WARNING: This operation is irreversible!
+    """
+    return await run_in_threadpool(_sync_reset_all_data)
+
+
 # ============================================
 # Bearer token for the public Identity Recognition API (/api/v1)
 # ============================================
@@ -251,10 +263,19 @@ def _token_is_pinned() -> bool:
     return False
 
 
-@router.get("/api-token", response_model=ApiTokenResponse)
-async def get_api_token():
-    """Returns the current bearer token guarding /api/v1. Internal-only endpoint -- never exposed on the public sub-app itself."""
+def _sync_get_api_token() -> ApiTokenResponse:
+    """
+    Full synchronous body of get_api_token -- _token_is_pinned() does a
+    raw open(".env") file read, so this runs off the event loop via
+    run_in_threadpool.
+    """
     from api.config import settings
 
     source = "env" if _token_is_pinned() else "auto-generated"
     return ApiTokenResponse(bearer_token=settings.PUBLIC_API_BEARER_TOKEN, source=source)
+
+
+@router.get("/api-token", response_model=ApiTokenResponse)
+async def get_api_token():
+    """Returns the current bearer token guarding /api/v1. Internal-only endpoint -- never exposed on the public sub-app itself."""
+    return await run_in_threadpool(_sync_get_api_token)

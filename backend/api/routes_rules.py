@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from engine.rules.catalog import BlockingRule
 from engine.rules.match_rules import MatchRule, MatchRuleset
@@ -245,8 +246,14 @@ class PrecheckRequest(BaseModel):
     block_pairs: Optional[int] = None
 
 
-@router.post("/precheck")
-async def precheck(request: PrecheckRequest):
+def _sync_precheck(request: PrecheckRequest) -> dict:
+    """
+    Full synchronous body of precheck -- open_run_scratch/session.con
+    are blocking Doris/DuckDB connection + CTAS-copy + query calls (see
+    engine.ports.run_session), so the whole validate-through-close unit
+    runs off the event loop as one run_in_threadpool dispatch. Same
+    fix already applied to routes_matches.py's Doris-backed endpoints.
+    """
     rules = [_to_blocking_rule(r) for r in request.blocking_rules]
     try:
         for r in rules:
@@ -276,6 +283,11 @@ async def precheck(request: PrecheckRequest):
         session.close()
 
 
+@router.post("/precheck")
+async def precheck(request: PrecheckRequest):
+    return await run_in_threadpool(_sync_precheck, request)
+
+
 # ----------------------------------------------------------------------
 # Instant redecide (Tier 0: thresholds/tiers only, ~milliseconds)
 # ----------------------------------------------------------------------
@@ -284,8 +296,8 @@ class RedecideRequest(BaseModel):
     match_ruleset: MatchRulesetModel
 
 
-@router.post("/runs/{run_id}/redecide")
-async def redecide(run_id: str, request: RedecideRequest):
+def _sync_redecide(run_id: str, request: RedecideRequest) -> dict:
+    """Full synchronous body of redecide -- see _sync_precheck."""
     # candidate_pairs is required because compile_confidence_sql drives
     # from it (a correctness improvement over the legacy decision
     # compiler, which drove from pair_name_dob_evidence -- see
@@ -323,6 +335,11 @@ async def redecide(run_id: str, request: RedecideRequest):
         session.close()
 
 
+@router.post("/runs/{run_id}/redecide")
+async def redecide(run_id: str, request: RedecideRequest):
+    return await run_in_threadpool(_sync_redecide, run_id, request)
+
+
 # ----------------------------------------------------------------------
 # Reblock (Tier 1: blocking rules changed, seconds)
 # ----------------------------------------------------------------------
@@ -332,8 +349,8 @@ class ReblockRequest(BaseModel):
     match_ruleset: Optional[MatchRulesetModel] = None
 
 
-@router.post("/runs/{run_id}/reblock")
-async def reblock(run_id: str, request: ReblockRequest):
+def _sync_reblock(run_id: str, request: ReblockRequest) -> dict:
+    """Full synchronous body of reblock -- see _sync_precheck."""
     rules = [_to_blocking_rule(r) for r in request.blocking_rules]
     try:
         for r in rules:
@@ -385,6 +402,11 @@ async def reblock(run_id: str, request: ReblockRequest):
         session.close()
 
 
+@router.post("/runs/{run_id}/reblock")
+async def reblock(run_id: str, request: ReblockRequest):
+    return await run_in_threadpool(_sync_reblock, run_id, request)
+
+
 # ----------------------------------------------------------------------
 # Stage 5: Segments -- Company/Individual split + traceable cross-
 # segment connections. Segmentation gates identity MERGING only (see
@@ -393,9 +415,8 @@ async def reblock(run_id: str, request: ReblockRequest):
 # connection between them stays visible here rather than disappearing.
 # ----------------------------------------------------------------------
 
-@router.get("/runs/{run_id}/segments")
-async def get_segment_stats(run_id: str):
-    """Company/Individual split for a completed run, e.g. for a Settings preview."""
+def _sync_get_segment_stats(run_id: str) -> dict:
+    """Full synchronous body of get_segment_stats -- see _sync_precheck."""
     session = open_run_scratch(run_id, table_names=("customer_segments",))
     try:
         if not _table_exists(session, "customer_segments"):
@@ -417,22 +438,15 @@ async def get_segment_stats(run_id: str):
         session.close()
 
 
-@router.get("/relationships")
-async def list_relationships(
-    run_id: Optional[str] = None,
-    customer_code: Optional[str] = None,
-    limit: int = 50,
-    offset: int = 0,
-):
-    """
-    Traceable cross-segment connections (a person <-> a company they
-    share a phone/email/document/address with), persisted by
-    db.repository.persist_entity_relationships. Filter by run_id
-    and/or customer_code (a source_customer_id -- matches either side
-    of the pair). Without customer_code, use this for a run-wide
-    "connections found" list; with it, for a single customer's
-    "linked entities" panel.
-    """
+@router.get("/runs/{run_id}/segments")
+async def get_segment_stats(run_id: str):
+    """Company/Individual split for a completed run, e.g. for a Settings preview."""
+    return await run_in_threadpool(_sync_get_segment_stats, run_id)
+
+
+def _sync_list_relationships(run_id, customer_code, limit, offset) -> dict:
+    """Full synchronous body of list_relationships -- psycopg2 connect/
+    query/close is blocking network I/O, see _sync_precheck."""
     import psycopg2
     from api.config import settings
 
@@ -487,3 +501,22 @@ async def list_relationships(
             for rel_id, rid, a_code, a_name, a_seg, b_code, b_name, b_seg, evidence, created_at in rows
         ],
     }
+
+
+@router.get("/relationships")
+async def list_relationships(
+    run_id: Optional[str] = None,
+    customer_code: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """
+    Traceable cross-segment connections (a person <-> a company they
+    share a phone/email/document/address with), persisted by
+    db.repository.persist_entity_relationships. Filter by run_id
+    and/or customer_code (a source_customer_id -- matches either side
+    of the pair). Without customer_code, use this for a run-wide
+    "connections found" list; with it, for a single customer's
+    "linked entities" panel.
+    """
+    return await run_in_threadpool(_sync_list_relationships, run_id, customer_code, limit, offset)

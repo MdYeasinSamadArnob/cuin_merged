@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 
 import psycopg2
 from fastapi import APIRouter, HTTPException, Query
+from starlette.concurrency import run_in_threadpool
 
 from api.config import settings
 from engine.ports.run_session import open_run_readonly
@@ -101,12 +102,11 @@ def _size_tier(member_count: int, max_size: int) -> str:
 # Overview -- the cluster map
 # ----------------------------------------------------------------------
 
-@router.get("/overview")
-async def overview(
-    run_id: Optional[str] = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=200),
-    sort: str = "size_desc", min_size: Optional[int] = None, max_size: Optional[int] = None,
-    record_type: Optional[str] = None, has_global_ref: Optional[bool] = None, q: Optional[str] = None,
-):
+def _sync_overview(
+    run_id: Optional[str], page: int, page_size: int,
+    sort: str, min_size: Optional[int], max_size: Optional[int],
+    record_type: Optional[str], has_global_ref: Optional[bool], q: Optional[str],
+) -> dict:
     if record_type is not None and record_type.upper() not in _VALID_RECORD_TYPES:
         raise HTTPException(status_code=400, detail=f"record_type must be one of {sorted(_VALID_RECORD_TYPES)}")
     if sort not in _VALID_SORTS:
@@ -254,12 +254,22 @@ async def overview(
     }
 
 
+@router.get("/overview")
+async def overview(
+    run_id: Optional[str] = None, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=200),
+    sort: str = "size_desc", min_size: Optional[int] = None, max_size: Optional[int] = None,
+    record_type: Optional[str] = None, has_global_ref: Optional[bool] = None, q: Optional[str] = None,
+):
+    return await run_in_threadpool(
+        _sync_overview, run_id, page, page_size, sort, min_size, max_size, record_type, has_global_ref, q,
+    )
+
+
 # ----------------------------------------------------------------------
 # Stats -- the insights bar
 # ----------------------------------------------------------------------
 
-@router.get("/stats")
-async def stats(run_id: Optional[str] = None):
+def _sync_stats(run_id: Optional[str]) -> dict:
     rid = _resolve_run_id(run_id)
     max_cluster_size = _effective_max_cluster_size()
 
@@ -319,16 +329,20 @@ async def stats(run_id: Optional[str] = None):
     }
 
 
+@router.get("/stats")
+async def stats(run_id: Optional[str] = None):
+    return await run_in_threadpool(_sync_stats, run_id)
+
+
 # ----------------------------------------------------------------------
 # Canvas -- Classic mode's data source
 # ----------------------------------------------------------------------
 
-@router.get("/canvas")
-async def canvas(
-    run_id: Optional[str] = None, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=60),
-    sort: str = "size_desc", min_size: Optional[int] = None, max_size: Optional[int] = None,
-    record_type: Optional[str] = None, has_global_ref: Optional[bool] = None, q: Optional[str] = None,
-):
+def _sync_canvas(
+    run_id: Optional[str], page: int, page_size: int,
+    sort: str, min_size: Optional[int], max_size: Optional[int],
+    record_type: Optional[str], has_global_ref: Optional[bool], q: Optional[str],
+) -> dict:
     """
     Classic mode's data source -- a small PAGE of clusters (default 20,
     capped at 60: each cluster expands to up to max_cluster_size member
@@ -540,15 +554,37 @@ async def canvas(
     }
 
 
+@router.get("/canvas")
+async def canvas(
+    run_id: Optional[str] = None, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=60),
+    sort: str = "size_desc", min_size: Optional[int] = None, max_size: Optional[int] = None,
+    record_type: Optional[str] = None, has_global_ref: Optional[bool] = None, q: Optional[str] = None,
+):
+    """
+    Classic mode's data source -- a small PAGE of clusters (default 20,
+    capped at 60: each cluster expands to up to max_cluster_size member
+    nodes plus their pairwise edges, so this stays bounded to roughly
+    page_size * max_cluster_size nodes, not the old page's up-to-20,000
+    in one shot). Returns the SAME {nodes, edges} shape the legacy
+    /graph/data endpoint did (NodeModel/EdgeModel, routes_graph.py) so it
+    drops straight into the forked ClassicClusterGraph component with no
+    client-side reshaping. Filter-building logic mirrors /overview
+    exactly (same q/record_type two-step pattern) -- duplicated rather
+    than refactored into a shared helper to avoid any risk of changing
+    /overview's already-verified behavior.
+    """
+    return await run_in_threadpool(
+        _sync_canvas, run_id, page, page_size, sort, min_size, max_size, record_type, has_global_ref, q,
+    )
+
+
 # ----------------------------------------------------------------------
 # Singletons -- records with no candidate_pairs edge at all
 # ----------------------------------------------------------------------
 
-@router.get("/singletons")
-async def singletons(
-    run_id: Optional[str] = None, page: int = Query(1, ge=1), page_size: int = Query(60, ge=1, le=200),
-    record_type: Optional[str] = None, q: Optional[str] = None,
-):
+def _sync_singletons(
+    run_id: Optional[str], page: int, page_size: int, record_type: Optional[str], q: Optional[str],
+) -> dict:
     """
     The 977,045 records /graph/v2/stats already counts as "singletons"
     (no candidate_pairs row at all -- never even blocked against another
@@ -597,12 +633,19 @@ async def singletons(
     return {"items": items, "total": total, "page": page, "page_size": page_size, "run_id": rid, "engine": engine}
 
 
+@router.get("/singletons")
+async def singletons(
+    run_id: Optional[str] = None, page: int = Query(1, ge=1), page_size: int = Query(60, ge=1, le=200),
+    record_type: Optional[str] = None, q: Optional[str] = None,
+):
+    return await run_in_threadpool(_sync_singletons, run_id, page, page_size, record_type, q)
+
+
 # ----------------------------------------------------------------------
 # Cluster drill-down
 # ----------------------------------------------------------------------
 
-@router.get("/cluster/{entity_id}")
-async def cluster_detail(entity_id: str, run_id: Optional[str] = None):
+def _sync_cluster_detail(entity_id: str, run_id: Optional[str]) -> dict:
     rid = _resolve_run_id(run_id)
     pg_conn = _pg()
     try:
@@ -662,15 +705,19 @@ async def cluster_detail(entity_id: str, run_id: Optional[str] = None):
     }
 
 
+@router.get("/cluster/{entity_id}")
+async def cluster_detail(entity_id: str, run_id: Optional[str] = None):
+    return await run_in_threadpool(_sync_cluster_detail, entity_id, run_id)
+
+
 # ----------------------------------------------------------------------
 # Relationship hops -- bounded N-hop neighborhood explorer
 # ----------------------------------------------------------------------
 
-@router.get("/hops")
-async def hops(
-    customer_code: Optional[str] = None, entity_id: Optional[str] = None, run_id: Optional[str] = None,
-    hops: int = Query(2, ge=1, le=3), max_nodes: int = Query(300, ge=10, le=1000),
-):
+def _sync_hops(
+    customer_code: Optional[str], entity_id: Optional[str], run_id: Optional[str],
+    hops: int, max_nodes: int,
+) -> dict:
     """
     K rounds of plain iterative joins (NOT a recursive CTE -- this
     codebase has never used WITH RECURSIVE and neither SQL dialect has a
@@ -808,14 +855,21 @@ async def hops(
     }
 
 
+@router.get("/hops")
+async def hops(
+    customer_code: Optional[str] = None, entity_id: Optional[str] = None, run_id: Optional[str] = None,
+    hops: int = Query(2, ge=1, le=3), max_nodes: int = Query(300, ge=10, le=1000),
+):
+    return await run_in_threadpool(_sync_hops, customer_code, entity_id, run_id, hops, max_nodes)
+
+
 # ----------------------------------------------------------------------
 # Bridges -- cross-cluster connections (a shared phone/address/document
 # strong enough to blocking-match but not strong enough, or wrong
 # segment, to merge into one entity)
 # ----------------------------------------------------------------------
 
-@router.get("/cluster/{entity_id}/bridges")
-async def cluster_bridges(entity_id: str, run_id: Optional[str] = None):
+def _sync_cluster_bridges(entity_id: str, run_id: Optional[str]) -> dict:
     """
     This cluster's external connections: other clusters whose members
     share real matching evidence with THIS cluster's members but never
@@ -936,11 +990,14 @@ async def cluster_bridges(entity_id: str, run_id: Optional[str] = None):
     return {"run_id": rid, "engine": engine, "entity_id": entity_id, "bridges": bridges}
 
 
-@router.get("/bridges")
-async def bridges(
-    run_id: Optional[str] = None, page: int = Query(1, ge=1), page_size: int = Query(30, ge=1, le=100),
-    min_confidence: Optional[float] = None,
-):
+@router.get("/cluster/{entity_id}/bridges")
+async def cluster_bridges(entity_id: str, run_id: Optional[str] = None):
+    return await run_in_threadpool(_sync_cluster_bridges, entity_id, run_id)
+
+
+def _sync_bridges(
+    run_id: Optional[str], page: int, page_size: int, min_confidence: Optional[float],
+) -> dict:
     """
     Global analytics: every pair of DIFFERENT clusters connected by real
     evidence -- a same-segment REVIEW/AUTO_LINK-grade pair whose two
@@ -1071,3 +1128,11 @@ async def bridges(
         })
 
     return {"run_id": rid, "engine": engine, "items": items, "total": total, "page": page, "page_size": page_size}
+
+
+@router.get("/bridges")
+async def bridges(
+    run_id: Optional[str] = None, page: int = Query(1, ge=1), page_size: int = Query(30, ge=1, le=100),
+    min_confidence: Optional[float] = None,
+):
+    return await run_in_threadpool(_sync_bridges, run_id, page, page_size, min_confidence)
