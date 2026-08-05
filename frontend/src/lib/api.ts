@@ -93,14 +93,14 @@ class ApiClient {
         return this.request(`/runs/${runId}`, { method: 'DELETE' });
     }
 
-    async startDatasourcePipeline(mode: string) {
+    async startDatasourcePipeline(mode: string, carryForward: boolean = true) {
         // The backend route is /datasource/demo -- /datasource/pipeline/start
         // does not exist and was 404ing every "Start New Run" click on
         // /pipeline (the /datasource page worked because it called the
         // correct path directly via a raw fetch instead of this client).
         return this.request('/datasource/demo', {
             method: 'POST',
-            body: JSON.stringify({ mode }),
+            body: JSON.stringify({ mode, carry_forward: carryForward }),
         });
     }
 

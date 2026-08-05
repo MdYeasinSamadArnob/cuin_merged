@@ -4,8 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { Database, Zap, Cpu, Network, CheckCircle2, Boxes, RefreshCw, Sparkles, AlertTriangle } from "lucide-react";
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { api } from "@/lib/api";
 
 // The actual mechanism behind "update existing" is engine.clustering.
 // entity_resolver's Jaccard carry-forward, which already runs on EVERY
@@ -40,14 +39,9 @@ export default function DatasourcePage() {
     const handleStartDemo = async () => {
         setIsStarting(true);
         try {
-            const res = await fetch(`${API_BASE_URL}/datasource/demo`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ mode: "FULL", carry_forward: runMode === "update" })
-            });
-            const data = await res.json();
+            const data = await api.startDatasourcePipeline("FULL", runMode === "update");
 
-            if (res.ok && data.run_id) {
+            if (data.run_id) {
                 // Navigate to the runs page to watch the pipeline
                 router.push(`/runs/${data.run_id}`);
             } else {
