@@ -291,52 +291,37 @@ class RunService:
         """Get the orchestrator for a run."""
         return self._orchestrators.get(run_id)
     
-    def _count_active_entities(self) -> int:
-        """
-        Durable, cross-run "how many identity clusters currently
-        exist" -- queries Postgres's entities table directly rather
-        than engine.clustering.cluster_manager's ClusterManager
-        singleton (the previous source of this stat). That singleton
-        is in-process memory only, wiped and rebuilt from scratch by
-        build_clusters() on every pipeline run and never restored on
-        process startup -- so it doesn't just reset to 0 after any
-        backend restart, it also only ever reflected whichever run's
-        clustering stage happened to execute most recently in this
-        process, not a real total across all completed runs. `entities`
-        is populated by the SAME live run via engine.clustering.
-        entity_resolver (carry-forward-aware, durable across restarts
-        and runs) -- see db/migrations/005_entity_registry.sql.
-        Best-effort: a Postgres hiccup here shouldn't take down the
-        whole dashboard, just report 0 for this one stat.
-        """
-        try:
-            import psycopg2
-            from api.config import settings
-
-            conn = psycopg2.connect(settings.DATABASE_URL)
-            try:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT COUNT(*) FROM entities WHERE status = 'ACTIVE'")
-                    return cur.fetchone()[0]
-            finally:
-                conn.close()
-        except Exception as e:
-            logger.warning(f"Failed to count active entities for dashboard metrics: {e}")
-            return 0
-
     def get_dashboard_metrics(self) -> dict:
         """Get dashboard KPIs."""
         completed_runs = [
             r for r in self._runs.values()
             if r.status == RunStatus.COMPLETED
         ]
-        
+
         total_records = sum(r.counters.records_in for r in completed_runs)
         total_auto_links = sum(r.counters.auto_links for r in completed_runs)
         total_review = sum(r.counters.review_items for r in completed_runs)
         total_duplicates = total_auto_links + total_review
 
-        total_clusters = self._count_active_entities()
+        # "How many clusters did the most recent run produce" -- NOT a
+        # cumulative all-time count. Tried summing/counting entities
+        # across every run once (either via the old in-memory
+        # ClusterManager singleton, or a live Postgres `entities`
+        # COUNT) and both were wrong in different ways: the singleton
+        # reset to 0 on every restart and only ever reflected
+        # whichever run clustered most recently in-process; the
+        # Postgres count was durable but is a TRUE cumulative total
+        # across every run ever executed, including old runs from
+        # earlier ruleset iterations that carry-forward's Jaccard
+        # matching didn't merge with later runs (a ruleset change
+        # reshapes cluster boundaries enough to drop below the match
+        # threshold) -- so it reads as a large, confusing number
+        # dominated by historical dev/test churn, not "how many
+        # identities does the current dataset actually have." The
+        # single most-recent-run counter is unambiguous and matches
+        # what a user watching this stat actually expects.
+        most_recent_completed = max(completed_runs, key=lambda r: r.started_at, default=None)
+        total_clusters = most_recent_completed.counters.clusters_created if most_recent_completed else 0
 
         avg_duration = 0
         if completed_runs:
