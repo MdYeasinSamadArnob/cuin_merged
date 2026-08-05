@@ -7,9 +7,8 @@ import { useWebSocket } from "@/lib/ws";
 import Link from "next/link";
 import {
     ArrowLeft, Terminal, Activity, Search, Network,
-    Cpu, Database, Shield, Zap, FileText, CheckCircle, Share2, ArrowRight, Users
+    Cpu, Database, Shield, Zap, FileText, CheckCircle, Users, ClipboardCheck,
 } from "lucide-react";
-import { ClusterGraph } from '@/components/organisms/frozen/ClusterGraph';
 
 // --- Agents Config ---
 const AGENTS = {
@@ -44,8 +43,6 @@ export default function RunDetailsPage() {
     const [isReplaying, setIsReplaying] = useState(false);
     const [agentLogs, setAgentLogs] = useState<LogEntry[]>([]);
     const [selectedStep, setSelectedStep] = useState<string | null>(null); // For filtering logs
-    const [liveMatches, setLiveMatches] = useState<any[]>([]);
-    const [graphData, setGraphData] = useState<any>(null);
     const [liveMessage, setLiveMessage] = useState<string>('');  // latest WS message for current stage
     const [clustersCreated, setClustersCreated] = useState(0);  // unique identity clusters after cluster stage
     const [scoreEta, setScoreEta] = useState<string | null>(null);  // ETA for score stage
@@ -244,29 +241,6 @@ export default function RunDetailsPage() {
 
                 return { ...prev, counters: newCounters, current_stage: payload.stage };
             });
-
-            // Handle live data payloads
-            if (payload.data?.sample_matches) {
-                setLiveMatches(payload.data.sample_matches);
-
-                // Construct live graph data from matches
-                const nodes: any[] = [];
-                const edges: any[] = [];
-                const nodeIds = new Set();
-
-                payload.data.sample_matches.forEach((m: any) => {
-                    if (!nodeIds.has(m.id1)) {
-                        nodes.push({ id: m.id1, label: `ID: ${m.id1}`, type: 'record', properties: {} });
-                        nodeIds.add(m.id1);
-                    }
-                    if (!nodeIds.has(m.id2)) {
-                        nodes.push({ id: m.id2, label: `ID: ${m.id2}`, type: 'record', properties: {} });
-                        nodeIds.add(m.id2);
-                    }
-                    edges.push({ source: m.id1, target: m.id2, type: 'MATCHES' });
-                });
-                setGraphData({ nodes, edges });
-            }
         }
         else if (event.type === 'RUN_COMPLETE') {
             setActiveStage('complete');
@@ -590,9 +564,9 @@ export default function RunDetailsPage() {
                     </div>
 
                     <div className="grid grid-cols-2 gap-3">
-                        <Link href={`/explorer?runId=${runId}`} className="p-4 bg-blue-100 dark:bg-blue-600/20 border border-blue-200 dark:border-blue-500/50 hover:bg-blue-200 dark:hover:bg-blue-600/30 rounded-xl text-center group transition-all">
-                            <Search className="mx-auto mb-2 text-blue-600 dark:text-blue-400 group-hover:scale-110 transition-transform" />
-                            <span className="text-sm font-bold text-blue-800 dark:text-blue-200">Inspect Results</span>
+                        <Link href={`/review?runId=${runId}`} className="p-4 bg-blue-100 dark:bg-blue-600/20 border border-blue-200 dark:border-blue-500/50 hover:bg-blue-200 dark:hover:bg-blue-600/30 rounded-xl text-center group transition-all">
+                            <ClipboardCheck className="mx-auto mb-2 text-blue-600 dark:text-blue-400 group-hover:scale-110 transition-transform" />
+                            <span className="text-sm font-bold text-blue-800 dark:text-blue-200">Go to Review</span>
                         </Link>
                         <Link href={`/graph?runId=${runId}`} className="block w-full text-center p-3 bg-fuchsia-100 dark:bg-fuchsia-600/20 border border-fuchsia-200 dark:border-fuchsia-500/50 hover:bg-fuchsia-200 dark:hover:bg-fuchsia-600/30 rounded-lg group transition-all">
                             <Network className="mx-auto mb-1 text-fuchsia-600 dark:text-fuchsia-400 group-hover:scale-110 transition-transform" size={18} />
@@ -610,70 +584,6 @@ export default function RunDetailsPage() {
                     </div>
                 </div>
 
-                {/* Live Insight Section (New) */}
-                {(liveMatches.length > 0 || visualStage === 'cluster' || visualStage === 'score') && (
-                    <div className="lg:col-span-3 grid grid-cols-1 lg:grid-cols-3 gap-8 animate-in fade-in slide-in-from-bottom-8 duration-700">
-                        {/* Live Match Feed */}
-                        <div className="lg:col-span-1 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden flex flex-col h-[400px] shadow-lg">
-                            <div className="p-4 border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 flex items-center justify-between">
-                                <h3 className="text-gray-900 dark:text-white font-bold flex items-center gap-2 text-sm">
-                                    <Zap className="text-yellow-500 w-4 h-4 animate-pulse" />
-                                    Live Match Signals
-                                </h3>
-                                <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Realtime</span>
-                            </div>
-                            <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
-                                {liveMatches.length > 0 ? (
-                                    liveMatches.map((match, i) => (
-                                        <div key={i} className="p-3 bg-gray-50 dark:bg-gray-800/30 border border-gray-100 dark:border-gray-700/50 rounded-xl hover:bg-white dark:hover:bg-gray-800/50 transition-colors group shadow-sm">
-                                            <div className="flex items-center justify-between mb-2">
-                                                <div className="flex items-center gap-2">
-                                                    <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
-                                                    <span className="text-[10px] text-blue-600 dark:text-blue-400 font-mono font-bold">MATCH</span>
-                                                </div>
-                                                <span className="text-[10px] font-mono text-gray-500">Prob: {(match.probability * 100).toFixed(1)}%</span>
-                                            </div>
-                                            <div className="flex items-center gap-2 text-gray-900 dark:text-white">
-                                                <div className="flex flex-col">
-                                                    <span className="text-xs font-mono">{match.id1}</span>
-                                                </div>
-                                                <ArrowRight className="w-3 h-3 text-gray-400 group-hover:text-blue-500 transition-colors" />
-                                                <div className="flex flex-col text-right">
-                                                    <span className="text-xs font-mono">{match.id2}</span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ))
-                                ) : (
-                                    <div className="h-full flex items-center justify-center text-gray-400 text-xs italic">
-                                        Detecting potential duplicates...
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-
-                        {/* Live Identity Graph */}
-                        <div className="lg:col-span-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden flex flex-col h-[400px] shadow-lg">
-                            <div className="p-4 border-b border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 flex items-center justify-between">
-                                <h3 className="text-gray-900 dark:text-white font-bold flex items-center gap-2 text-sm">
-                                    <Share2 className="text-purple-500 w-4 h-4" />
-                                    Identity Network Visualization
-                                </h3>
-                                <div className="flex items-center gap-2 text-[10px] text-gray-500 uppercase font-bold">
-                                    <Activity className="text-blue-500 w-3 h-3 animate-ping" />
-                                    Live
-                                </div>
-                            </div>
-                            <div className="flex-1 relative">
-                                <ClusterGraph
-                                    data={graphData}
-                                    loading={!graphData && (run?.status === 'RUNNING' || isReplaying)}
-                                    loadingMessage="Constructing live identity graph..."
-                                />
-                            </div>
-                        </div>
-                    </div>
-                )}
             </div>
 
             <style jsx global>{`

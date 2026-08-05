@@ -6,7 +6,8 @@
 // and services/workbench_service.py. /explorer and /graph are untouched
 // legacy pages; this is the new, unified place a bank officer works.
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import {
@@ -246,15 +247,21 @@ const EMPTY_PAIR_FILTERS: PairFilters = { q: '', recordType: 'ALL', minConf: und
 const EMPTY_ENTITY_FILTERS: EntityFilters = { q: '', recordType: 'ALL', hasGlobalRef: undefined };
 const EMPTY_SINGLETON_FILTERS: SingletonFilters = { q: '', recordType: 'ALL' };
 
-export default function WorkbenchPage() {
+function WorkbenchPageContent() {
     const queryClient = useQueryClient();
+    const searchParams = useSearchParams();
+    const urlRunId = searchParams.get('runId');
 
     const { data: runsData } = useQuery({ queryKey: ['wb-runs'], queryFn: () => api.wbListRuns(1, 50) });
     const completedRuns = useMemo(() => (runsData?.runs || []).filter((r: any) => r.status === 'COMPLETED'), [runsData]);
     const [runId, setRunId] = useState<string>('');
     useEffect(() => {
+        // A run_id arriving via ?runId= (e.g. the run detail page's "Go to
+        // Review" button) always wins over the "most recent completed run"
+        // default -- someone followed a link to review THIS run specifically.
+        if (urlRunId && urlRunId !== runId) { setRunId(urlRunId); return; }
         if (!runId && completedRuns.length > 0) setRunId(completedRuns[0].run_id);
-    }, [completedRuns, runId]);
+    }, [completedRuns, runId, urlRunId]);
 
     const { data: populations } = useQuery({
         queryKey: ['wb-populations', runId],
@@ -1232,5 +1239,21 @@ export default function WorkbenchPage() {
                 />
             )}
         </div>
+    );
+}
+
+// Wrapper with Suspense for useSearchParams compatibility
+export default function WorkbenchPage() {
+    return (
+        <Suspense fallback={
+            <div className="p-8 flex items-center justify-center min-h-screen">
+                <div className="text-center">
+                    <div className="w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                    <div className="text-gray-500 dark:text-gray-400">Loading Review...</div>
+                </div>
+            </div>
+        }>
+            <WorkbenchPageContent />
+        </Suspense>
     );
 }
