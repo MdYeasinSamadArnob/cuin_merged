@@ -53,7 +53,7 @@ async def start_datasource_demo(
     try:
         run = run_service.create_run(
             mode=request.mode,
-            description=f"Datasource Demo ({request.engine})",
+            description=f"Ingestion Pipeline ({request.engine})",
             policy_version=1,
             engine=request.engine,
         )

@@ -448,8 +448,8 @@ export default function PipelinePage() {
                         {[
                             { label: 'Processed Records', value: recordsIn, color: 'text-white' },
                             { label: 'Candidate Pairs', value: candidates, color: 'text-cyan-400' },
-                            { label: 'Auto Linked', value: autoLinks, color: 'text-emerald-400' },
-                            { label: 'Review Queue', value: activeRun.counters.review_items, color: 'text-yellow-400' }
+                            { label: 'Strong Match', value: autoLinks, color: 'text-emerald-400' },
+                            { label: 'Potential Match', value: activeRun.counters.review_items, color: 'text-yellow-400' }
                         ].map((metric, i) => (
                             <div key={i} className="bg-black/30 rounded-xl p-5 border border-white/5 backdrop-blur-sm">
                                 <p className="text-gray-400 text-sm font-medium mb-1">{metric.label}</p>

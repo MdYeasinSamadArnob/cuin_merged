@@ -23,6 +23,19 @@ import { FilterBar, PairFilters, EntityFilters, SingletonFilters } from '@/compo
 
 type Population = 'REVIEW' | 'AUTO_LINK' | 'REJECT' | 'ENTITIES' | 'APPROVED' | 'SINGLETONS';
 
+// Internal population/tab state (REVIEW/AUTO_LINK/etc.) stays untouched
+// everywhere it's used for filtering/routing/state -- this is only the
+// display text shown in the panel header, kept as one lookup so it can't
+// silently drift out of sync with the PopCard labels below.
+const POPULATION_DISPLAY_LABELS: Record<Population, string> = {
+    ENTITIES: 'Identity Cluster',
+    AUTO_LINK: 'Strong Match',
+    REVIEW: 'Potential Match',
+    REJECT: 'System Rejected',
+    APPROVED: 'Approve / Rejected',
+    SINGLETONS: 'Unique Found',
+};
+
 const BULK_SELECTION_CAP = 100;
 
 function useDebounced<T>(value: T, delayMs: number): T {
@@ -58,6 +71,42 @@ function PopCard({ label, count, active, icon: Icon, accent, onClick }: {
             </div>
             <div className="text-xl font-bold text-gray-900 dark:text-white">
                 {count === undefined ? '…' : count.toLocaleString()}
+            </div>
+        </button>
+    );
+}
+
+// Same footprint/styling as PopCard, but for the one stat that's really
+// two live numbers at once (officer Approved vs. officer Rejected --
+// resolution_overrides' MUST_LINK/MUST_NOT_LINK verdicts) -- showing
+// both up front instead of picking one avoids hiding half the picture
+// behind a click.
+function DualPopCard({ label, approvedCount, rejectedCount, active, icon: Icon, accent, onClick }: {
+    label: string; approvedCount: number | undefined; rejectedCount: number | undefined;
+    active: boolean; icon: any; accent: string; onClick: () => void;
+}) {
+    return (
+        <button
+            onClick={onClick}
+            className={`glass-card p-4 text-left transition-all ${active ? 'ring-2 ring-blue-500' : 'hover:bg-gray-50 dark:hover:bg-gray-900/40'}`}
+        >
+            <div className="flex items-center gap-2 mb-1">
+                <Icon size={16} className={accent} />
+                <span className="text-xs text-gray-500 dark:text-gray-400">{label}</span>
+            </div>
+            <div className="flex items-baseline gap-4">
+                <div className="flex items-baseline gap-1.5">
+                    <span className="text-xl font-bold text-emerald-600 dark:text-emerald-400">
+                        {approvedCount === undefined ? '…' : approvedCount.toLocaleString()}
+                    </span>
+                    <span className="text-[10px] text-gray-400">Approved</span>
+                </div>
+                <div className="flex items-baseline gap-1.5">
+                    <span className="text-xl font-bold text-red-500 dark:text-red-400">
+                        {rejectedCount === undefined ? '…' : rejectedCount.toLocaleString()}
+                    </span>
+                    <span className="text-[10px] text-gray-400">Rejected</span>
+                </div>
             </div>
         </button>
     );
@@ -376,6 +425,14 @@ function WorkbenchPageContent() {
         queryFn: () => api.wbListOverrides({ page: 1, pageSize: 1, verdict: 'MUST_LINK', runId }),
         enabled: !!runId,
     });
+    // Same query shape as approvedCountData, just the other verdict -- lets
+    // the combined "Approve / Rejected" stat card show both live counts up
+    // front instead of only the approved half.
+    const { data: rejectedOverrideCountData } = useQuery({
+        queryKey: ['wb-overrides-count-rejected', runId],
+        queryFn: () => api.wbListOverrides({ page: 1, pageSize: 1, verdict: 'MUST_NOT_LINK', runId }),
+        enabled: !!runId,
+    });
 
     const { data: breakdown, isFetching: breakdownLoading } = useQuery({
         queryKey: ['wb-breakdown', runId, selectedPair?.a_key, selectedPair?.b_key],
@@ -684,12 +741,12 @@ function WorkbenchPageContent() {
 
             {/* Population cards */}
             <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-                <PopCard label="Needs Review" count={populations?.needs_review} active={population === 'REVIEW'} icon={AlertTriangle} accent="text-amber-500" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('REVIEW'); }} />
-                <PopCard label="Auto-Linked" count={populations?.auto_linked} active={population === 'AUTO_LINK'} icon={GitMerge} accent="text-emerald-500" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('AUTO_LINK'); }} />
-                <PopCard label="Rejected" count={populations?.rejected} active={population === 'REJECT'} icon={XCircle} accent="text-gray-400" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('REJECT'); }} />
-                <PopCard label="Entities" count={populations?.entities} active={population === 'ENTITIES'} icon={Users} accent="text-blue-500" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('ENTITIES'); }} />
-                <PopCard label="Approved" count={approvedCountData?.total} active={population === 'APPROVED'} icon={CheckCircle2} accent="text-emerald-500" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('APPROVED'); }} />
-                <PopCard label="Singletons" count={populations?.singletons} active={population === 'SINGLETONS'} icon={UserPlus} accent="text-purple-500" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('SINGLETONS'); }} />
+                <PopCard label="Identity Cluster" count={populations?.entities} active={population === 'ENTITIES'} icon={Users} accent="text-blue-500" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('ENTITIES'); }} />
+                <PopCard label="Strong Match" count={populations?.auto_linked} active={population === 'AUTO_LINK'} icon={GitMerge} accent="text-emerald-500" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('AUTO_LINK'); }} />
+                <PopCard label="Potential Match" count={populations?.needs_review} active={population === 'REVIEW'} icon={AlertTriangle} accent="text-amber-500" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('REVIEW'); }} />
+                <PopCard label="System Rejected" count={populations?.rejected} active={population === 'REJECT'} icon={XCircle} accent="text-gray-400" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('REJECT'); }} />
+                <DualPopCard label="Approve / Rejected" approvedCount={approvedCountData?.total} rejectedCount={rejectedOverrideCountData?.total} active={population === 'APPROVED'} icon={CheckCircle2} accent="text-emerald-500" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('APPROVED'); }} />
+                <PopCard label="Unique Found" count={populations?.singletons} active={population === 'SINGLETONS'} icon={UserPlus} accent="text-purple-500" onClick={() => { setNavStack([]); setSelectedSingleton(null); setPopulation('SINGLETONS'); }} />
             </div>
             <div className="grid grid-cols-2 gap-3 text-xs text-gray-500 dark:text-gray-400">
                 <div>With Global ID: <span className="font-semibold text-gray-700 dark:text-gray-300">{populations?.entities_with_global_ref?.toLocaleString() ?? '…'}</span></div>
@@ -785,7 +842,7 @@ function WorkbenchPageContent() {
                 <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-6 lg:col-span-2">
                     <div className="flex items-center justify-between mb-4">
                         <h2 className="font-semibold text-gray-900 dark:text-white">
-                            {population === 'ENTITIES' ? 'Entities' : population === 'SINGLETONS' ? 'Singletons' : population.replace('_', ' ')}
+                            {POPULATION_DISPLAY_LABELS[population]}
                         </h2>
                         {population !== 'ENTITIES' && population !== 'APPROVED' && population !== 'SINGLETONS' && (pairsData?.items || []).length > 0 && (
                             <label className="flex items-center gap-1.5 text-[11px] text-gray-400 cursor-pointer select-none">
@@ -1056,9 +1113,9 @@ function WorkbenchPageContent() {
                                                     <button
                                                         onClick={() => { setRevokeOverrideTargetId(breakdown.officer_override_id); setDialog({ action: 'revoke-override', title: 'Revoke this decision' }); }}
                                                         className="flex items-center gap-1 font-semibold hover:underline"
-                                                        title="A bank officer can make a mistake -- revoke this decision so the pair goes back to Needs Review and can be re-decided (e.g. approved instead of rejected)."
+                                                        title="A bank officer can make a mistake -- revoke this decision so the pair goes back to Potential Match and can be re-decided (e.g. approved instead of rejected)."
                                                     >
-                                                        <RotateCcw size={11} /> Revoke -- send back to Needs Review
+                                                        <RotateCcw size={11} /> Revoke -- send back to Potential Match
                                                     </button>
                                                 )}
                                             </div>

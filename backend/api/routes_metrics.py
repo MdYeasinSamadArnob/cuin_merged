@@ -7,15 +7,48 @@ Dashboard KPIs and analytics endpoints.
 from typing import Optional
 from datetime import datetime, timedelta
 
+import psycopg2
 from fastapi import APIRouter, HTTPException
 from starlette.concurrency import run_in_threadpool
 
+from api.config import settings
 from services.run_service import get_run_service
 from services.review_service import get_review_service
 from engine.clustering import get_cluster_manager
 from api import doris_run_reader
 
 router = APIRouter()
+
+
+def _sync_get_dashboard_metrics() -> dict:
+    """
+    Full synchronous body of get_dashboard_metrics -- the psycopg2 call
+    below is blocking network I/O, so it runs off the event loop as one
+    run_in_threadpool dispatch, same pattern as every other route in
+    this backend (see routes_matches.py etc. for the precedent).
+    """
+    metrics = get_run_service().get_dashboard_metrics()
+
+    # 'total_clusters' deliberately reuses the EXACT same query as
+    # api/routes_workbench.py's populations endpoint (its "Identity
+    # Cluster" stat) -- an all-time count across every run ever
+    # persisted to Postgres, not scoped to the most recent run. See
+    # services/run_service.py's get_dashboard_metrics docstring for why
+    # this key isn't computed there: this is a live, cross-run total
+    # deliberately kept in lockstep with the Workbench page so the two
+    # never show a different number for what a user reads as the same
+    # concept, even though that means both pages can be inflated by
+    # historical dev/test runs a ruleset change kept carry-forward from
+    # merging with current data.
+    conn = psycopg2.connect(settings.DATABASE_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM entities WHERE status = 'ACTIVE'")
+        metrics["total_clusters"] = cur.fetchone()[0]
+    finally:
+        conn.close()
+
+    return metrics
 
 
 # ============================================
@@ -27,8 +60,7 @@ async def get_dashboard_metrics() -> dict:
     """
     Get main dashboard KPIs.
     """
-    run_service = get_run_service()
-    return run_service.get_dashboard_metrics()
+    return await run_in_threadpool(_sync_get_dashboard_metrics)
 
 
 @router.get("/trends")

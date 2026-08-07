@@ -44,7 +44,7 @@ export function SegmentsPanel({
         <div>
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
                 Keep companies and people apart so two accounts never get merged into one identity by mistake.
-                When on, a business and a person are matched against their own rules and are never auto-linked
+                When on, a business and a person are matched against their own rules and are never strong-matched
                 into each other -- but if they DO share something (a phone number, a document, an address), that
                 connection is kept and shown below, not thrown away.
             </p>

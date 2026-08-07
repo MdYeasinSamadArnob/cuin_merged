@@ -7,8 +7,8 @@ import { useWebSocket } from '@/lib/ws';
 interface DashboardMetrics {
     total_records: number;
     total_clusters: number;
-    duplicates_detected: number;
-    duplicate_rate_pct: number;
+    pairs_found: number;
+    pairs_found_rate_pct: number;
     review_backlog: number;
     auto_link_rate_pct: number;
     avg_run_duration_seconds: number;
@@ -182,30 +182,30 @@ export default function DashboardPage() {
                     </div>
                 </div>
 
-                {/* Duplicates Found */}
+                {/* Pairs Found */}
                 <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-6 hover:border-purple-300 dark:hover:border-gray-600 transition-colors shadow-sm dark:shadow-none">
                     <div className="flex items-center justify-between">
                         <div>
-                            <p className="text-gray-500 dark:text-gray-400 text-sm">Duplicates Found</p>
+                            <p className="text-gray-500 dark:text-gray-400 text-sm">Duplicate Pair Found</p>
                             <p className="text-3xl font-bold text-purple-600 dark:text-purple-400 mt-2">
-                                {metrics?.duplicates_detected.toLocaleString() || '0'}
+                                {metrics?.pairs_found.toLocaleString() || '0'}
                             </p>
                             <p className="text-sm text-gray-500 mt-1">
-                                {(metrics?.duplicate_rate_pct || 0).toFixed(1)}% rate
+                                Strong Match + Potential Match &middot; {(metrics?.pairs_found_rate_pct || 0).toFixed(1)}%
                             </p>
                         </div>
                         <div className="text-4xl opacity-50 grayscale dark:grayscale-0">👥</div>
                     </div>
                 </div>
 
-                {/* Review Backlog */}
+                {/* Potential Match */}
                 <div className={`border rounded-xl p-6 transition-colors shadow-sm dark:shadow-none ${(metrics?.review_backlog || 0) > 0
                     ? 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-700 hover:border-yellow-300 dark:hover:border-yellow-600'
                     : 'bg-white dark:bg-gray-800/50 border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
                     }`}>
                     <div className="flex items-center justify-between">
                         <div>
-                            <p className="text-gray-500 dark:text-gray-400 text-sm">Review Backlog</p>
+                            <p className="text-gray-500 dark:text-gray-400 text-sm">Potential Match</p>
                             <p className={`text-3xl font-bold mt-2 ${(metrics?.review_backlog || 0) > 0 ? 'text-yellow-600 dark:text-yellow-400' : 'text-gray-900 dark:text-white'
                                 }`}>
                                 {metrics?.review_backlog.toLocaleString() || '0'}
@@ -222,13 +222,13 @@ export default function DashboardPage() {
             {/* Quick Stats */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded-xl p-6 shadow-sm dark:shadow-none">
-                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Automation Rate</h3>
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Strong Match Rate</h3>
                     <div className="relative h-32 flex items-center justify-center">
                         <div className="text-center">
                             <p className="text-4xl font-bold text-emerald-600 dark:text-emerald-400">
                                 {(metrics?.auto_link_rate_pct || 0).toFixed(0)}%
                             </p>
-                            <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">auto-linked</p>
+                            <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">strong match</p>
                         </div>
                     </div>
                     <div className="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden mt-4">
@@ -297,8 +297,8 @@ export default function DashboardPage() {
                                     <th className="pb-3">Mode</th>
                                     <th className="pb-3">Status</th>
                                     <th className="pb-3">Records</th>
-                                    <th className="pb-3">Auto-Link</th>
-                                    <th className="pb-3">Review</th>
+                                    <th className="pb-3">Strong Match</th>
+                                    <th className="pb-3">Potential Match</th>
                                     <th className="pb-3">Duration</th>
                                     <th className="pb-3 pr-2"></th>
                                 </tr>

@@ -292,7 +292,10 @@ class RunService:
         return self._orchestrators.get(run_id)
     
     def get_dashboard_metrics(self) -> dict:
-        """Get dashboard KPIs."""
+        """
+        Get dashboard KPIs, minus 'total_clusters' -- see the comment
+        below on why that one key is filled in by the caller instead.
+        """
         completed_runs = [
             r for r in self._runs.values()
             if r.status == RunStatus.COMPLETED
@@ -301,27 +304,29 @@ class RunService:
         total_records = sum(r.counters.records_in for r in completed_runs)
         total_auto_links = sum(r.counters.auto_links for r in completed_runs)
         total_review = sum(r.counters.review_items for r in completed_runs)
+        # "Pairs Found" is deliberately Strong Match + Potential Match
+        # ONLY -- a Rejected pair is one the system already confidently
+        # decided is NOT a duplicate, so folding it into a "pairs found"
+        # count would call a definite non-match a "found pair", which is
+        # the opposite of easy to explain. This traces to Workbench's
+        # Auto-Linked ("Strong Match") + Potential Match cards added
+        # together -- deliberately NOT the three-tier total; Rejected is
+        # excluded here for the same reason it's excluded from how a
+        # human would describe "how many duplicates did we find."
         total_duplicates = total_auto_links + total_review
 
-        # "How many clusters did the most recent run produce" -- NOT a
-        # cumulative all-time count. Tried summing/counting entities
-        # across every run once (either via the old in-memory
-        # ClusterManager singleton, or a live Postgres `entities`
-        # COUNT) and both were wrong in different ways: the singleton
-        # reset to 0 on every restart and only ever reflected
-        # whichever run clustered most recently in-process; the
-        # Postgres count was durable but is a TRUE cumulative total
-        # across every run ever executed, including old runs from
-        # earlier ruleset iterations that carry-forward's Jaccard
-        # matching didn't merge with later runs (a ruleset change
-        # reshapes cluster boundaries enough to drop below the match
-        # threshold) -- so it reads as a large, confusing number
-        # dominated by historical dev/test churn, not "how many
-        # identities does the current dataset actually have." The
-        # single most-recent-run counter is unambiguous and matches
-        # what a user watching this stat actually expects.
-        most_recent_completed = max(completed_runs, key=lambda r: r.started_at, default=None)
-        total_clusters = most_recent_completed.counters.clusters_created if most_recent_completed else 0
+        # total_clusters is intentionally NOT computed here -- see this
+        # method's docstring and api/routes_metrics.py's get_dashboard_metrics,
+        # which fills it in with a live Postgres `entities` COUNT after
+        # calling this method: the exact same query api/routes_workbench.py's
+        # populations endpoint uses for its "Identity Cluster" stat, so the
+        # two pages can never disagree. (An earlier version of this stat
+        # used the most-recent-run's own cluster count instead, specifically
+        # because that Postgres count can be inflated by historical dev/test
+        # runs a ruleset change kept carry-forward's Jaccard matching from
+        # merging with current data. Cross-page consistency was chosen over
+        # that, as an explicit product decision -- flag to whoever revisits
+        # this that the inflation risk documented here is still real.)
 
         avg_duration = 0
         if completed_runs:
@@ -335,9 +340,8 @@ class RunService:
         
         return {
             'total_records': total_records,
-            'total_clusters': total_clusters,
-            'duplicates_detected': total_duplicates,
-            'duplicate_rate_pct': (total_duplicates / total_records * 100) if total_records else 0,
+            'pairs_found': total_duplicates,
+            'pairs_found_rate_pct': (total_duplicates / total_records * 100) if total_records else 0,
             'review_backlog': total_review,
             'auto_link_rate_pct': (total_auto_links / total_duplicates * 100) if total_duplicates else 0,
             'avg_run_duration_seconds': avg_duration,

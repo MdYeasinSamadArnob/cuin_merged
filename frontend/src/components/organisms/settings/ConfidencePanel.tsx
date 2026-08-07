@@ -47,12 +47,23 @@ function PercentSlider({
     );
 }
 
+// Internal decision keys (AUTO_LINK/REVIEW/REJECT) stay as the prop/lookup
+// key -- matches counts/delta's backend field names and the color logic
+// below -- only the RENDERED text is translated, so this stays aligned
+// with the same tier names used on Dashboard/Workbench without touching
+// any of the underlying data plumbing.
+const DECISION_DISPLAY_LABELS: Record<string, string> = {
+    AUTO_LINK: "Strong Match",
+    REVIEW: "Potential Match",
+    REJECT: "System Rejected",
+};
+
 function DeltaBadge({ label, count, delta }: { label: string; count: number; delta: number }) {
     const color = label === "AUTO_LINK" ? "text-emerald-600 dark:text-emerald-400" : label === "REVIEW" ? "text-amber-600 dark:text-amber-400" : "text-gray-500 dark:text-gray-400";
     return (
         <div className="flex-1 text-center p-3 rounded-lg bg-gray-50 dark:bg-gray-900/50">
             <div className={`text-2xl font-bold ${color}`}>{count.toLocaleString()}</div>
-            <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">{label.replace("_", " ")}</div>
+            <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">{DECISION_DISPLAY_LABELS[label] ?? label.replace("_", " ")}</div>
             {delta !== 0 && (
                 <div className={`text-xs mt-1 flex items-center justify-center gap-1 ${delta > 0 ? "text-emerald-500" : "text-red-500"}`}>
                     {delta > 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
@@ -74,8 +85,8 @@ function WorkedExample({ ruleset }: { ruleset: MatchRuleset }) {
 
     const [first, second] = contenders;
     const combined = second ? Math.min(ruleset.confidence_cap, first.confidence_pct + second.confidence_pct) : first.confidence_pct;
-    const decision = combined >= ruleset.auto_link_min_confidence ? "AUTO-LINK" : combined >= ruleset.review_min_confidence ? "REVIEW" : "REJECT";
-    const decisionColor = decision === "AUTO-LINK" ? "text-emerald-600 dark:text-emerald-400" : decision === "REVIEW" ? "text-amber-600 dark:text-amber-400" : "text-gray-500";
+    const decision = combined >= ruleset.auto_link_min_confidence ? "STRONG MATCH" : combined >= ruleset.review_min_confidence ? "POTENTIAL MATCH" : "SYSTEM REJECTED";
+    const decisionColor = decision === "STRONG MATCH" ? "text-emerald-600 dark:text-emerald-400" : decision === "POTENTIAL MATCH" ? "text-amber-600 dark:text-amber-400" : "text-gray-500";
 
     return (
         <div className="p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 text-xs flex items-center gap-2">
@@ -200,7 +211,7 @@ export function ConfidencePanel({ ruleset, onChange, counts, baseline, delta, lo
                 )}
                 {baseline && (
                     <p className="text-[11px] text-gray-400 mt-2">
-                        Baseline (as the run originally decided): {baseline.AUTO_LINK || 0} auto-link, {baseline.REVIEW || 0} review, {baseline.REJECT || 0} reject.
+                        Baseline (as the run originally decided): {baseline.AUTO_LINK || 0} strong match, {baseline.REVIEW || 0} potential match, {baseline.REJECT || 0} system rejected.
                     </p>
                 )}
             </div>

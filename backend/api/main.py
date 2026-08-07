@@ -218,7 +218,7 @@ from api.routes_admin import router as admin_router
 app.include_router(admin_router, prefix="/admin", tags=["Admin"])
 
 from api.routes_datasource import router as datasource_router
-app.include_router(datasource_router, prefix="/datasource", tags=["Datasource"])
+app.include_router(datasource_router, prefix="/datasource", tags=["Ingestion Pipeline"])
 
 from api.routes_rules import router as rules_router
 app.include_router(rules_router, prefix="/rules", tags=["Rules"])
@@ -233,7 +233,7 @@ app.include_router(schema_router, prefix="/datasource/schema", tags=["Schema"])
 # un-normalized source Parquet file directly, before running any
 # pipeline. See engine/ports/doris_raw_preview.py's module docstring.
 from api.routes_data_viewer import router as data_viewer_router
-app.include_router(data_viewer_router, prefix="/data-viewer", tags=["Data Viewer"])
+app.include_router(data_viewer_router, prefix="/data-viewer", tags=["Source Data"])
 
 # Entity resolution workbench (Stage 4 of the plan) -- purely additive,
 # does not touch/redirect any /graph, /explorer, /matches, or legacy

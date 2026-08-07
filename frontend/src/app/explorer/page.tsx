@@ -34,6 +34,17 @@ const formatFieldValue = (value: any) => {
     return String(value);
 };
 
+// Backend decision values (AUTO_LINK/REVIEW/REJECT) stay as-is everywhere
+// they're compared against -- only the rendered text is translated, to
+// stay aligned with the same tier names shown on Dashboard/Workbench.
+const DECISION_DISPLAY_LABELS: Record<string, string> = {
+    AUTO_LINK: 'Strong Match',
+    REVIEW: 'Potential Match',
+    REJECT: 'System Rejected',
+};
+const decisionDisplayLabel = (decision?: string | null) =>
+    (decision && DECISION_DISPLAY_LABELS[decision]) || decision?.replace('_', ' ') || 'Pending';
+
 const getDisplayName = (record: any) => {
     if (!record) return 'Unknown';
     const name = record.name_norm;
@@ -643,7 +654,7 @@ function ExplorerPageContent() {
                                                                         ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300'
                                                                         : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400'
                                                             }`}>
-                                                                {score.decision.replace('_', ' ')}
+                                                                {decisionDisplayLabel(score.decision)}
                                                             </span>
                                                         )}
                                                     </div>
@@ -828,7 +839,7 @@ function ExplorerPageContent() {
                                             selectedMatch.decision === 'REJECT' ? 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-400' :
                                                 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
                                         }`}>
-                                        {selectedMatch.decision || 'Pending'}
+                                        {decisionDisplayLabel(selectedMatch.decision)}
                                     </span>
                                 </div>
 

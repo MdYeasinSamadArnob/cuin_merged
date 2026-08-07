@@ -46,7 +46,7 @@ export default function DatasourcePage() {
                 router.push(`/runs/${data.run_id}`);
             } else {
                 console.error("Failed to start pipeline:", data);
-                alert("Failed to start demo pipeline.");
+                alert("Failed to start pipeline.");
                 setIsStarting(false);
             }
         } catch (error) {
@@ -60,7 +60,7 @@ export default function DatasourcePage() {
         <div className="max-w-4xl mx-auto py-8">
             <div className="mb-8">
                 <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-emerald-600 dark:from-blue-400 dark:to-emerald-400 mb-2">
-                    Datasource Integration
+                    Ingestion Pipeline
                 </h1>
                 <p className="text-gray-600 dark:text-gray-400">
                     Run entity resolution over the Oracle Parquet datasource via Apache Doris --
@@ -207,7 +207,7 @@ export default function DatasourcePage() {
                     ) : (
                         <>
                             <Zap size={20} />
-                            {runMode === "update" ? "Start Demo Ingestion" : "Start as New Pipeline"}
+                            {runMode === "update" ? "Start Ingestion" : "Start as New Pipeline"}
                         </>
                     )}
                 </button>

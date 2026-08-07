@@ -411,7 +411,7 @@ export default function GraphPage() {
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2.5">
                 <StatCard label="Clusters" value={stats?.total_clusters} icon={CircleDot} accent="text-blue-500" />
                 <StatCard label="Records" value={stats?.total_records} icon={Users} accent="text-cyan-500" />
-                <StatCard label="Singletons" value={stats?.singletons} icon={UserIcon} accent="text-gray-400" />
+                <StatCard label="Unique Found" value={stats?.singletons} icon={UserIcon} accent="text-gray-400" />
                 <StatCard label="Largest cluster" value={stats?.largest_cluster_size} icon={Network} accent="text-orange-500" />
                 <StatCard label="Avg size" value={stats?.avg_cluster_size} icon={CircleDot} accent="text-emerald-500" />
                 <StatCard label="Companies" value={stats?.company_records} icon={Building2} accent="text-amber-500" />
@@ -432,7 +432,7 @@ export default function GraphPage() {
                         className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${population === 'singletons' ? 'bg-blue-600 text-white shadow-sm' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
                         title="Records with no candidate match at all"
                     >
-                        Singletons
+                        Unique Found
                     </button>
                 </div>
                 <div className="relative flex-1 min-w-[200px]">

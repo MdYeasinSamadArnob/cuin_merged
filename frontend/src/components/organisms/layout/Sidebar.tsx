@@ -5,8 +5,6 @@ import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import {
     LayoutDashboard,
-    GitBranch,
-    Search,
     ClipboardCheck,
     Network,
     Settings,
@@ -29,13 +27,19 @@ import { useAppStore } from "@/stores/useAppStore";
 // hidden, so nothing about that mechanism is broken. "Rules" no longer
 // gets its own entry either -- it's merged into "Settings" (a single
 // tabbed page now), see /settings/page.tsx.
+//
+// "Pipeline" and "Explorer" are hidden here too, per business
+// requirement -- same treatment as Upload, NOT a deletion. Both pages
+// and their backend routes are fully intact: /pipeline is still linked
+// from the Dashboard's "Recent Runs -> View All" and from the run
+// detail page's back-link (it's the only run-list view that exists --
+// there's no separate /runs list page), and /explorer still works if
+// visited directly. Only the nav entries are removed.
 const navigation = [
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-    { name: "Data Viewer", href: "/data-viewer", icon: Table2 },
-    { name: "Datasource", href: "/datasource", icon: Database },
-    { name: "Pipeline", href: "/pipeline", icon: GitBranch },
-    { name: "Explorer", href: "/explorer", icon: Search },
-    { name: "Review", href: "/review", icon: ClipboardCheck },
+    { name: "Source Data", href: "/data-viewer", icon: Table2 },
+    { name: "Ingestion Pipeline", href: "/datasource", icon: Database },
+    { name: "Workbench", href: "/review", icon: ClipboardCheck },
     { name: "Graph", href: "/graph", icon: Network },
     { name: "API", href: "/api-docs", icon: Webhook },
 ];

@@ -606,11 +606,18 @@ def _sync_list_entities(
             total = cur.fetchone()[0]
 
             offset = (page - 1) * page_size
+            # Largest clusters first -- matches Graph's default sort
+            # (graph/v2's 'size_desc'), and is what actually makes this
+            # list useful at a glance: a banker scanning the top of the
+            # page should see the biggest, most consequential identity
+            # clusters immediately, not whichever entity happened to be
+            # touched most recently. Ties broken by most-recently-updated,
+            # the previous sole sort key.
             cur.execute(f"""
                 SELECT e.entity_id::text, e.global_ref, e.global_ref_state, e.segment, e.created_at,
                        (SELECT COUNT(*) FROM entity_members em WHERE em.entity_id = e.entity_id AND em.valid_to IS NULL) AS member_count
                 FROM entities e WHERE {where_sql}
-                ORDER BY e.updated_at DESC LIMIT %s OFFSET %s
+                ORDER BY member_count DESC, e.updated_at DESC LIMIT %s OFFSET %s
             """, params + [page_size, offset])
             page_rows = cur.fetchall()
 

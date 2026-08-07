@@ -557,7 +557,7 @@ export default function RunDetailsPage() {
                         <div className="grid grid-cols-1 gap-4">
                             <MetricCard label="Records Ingested" value={metrics.records_in} icon={Database} highlight={activeStageIndex >= 0} />
                             <MetricCard label="Candidates Found" value={metrics.candidates_generated} icon={Search} highlight={activeStageIndex >= 3} />
-                            <MetricCard label="Auto-Linked" value={metrics.auto_links} icon={Zap} highlight={activeStageIndex >= 6} />
+                            <MetricCard label="Strong Match" value={metrics.auto_links} icon={Zap} highlight={activeStageIndex >= 6} />
                             <MetricCard label="Manual Review" value={metrics.review_items} icon={FileText} highlight={activeStageIndex >= 5} />
                             <MetricCard label="Unique Identities" value={metrics.clusters_created} icon={Users} highlight={activeStageIndex >= 7} />
                         </div>
