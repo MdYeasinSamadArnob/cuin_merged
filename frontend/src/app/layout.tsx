@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import Sidebar from "@/components/organisms/layout/Sidebar";
 import { Providers } from "@/components/providers/Providers";
+import { AppShell } from "@/components/providers/AppShell";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "CUIN v2 | Identity Intelligence Platform",
+  title: "CIF | Dedupe Engine",
   description: "Production-grade identity resolution for banking with explainable AI",
 };
 
@@ -57,17 +57,7 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 transition-colors duration-300`}
       >
         <Providers>
-          <div className="flex h-screen overflow-hidden">
-            {/* Sidebar Navigation */}
-            <Sidebar />
-
-            {/* Main Content */}
-            <main className="flex-1 overflow-y-auto">
-              <div className="container mx-auto px-6 py-8">
-                {children}
-              </div>
-            </main>
-          </div>
+          <AppShell>{children}</AppShell>
         </Providers>
       </body>
     </html>

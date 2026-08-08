@@ -41,6 +41,15 @@ const DECISION_COLOR: Record<string, string> = {
     REJECT: "text-gray-500 dark:text-gray-400",
 };
 
+// Same tier names the Workbench tabs already use (Strong Match/Potential
+// Match/System Rejected) -- this badge showed the raw pipeline code
+// ("AUTO LINK") instead of matching that language everywhere else.
+const DECISION_LABEL: Record<string, string> = {
+    AUTO_LINK: "Strong Match",
+    REVIEW: "Potential Match",
+    REJECT: "System Rejected",
+};
+
 // Maps a pair_contributions RULE's `attribute` (what the audited score was
 // computed against) to the matching pair_identifier_evidence/
 // pair_name_dob_evidence FIELD name (what the raw comparison was computed
@@ -65,7 +74,7 @@ export function ScoreBreakdown({ breakdown, loading }: { breakdown: Breakdown | 
         <div className="space-y-3">
             <div className="flex items-center justify-between">
                 <div className="text-2xl font-bold text-gray-900 dark:text-white">{breakdown.confidence_pct.toFixed(0)}%</div>
-                <span className={`badge ${DECISION_COLOR[breakdown.decision]} font-semibold`}>{breakdown.decision.replace("_", " ")}</span>
+                <span className={`badge ${DECISION_COLOR[breakdown.decision]} font-semibold`}>{DECISION_LABEL[breakdown.decision] || breakdown.decision.replace("_", " ")}</span>
             </div>
             {wasCapped && (
                 <p className="text-[11px] text-amber-600 dark:text-amber-400">

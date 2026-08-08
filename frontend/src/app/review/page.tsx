@@ -13,7 +13,7 @@ import { motion } from 'framer-motion';
 import {
     Users, GitMerge, GitBranch, XCircle, UserX, AlertTriangle, ShieldCheck, ShieldAlert,
     Search as SearchIcon, CheckCircle2, IdCard, History, Building2, User as UserIcon, ArrowLeft, ChevronRight, UserPlus,
-    RotateCcw,
+    RotateCcw, ArrowUpRight,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { ScoreBreakdown } from '@/components/organisms/workbench/ScoreBreakdown';
@@ -190,17 +190,30 @@ const MATCH_DECISION_COLOR: Record<string, string> = {
 // Expands to the same rule-by-rule ScoreBreakdown a pair gets in the
 // REVIEW/AUTO_LINK/REJECT lists, so "why is this one entity" is answered
 // with real scores, not just a member list.
-function EntityMatchRow({ item, runId, expanded, onToggle }: {
-    item: { a_key: string; b_key: string; a_name?: string | null; b_name?: string | null; confidence_pct: number; has_veto: boolean; decision: string };
+function EntityMatchRow({ item, runId, expanded, onToggle, onJumpToPair }: {
+    item: {
+        a_key: string; b_key: string; a_name?: string | null; b_name?: string | null; confidence_pct: number; has_veto: boolean; decision: string;
+        officer_verdict?: 'MUST_LINK' | 'MUST_NOT_LINK' | null; officer_actor?: string | null;
+    };
     runId: string;
     expanded: boolean;
     onToggle: () => void;
+    onJumpToPair: () => void;
 }) {
     const { data: breakdown, isFetching } = useQuery({
         queryKey: ['wb-entity-match-breakdown', runId, item.a_key, item.b_key],
         queryFn: () => api.wbPairBreakdown(item.a_key, item.b_key, runId),
         enabled: expanded,
     });
+
+    // Same "effective decision" an officer's override produces everywhere
+    // else in the workbench (tier counts, tier-tab membership) -- this
+    // badge showing the pipeline's stale original decision with no hint
+    // it was overridden was exactly the "I approved it and nothing here
+    // changed" gap being fixed.
+    const isOverridden = item.officer_verdict != null;
+    const effectiveDecision = item.officer_verdict === 'MUST_LINK' ? 'AUTO_LINK' : item.officer_verdict === 'MUST_NOT_LINK' ? 'REJECT' : item.decision;
+    const destinationLabel = POPULATION_DISPLAY_LABELS[effectiveDecision as Population] || effectiveDecision.replace('_', ' ');
 
     return (
         <div className="rounded-lg bg-gray-50 dark:bg-gray-900/40 text-xs overflow-hidden">
@@ -213,10 +226,27 @@ function EntityMatchRow({ item, runId, expanded, onToggle }: {
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                     {item.has_veto && <ShieldAlert size={12} className="text-red-500" />}
-                    <span className={`font-semibold ${MATCH_DECISION_COLOR[item.decision] || 'text-gray-500'}`}>{item.decision.replace('_', ' ')}</span>
+                    <span className={`font-semibold ${MATCH_DECISION_COLOR[effectiveDecision] || 'text-gray-500'}`}>{destinationLabel}</span>
                     <span className={`font-mono ${item.has_veto ? 'text-red-500' : 'text-gray-600 dark:text-gray-300'}`}>{item.confidence_pct.toFixed(0)}%</span>
+                    <button
+                        onClick={(e) => { e.stopPropagation(); onJumpToPair(); }}
+                        className="text-gray-400 hover:text-blue-500 transition-colors"
+                        title={`Dig into this pair in ${destinationLabel}`}
+                    >
+                        <ArrowUpRight size={13} />
+                    </button>
                 </div>
             </div>
+            {isOverridden && (
+                <div className={`flex items-center gap-1.5 mx-2 mb-2 px-2 py-1 rounded ${
+                    item.officer_verdict === 'MUST_LINK' ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300' : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300'
+                }`}>
+                    {item.officer_verdict === 'MUST_LINK' ? <CheckCircle2 size={12} className="shrink-0" /> : <XCircle size={12} className="shrink-0" />}
+                    <span className="truncate">
+                        Overridden — {item.officer_verdict === 'MUST_LINK' ? 'Approved' : 'Rejected'} by {item.officer_actor} (pipeline originally said {POPULATION_DISPLAY_LABELS[item.decision as Population] || item.decision.replace('_', ' ')})
+                    </span>
+                </div>
+            )}
             {expanded && (
                 <div className="px-2 pb-2 pt-1 border-t border-gray-200 dark:border-gray-700">
                     <ScoreBreakdown breakdown={breakdown || null} loading={isFetching} />
@@ -456,6 +486,14 @@ function WorkbenchPageContent() {
         queryFn: () => api.wbGetEntity(selectedEntity!, runId),
         enabled: !!selectedEntity,
     });
+    // Re-derive "all members included" every time the entity's own member
+    // list actually changes (a fresh selection, or after a split this same
+    // flow just performed) -- keyed on the member codes themselves, not
+    // just entity_id, so a just-split member disappears from the checklist
+    // instead of staying checked against a customer_code that's already left.
+    useEffect(() => {
+        setIncludedGlobalRefMembers(new Set((entityDetail?.members || []).map((m: any) => m.customer_code)));
+    }, [entityDetail?.entity_id, entityDetail?.members?.length]);
 
     const { data: entityMatches, isFetching: entityMatchesLoading } = useQuery({
         queryKey: ['wb-entity-matches', selectedEntity, runId],
@@ -465,6 +503,34 @@ function WorkbenchPageContent() {
     const [expandedMatchKey, setExpandedMatchKey] = useState<string | null>(null);
     useEffect(() => setExpandedMatchKey(null), [selectedEntity]);
 
+    // Which of this entity's members show up in a REJECTED pair right in
+    // the Match Evidence panel below -- either the pipeline's own veto
+    // ("System Rejected", no human decision) or an officer's explicit
+    // override. Both are worth surfacing here: an officer about to hand
+    // out one shared Global ID needs to see either kind before confirming,
+    // even though a raw pipeline reject alone doesn't necessarily mean the
+    // clustering itself is wrong (they can still be one entity via another
+    // member -- see EntityMatchRow's own comment). 'officer' is the
+    // stronger, more actionable signal (a human said no) so it wins when a
+    // member has both and sorts first. Reuses entityMatches, already
+    // fetched for that same panel, so the checklist can point at exactly
+    // who's implicated without the officer cross-referencing codes by hand.
+    const rejectedMemberInfo = useMemo(() => {
+        const map = new Map<string, { otherName: string; actor: string | null; source: 'officer' | 'system' }[]>();
+        for (const it of (entityMatches?.items || [])) {
+            const effective = it.officer_verdict === 'MUST_LINK' ? 'AUTO_LINK' : it.officer_verdict === 'MUST_NOT_LINK' ? 'REJECT' : it.decision;
+            if (effective !== 'REJECT') continue;
+            const source: 'officer' | 'system' = it.officer_verdict === 'MUST_NOT_LINK' ? 'officer' : 'system';
+            const aName = it.a_name || it.a_key;
+            const bName = it.b_name || it.b_key;
+            if (!map.has(it.a_key)) map.set(it.a_key, []);
+            map.get(it.a_key)!.push({ otherName: bName, actor: it.officer_actor || null, source });
+            if (!map.has(it.b_key)) map.set(it.b_key, []);
+            map.get(it.b_key)!.push({ otherName: aName, actor: it.officer_actor || null, source });
+        }
+        return map;
+    }, [entityMatches]);
+
     const jumpToEntity = (entityId: string) => {
         setNavStack((prev) => [...prev, {
             population, selectedPair, selectedEntity,
@@ -473,6 +539,21 @@ function WorkbenchPageContent() {
         setPopulation('ENTITIES');
         setSelectedEntity(entityId);
         setSelectedPair(null);
+        setSelectedSingleton(null);
+    };
+
+    // From an Identity Cluster's "Match evidence" row -- dig into that
+    // exact pair in its own tier tab (Strong Match/Potential Match/System
+    // Rejected), same "Back" trail as jumpToEntity so the officer can
+    // return to the cluster they came from.
+    const jumpToPair = (item: { a_key: string; b_key: string; decision: string }) => {
+        setNavStack((prev) => [...prev, {
+            population, selectedPair, selectedEntity,
+            label: population === 'ENTITIES' && selectedEntity ? `entity ${selectedEntity.slice(0, 8)}` : population.replace('_', ' '),
+        }]);
+        setPopulation(item.decision as Population);
+        setSelectedEntity(null);
+        setSelectedPair({ a_key: item.a_key, b_key: item.b_key });
         setSelectedSingleton(null);
     };
 
@@ -507,6 +588,15 @@ function WorkbenchPageContent() {
     const [splitCode, setSplitCode] = useState<string>('');
     const [globalRefInput, setGlobalRefInput] = useState('');
     useEffect(() => setGlobalRefInput(''), [selectedSingleton]);
+    // Which of the currently-selected entity's members should actually
+    // receive this Global ID -- an officer can have rejected/split one
+    // member's link into the cluster without wanting to redo the whole
+    // grouping, so the assignment itself needs to be scoped to a subset,
+    // not forced onto every current member. Defaults to "all of them"
+    // (the previous, only, behavior) and resets whenever a different
+    // entity is selected.
+    const [includedGlobalRefMembers, setIncludedGlobalRefMembers] = useState<Set<string>>(new Set());
+    const [assigningGlobalRef, setAssigningGlobalRef] = useState(false);
     // Rollback targets -- which absorbed entity_id to resurrect, or
     // which override_id to revoke. revert-global-ref always targets
     // whichever entity is currently selected, so it needs no separate
@@ -527,6 +617,7 @@ function WorkbenchPageContent() {
         queryClient.invalidateQueries({ queryKey: ['wb-audit-verify'] });
         queryClient.invalidateQueries({ queryKey: ['wb-overrides'] });
         queryClient.invalidateQueries({ queryKey: ['wb-overrides-count'] });
+        queryClient.invalidateQueries({ queryKey: ['wb-overrides-count-rejected'] });
     };
 
     const runBulkPairAction = async (action: 'approve' | 'reject', result: ReasonDialogResult) => {
@@ -536,8 +627,8 @@ function WorkbenchPageContent() {
         for (let i = 0; i < keys.length; i++) {
             const [a, b] = keys[i].split(':::');
             try {
-                if (action === 'approve') await api.wbApprove(runId, a, b, result.reasonCode, result.reason, result.actor);
-                else await api.wbReject(runId, a, b, result.reasonCode, result.reason, result.actor);
+                if (action === 'approve') await api.wbApprove(runId, a, b, result.reasonCode, result.reason);
+                else await api.wbReject(runId, a, b, result.reasonCode, result.reason);
             } catch (e: any) {
                 failures.push(`${a} : ${b} -- ${e.message || e}`);
             }
@@ -561,7 +652,7 @@ function WorkbenchPageContent() {
         let survivor = ids[0];
         for (let i = 1; i < ids.length; i++) {
             try {
-                const res = await api.wbMerge(runId, survivor, ids[i], result.reasonCode, result.reason, result.actor);
+                const res = await api.wbMerge(runId, survivor, ids[i], result.reasonCode, result.reason);
                 survivor = res.kept_entity_id;
             } catch (e: any) {
                 failures.push(`${ids[i]} -- ${e.message || e}`);
@@ -582,32 +673,32 @@ function WorkbenchPageContent() {
             } else if (dialog?.bulk && dialog.action === 'merge') {
                 await runBulkMerge(result);
             } else if (dialog?.action === 'approve' && selectedPair) {
-                await api.wbApprove(runId, selectedPair.a_key, selectedPair.b_key, result.reasonCode, result.reason, result.actor);
+                await api.wbApprove(runId, selectedPair.a_key, selectedPair.b_key, result.reasonCode, result.reason);
                 // Deliberately NOT clearing selectedPair here -- staying on the
                 // pair after approving is what lets the officer actually SEE
                 // their decision took effect (the "Approved by ..." banner and
                 // list badge), instead of the panel just going blank.
                 invalidateAll();
             } else if (dialog?.action === 'reject' && selectedPair) {
-                await api.wbReject(runId, selectedPair.a_key, selectedPair.b_key, result.reasonCode, result.reason, result.actor);
+                await api.wbReject(runId, selectedPair.a_key, selectedPair.b_key, result.reasonCode, result.reason);
                 invalidateAll();
             } else if (dialog?.action === 'merge' && selectedEntity && mergeTarget) {
-                await api.wbMerge(runId, selectedEntity, mergeTarget, result.reasonCode, result.reason, result.actor);
+                await api.wbMerge(runId, selectedEntity, mergeTarget, result.reasonCode, result.reason);
                 setMergeTarget('');
                 invalidateAll();
             } else if (dialog?.action === 'split' && selectedEntity && splitCode) {
-                await api.wbSplit(runId, selectedEntity, splitCode, result.reasonCode, result.reason, result.actor);
+                await api.wbSplit(runId, selectedEntity, splitCode, result.reasonCode, result.reason);
                 setSplitCode('');
                 invalidateAll();
             } else if (dialog?.action === 'undo-merge' && undoMergeTargetId) {
-                await api.wbUndoMerge(undoMergeTargetId, `${result.reasonCode}: ${result.reason}`, result.actor);
+                await api.wbUndoMerge(undoMergeTargetId, `${result.reasonCode}: ${result.reason}`);
                 setUndoMergeTargetId(null);
                 invalidateAll();
             } else if (dialog?.action === 'revert-global-ref' && selectedEntity) {
-                await api.wbRevertGlobalRef(selectedEntity, `${result.reasonCode}: ${result.reason}`, result.actor);
+                await api.wbRevertGlobalRef(selectedEntity, `${result.reasonCode}: ${result.reason}`);
                 invalidateAll();
             } else if (dialog?.action === 'revoke-override' && revokeOverrideTargetId) {
-                await api.wbRevokeOverride(revokeOverrideTargetId, `${result.reasonCode}: ${result.reason}`, result.actor);
+                await api.wbRevokeOverride(revokeOverrideTargetId, `${result.reasonCode}: ${result.reason}`);
                 setRevokeOverrideTargetId(null);
                 invalidateAll();
             }
@@ -619,15 +710,28 @@ function WorkbenchPageContent() {
     };
 
     const assignGlobalRef = async () => {
-        if (!selectedEntity || !globalRefInput.trim()) return;
-        const actor = localStorage.getItem('wb_actor') || 'officer';
+        if (!selectedEntity || !globalRefInput.trim() || !entityDetail) return;
+        // Members left unchecked in the Global ID checklist are split out
+        // into their own entity FIRST -- a Global ID belongs to the entity
+        // as a whole (entities.global_ref), so scoping it to a subset of
+        // today's members means that subset has to actually become its own
+        // entity before the assignment happens. Each split also writes a
+        // MUST_NOT_LINK override against the members it's leaving, so a
+        // future run won't silently re-cluster it back in.
+        const excluded = entityDetail.members.map((m: any) => m.customer_code).filter((c: string) => !includedGlobalRefMembers.has(c));
+        setAssigningGlobalRef(true);
         try {
             setActionError(null);
-            await api.wbAssignGlobalRef(selectedEntity, globalRefInput.trim(), 'CONFIRMED', 'Assigned via workbench', actor);
+            for (const code of excluded) {
+                await api.wbSplit(runId, selectedEntity, code, 'DIFFERENT_PERSON', `Excluded from Global ID ${globalRefInput.trim()} assignment`);
+            }
+            await api.wbAssignGlobalRef(selectedEntity, globalRefInput.trim(), 'CONFIRMED', 'Assigned via workbench');
             setGlobalRefInput('');
             invalidateAll();
         } catch (e: any) {
             setActionError(String(e.message || e));
+        } finally {
+            setAssigningGlobalRef(false);
         }
     };
 
@@ -638,11 +742,10 @@ function WorkbenchPageContent() {
     // now attached) rather than a banner asking them to trust it worked.
     const assignGlobalRefToSingleton = async () => {
         if (!selectedSingleton || !globalRefInput.trim()) return;
-        const actor = localStorage.getItem('wb_actor') || 'officer';
         setAssigningSingletonRef(true);
         try {
             setActionError(null);
-            const res = await api.wbAssignGlobalRefToRecord(selectedSingleton, runId, globalRefInput.trim(), 'CONFIRMED', 'Assigned via workbench', actor);
+            const res = await api.wbAssignGlobalRefToRecord(selectedSingleton, runId, globalRefInput.trim(), 'CONFIRMED', 'Assigned via workbench');
             setGlobalRefInput('');
             invalidateAll();
             jumpToEntity(res.entity_id);
@@ -984,15 +1087,26 @@ function WorkbenchPageContent() {
                                                 <span className="font-medium text-gray-900 dark:text-white truncate">{p.a_name || p.a_key} ↔ {p.b_name || p.b_key}</span>
                                                 <span className={`font-mono ${p.has_veto ? 'text-red-500' : 'text-gray-600 dark:text-gray-300'}`}>{p.confidence_pct.toFixed(0)}%</span>
                                             </div>
-                                            <div className="flex items-center justify-between mt-0.5">
-                                                <span className="text-gray-400 font-mono">{p.a_key} · {p.b_key}</span>
-                                                {p.officer_verdict === 'MUST_LINK' && (
-                                                    <span className="flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400"><CheckCircle2 size={11} /> Approved</span>
-                                                )}
-                                                {p.officer_verdict === 'MUST_NOT_LINK' && (
-                                                    <span className="flex items-center gap-0.5 text-red-500"><XCircle size={11} /> Rejected</span>
-                                                )}
-                                            </div>
+                                            <div className="text-gray-400 font-mono mt-0.5">{p.a_key} · {p.b_key}</div>
+                                            {/* An officer's override never rewrites this pair's own pipeline
+                                                decision (see _attach_officer_decisions -- that would falsify
+                                                history), so a pair can sit in, say, the System Rejected list
+                                                while its EFFECTIVE status (reflected in the tier counts above)
+                                                is Approved. A full-width banner, not a small trailing badge,
+                                                so that's never easy to miss -- same color language as the
+                                                detail panel's own override banner for this exact fact. */}
+                                            {p.officer_verdict === 'MUST_LINK' && (
+                                                <div className="flex items-center gap-1.5 mt-1.5 px-2 py-1 rounded bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300">
+                                                    <CheckCircle2 size={12} className="shrink-0" />
+                                                    <span className="truncate">Overridden — Approved by {p.officer_actor}</span>
+                                                </div>
+                                            )}
+                                            {p.officer_verdict === 'MUST_NOT_LINK' && (
+                                                <div className="flex items-center gap-1.5 mt-1.5 px-2 py-1 rounded bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300">
+                                                    <XCircle size={12} className="shrink-0" />
+                                                    <span className="truncate">Overridden — Rejected by {p.officer_actor}</span>
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 );
@@ -1161,9 +1275,60 @@ function WorkbenchPageContent() {
                                                 <span className="badge !text-[10px]">RETIRED</span>
                                             </div>
                                         )}
+                                        {entityDetail.members.length > 1 && (
+                                            <div>
+                                                <div className="flex items-center justify-between mb-1">
+                                                    <span className="text-[11px] text-gray-500 dark:text-gray-400">
+                                                        Include in this Global ID ({includedGlobalRefMembers.size} of {entityDetail.members.length})
+                                                    </span>
+                                                    {rejectedMemberInfo.size > 0 && (
+                                                        <span className="flex items-center gap-1 text-[10px] text-red-500 dark:text-red-400">
+                                                            <ShieldAlert size={11} className="shrink-0" /> {rejectedMemberInfo.size} in a rejected pair below -- uncheck to split out
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="space-y-1 max-h-28 overflow-y-auto p-1.5 rounded-lg bg-gray-50 dark:bg-gray-900/40">
+                                                    {[...entityDetail.members]
+                                                        .sort((a: any, b: any) => {
+                                                            const rank = (code: string) => (rejectedMemberInfo.get(code) || []).some((r) => r.source === 'officer') ? 2 : rejectedMemberInfo.has(code) ? 1 : 0;
+                                                            return rank(b.customer_code) - rank(a.customer_code);
+                                                        })
+                                                        .map((m: any) => {
+                                                            const rejections = rejectedMemberInfo.get(m.customer_code);
+                                                            const isOfficer = rejections?.some((r) => r.source === 'officer');
+                                                            const tone = rejections ? (isOfficer ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400') : '';
+                                                            const dim = rejections ? (isOfficer ? 'text-red-400' : 'text-amber-500') : 'text-gray-400';
+                                                            const title = rejections && (
+                                                                isOfficer
+                                                                    ? `Officer-rejected match vs ${rejections.filter((r) => r.source === 'officer').map((r) => r.otherName).join(', ')} (by ${rejections.find((r) => r.source === 'officer')?.actor})`
+                                                                    : `Pipeline (System Rejected) vs ${rejections.map((r) => r.otherName).join(', ')} -- no officer decision made on this pair`
+                                                            );
+                                                            return (
+                                                                <label key={m.customer_code} className={`flex items-center gap-1.5 text-xs cursor-pointer ${tone}`} title={title || undefined}>
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        className="w-3.5 h-3.5 shrink-0"
+                                                                        checked={includedGlobalRefMembers.has(m.customer_code)}
+                                                                        onChange={() => setIncludedGlobalRefMembers((prev) => toggleInSet(prev, m.customer_code))}
+                                                                    />
+                                                                    {rejections && (isOfficer ? <ShieldAlert size={11} className="text-red-500 shrink-0" /> : <AlertTriangle size={11} className="text-amber-500 shrink-0" />)}
+                                                                    <span className={`truncate ${rejections ? '' : 'text-gray-700 dark:text-gray-300'}`}>{m.name_norm || m.customer_code}</span>
+                                                                    <span className={`font-mono shrink-0 ${dim}`}>{m.customer_code}</span>
+                                                                </label>
+                                                            );
+                                                        })}
+                                                </div>
+                                            </div>
+                                        )}
                                         <div className="flex gap-2">
                                             <input value={globalRefInput} onChange={(e) => setGlobalRefInput(e.target.value)} placeholder="e.g. CIF-0012345" className="flex-1 text-xs py-1.5" />
-                                            <button onClick={assignGlobalRef} disabled={!globalRefInput.trim()} className="btn btn-primary !py-1.5 !px-3 text-xs disabled:opacity-40">Assign</button>
+                                            <button
+                                                onClick={assignGlobalRef}
+                                                disabled={!globalRefInput.trim() || includedGlobalRefMembers.size === 0 || assigningGlobalRef}
+                                                className="btn btn-primary !py-1.5 !px-3 text-xs disabled:opacity-40"
+                                            >
+                                                {assigningGlobalRef ? 'Assigning...' : 'Assign'}
+                                            </button>
                                         </div>
                                     </div>
                                 )}
@@ -1208,6 +1373,7 @@ function WorkbenchPageContent() {
                                                         runId={runId}
                                                         expanded={expandedMatchKey === key}
                                                         onToggle={() => setExpandedMatchKey((prev) => (prev === key ? null : key))}
+                                                        onJumpToPair={() => jumpToPair(it)}
                                                     />
                                                 );
                                             })}

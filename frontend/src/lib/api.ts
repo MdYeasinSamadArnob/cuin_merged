@@ -1,8 +1,10 @@
 /**
  * API Client for CUIN v2 Backend
- * 
+ *
  * Centralized HTTP client for all backend API calls.
  */
+
+import { getAuthToken, useAuthStore } from "@/stores/useAuthStore";
 
 /**
  * `http://localhost:8000` only resolves to the backend when the
@@ -59,13 +61,26 @@ class ApiClient {
     // single page that does so.
     private async request<T = any>(endpoint: string, options: RequestInit = {}): Promise<T> {
         const url = `${this.baseUrl}${endpoint}`;
+        const token = getAuthToken();
         const response = await fetch(url, {
             ...options,
             headers: {
                 'Content-Type': 'application/json',
+                ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
                 ...options.headers,
             },
         });
+
+        if (response.status === 401 && endpoint !== '/login') {
+            // Session missing/expired/revoked -- clear it and send the
+            // user back to login. NOT applied to /login itself: a 401
+            // there just means "wrong password" and must surface as a
+            // normal form error, not a redirect loop.
+            useAuthStore.getState().clearSession();
+            if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+                window.location.href = '/login';
+            }
+        }
 
         if (!response.ok) {
             const error = await response.text();
@@ -73,6 +88,67 @@ class ApiClient {
         }
 
         return response.json();
+    }
+
+    // Auth
+    async login(email: string, password: string) {
+        return this.request('/login', {
+            method: 'POST',
+            body: JSON.stringify({ email, password }),
+        });
+    }
+
+    async me() {
+        return this.request('/me');
+    }
+
+    // Role Management -- backend enforces superuser-only regardless of
+    // what the frontend shows/hides (see api/routes_roles.py).
+    async listMenuKeys() {
+        return this.request('/roles/menu-keys');
+    }
+
+    async listRoles() {
+        return this.request('/roles');
+    }
+
+    async createRole(name: string, menuKeys: string[]) {
+        return this.request('/roles', {
+            method: 'POST',
+            body: JSON.stringify({ name, menu_keys: menuKeys }),
+        });
+    }
+
+    async updateRole(roleId: string, patch: { name?: string; menu_keys?: string[] }) {
+        return this.request(`/roles/${roleId}`, { method: 'PATCH', body: JSON.stringify(patch) });
+    }
+
+    async deleteRole(roleId: string) {
+        return this.request(`/roles/${roleId}`, { method: 'DELETE' });
+    }
+
+    async listUsers() {
+        return this.request('/roles/users');
+    }
+
+    async createUser(request: { email: string; password: string; display_name: string; role_id: string }) {
+        return this.request('/roles/users', { method: 'POST', body: JSON.stringify(request) });
+    }
+
+    async updateUser(userId: string, patch: { display_name?: string; role_id?: string; is_active?: boolean; password?: string }) {
+        return this.request(`/roles/users/${userId}`, { method: 'PATCH', body: JSON.stringify(patch) });
+    }
+
+    async deleteUser(userId: string) {
+        return this.request(`/roles/users/${userId}`, { method: 'DELETE' });
+    }
+
+    // granted: true/false sets an override, null clears it (reverts to the role's default)
+    async setUserMenuOverride(userId: string, menuKey: string, granted: boolean | null) {
+        return this.request(`/roles/users/${userId}/menu-overrides`, {
+            method: 'PUT',
+            body: JSON.stringify({ menu_key: menuKey, granted }),
+        });
     }
 
     // Dashboard
@@ -310,48 +386,53 @@ class ApiClient {
         return this.request(`/workbench/entities/${entityId}/matches${q}`);
     }
 
-    async wbApprove(runId: string | undefined, aCode: string, bCode: string, reasonCode: string, reason: string, actor: string) {
+    // actor is no longer sent from the client -- the backend derives it
+    // from the authenticated session (see api/routes_workbench.py's
+    // Depends(get_current_user)/_actor_of), so a free-text field can't
+    // spoof the audit trail. Every method below matches that: no actor
+    // parameter, nothing to pass.
+    async wbApprove(runId: string | undefined, aCode: string, bCode: string, reasonCode: string, reason: string) {
         return this.request('/workbench/actions/approve', {
             method: 'POST',
-            body: JSON.stringify({ run_id: runId, a_code: aCode, b_code: bCode, reason_code: reasonCode, reason, actor }),
+            body: JSON.stringify({ run_id: runId, a_code: aCode, b_code: bCode, reason_code: reasonCode, reason }),
         });
     }
 
-    async wbReject(runId: string | undefined, aCode: string, bCode: string, reasonCode: string, reason: string, actor: string) {
+    async wbReject(runId: string | undefined, aCode: string, bCode: string, reasonCode: string, reason: string) {
         return this.request('/workbench/actions/reject', {
             method: 'POST',
-            body: JSON.stringify({ run_id: runId, a_code: aCode, b_code: bCode, reason_code: reasonCode, reason, actor }),
+            body: JSON.stringify({ run_id: runId, a_code: aCode, b_code: bCode, reason_code: reasonCode, reason }),
         });
     }
 
-    async wbMerge(runId: string | undefined, entityIdA: string, entityIdB: string, reasonCode: string, reason: string, actor: string) {
+    async wbMerge(runId: string | undefined, entityIdA: string, entityIdB: string, reasonCode: string, reason: string) {
         return this.request('/workbench/actions/merge', {
             method: 'POST',
-            body: JSON.stringify({ run_id: runId, entity_id_a: entityIdA, entity_id_b: entityIdB, reason_code: reasonCode, reason, actor }),
+            body: JSON.stringify({ run_id: runId, entity_id_a: entityIdA, entity_id_b: entityIdB, reason_code: reasonCode, reason }),
         });
     }
 
-    async wbSplit(runId: string | undefined, entityId: string, customerCode: string, reasonCode: string, reason: string, actor: string) {
+    async wbSplit(runId: string | undefined, entityId: string, customerCode: string, reasonCode: string, reason: string) {
         return this.request('/workbench/actions/split', {
             method: 'POST',
-            body: JSON.stringify({ run_id: runId, entity_id: entityId, customer_code: customerCode, reason_code: reasonCode, reason, actor }),
+            body: JSON.stringify({ run_id: runId, entity_id: entityId, customer_code: customerCode, reason_code: reasonCode, reason }),
         });
     }
 
-    async wbAssignGlobalRef(entityId: string, globalRef: string, state: string, reason: string, actor: string) {
+    async wbAssignGlobalRef(entityId: string, globalRef: string, state: string, reason: string) {
         return this.request(`/workbench/entities/${entityId}/global-ref`, {
             method: 'POST',
-            body: JSON.stringify({ global_ref: globalRef, state, reason, actor }),
+            body: JSON.stringify({ global_ref: globalRef, state, reason }),
         });
     }
 
     // Same as wbAssignGlobalRef, but for a record with no entity yet (a
     // singleton -- never clustered, so it never earned one automatically).
     // Mints a one-member entity on demand server-side.
-    async wbAssignGlobalRefToRecord(customerCode: string, runId: string | undefined, globalRef: string, state: string, reason: string, actor: string) {
+    async wbAssignGlobalRefToRecord(customerCode: string, runId: string | undefined, globalRef: string, state: string, reason: string) {
         return this.request(`/workbench/records/${encodeURIComponent(customerCode)}/global-ref`, {
             method: 'POST',
-            body: JSON.stringify({ run_id: runId, global_ref: globalRef, state, reason, actor }),
+            body: JSON.stringify({ run_id: runId, global_ref: globalRef, state, reason }),
         });
     }
 
@@ -359,24 +440,24 @@ class ApiClient {
     // approve/reject override. See backend/services/workbench_service.py's
     // "Rollback" section: each of these is a NEW forward audit event that
     // reverses a prior one, never a mutation of the original.
-    async wbUndoMerge(entityId: string, reason: string, actor: string) {
+    async wbUndoMerge(entityId: string, reason: string) {
         return this.request(`/workbench/entities/${entityId}/undo-merge`, {
             method: 'POST',
-            body: JSON.stringify({ reason, actor }),
+            body: JSON.stringify({ reason }),
         });
     }
 
-    async wbRevertGlobalRef(entityId: string, reason: string, actor: string) {
+    async wbRevertGlobalRef(entityId: string, reason: string) {
         return this.request(`/workbench/entities/${entityId}/revert-global-ref`, {
             method: 'POST',
-            body: JSON.stringify({ reason, actor }),
+            body: JSON.stringify({ reason }),
         });
     }
 
-    async wbRevokeOverride(overrideId: string, reason: string, actor: string) {
+    async wbRevokeOverride(overrideId: string, reason: string) {
         return this.request(`/workbench/overrides/${overrideId}/revoke`, {
             method: 'POST',
-            body: JSON.stringify({ reason, actor }),
+            body: JSON.stringify({ reason }),
         });
     }
 

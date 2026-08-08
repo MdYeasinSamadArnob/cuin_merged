@@ -23,11 +23,13 @@ from dataclasses import asdict
 from typing import Any, Dict, List, Optional
 
 import psycopg2
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from api.config import settings
+from api.deps_auth import get_current_user
+from services.auth_service import CurrentUser
 from engine.ports.run_session import open_run_readonly
 from engine.scoring.evidence import load_pair_evidence, evidence_to_field_evidence
 from engine.segments.classifier import classify_segment_python, segment_sql_expr, SegmentationConfig
@@ -161,18 +163,74 @@ def _attach_officer_decisions(items: List[Dict[str, Any]]) -> None:
             it["officer_verdict"] = None
 
 
+def _fetch_active_overrides() -> List[tuple]:
+    """(a_code, b_code, verdict) for every non-revoked resolution_overrides
+    row -- shared by every "what does an officer's override change here"
+    computation (populations counts, tier-list membership) so there's one
+    place that defines "active override", not a copy of this query per
+    caller."""
+    pg_conn = _pg()
+    try:
+        cur = pg_conn.cursor()
+        cur.execute("SELECT a_code, b_code, verdict FROM resolution_overrides WHERE revoked_at IS NULL")
+        return cur.fetchall()
+    finally:
+        pg_conn.close()
+
+
+def _effective_decision(verdict: str) -> str:
+    return "AUTO_LINK" if verdict == "MUST_LINK" else "REJECT"
+
+
 # ----------------------------------------------------------------------
 # Populations
 # ----------------------------------------------------------------------
 
 def _sync_get_populations(run_id: Optional[str]):
     rid = _resolve_run_id(run_id)
+
+    # Active overrides are fetched first (Postgres, small table in
+    # practice) so their effect on the per-run decision counts below can
+    # be reconciled inside the same Doris session that computes the raw
+    # counts.
+    active_overrides = _fetch_active_overrides()
+
     session = open_run_readonly(rid)
     try:
         counts: Dict[str, int] = {}
         if _table_exists(session, "pair_decisions"):
             rows = session.con.execute("SELECT decision, COUNT(*) FROM pair_decisions GROUP BY decision").fetchall()
             counts = {d: n for d, n in rows}
+
+            # pair_decisions.decision is the pipeline's own, deliberately
+            # immutable record (rewriting it would silently falsify history
+            # -- see _attach_officer_decisions' docstring above), but these
+            # stat cards should show what's EFFECTIVELY true right now, not
+            # what the pipeline originally decided, once an officer has
+            # overridden a pair -- otherwise "System Rejected" never moves
+            # even after every single one of its pairs gets approved. An
+            # OR-chain, not a tuple IN(...) -- Doris's SQL parser doesn't
+            # support row-value tuple comparisons (same limitation and
+            # workaround as api/doris_run_reader.py's _contributions_for_page).
+            # active_overrides is every non-revoked override ever made, not
+            # scoped to this run -- harmless, a pair absent from THIS run's
+            # pair_decisions just returns no row below and is skipped.
+            if active_overrides and counts:
+                where = " OR ".join(["(a_key = ? AND b_key = ?)"] * len(active_overrides))
+                params = [v for a, b, _ in active_overrides for v in (a, b)]
+                override_rows = session.con.execute(
+                    f"SELECT a_key, b_key, decision FROM pair_decisions WHERE {where}", params,
+                ).fetchall()
+                verdict_by_pair = {(a, b): v for a, b, v in active_overrides}
+                for a_key, b_key, orig_decision in override_rows:
+                    verdict = verdict_by_pair.get((a_key, b_key))
+                    if not verdict:
+                        continue
+                    effective = _effective_decision(verdict)
+                    if effective != orig_decision:
+                        counts[orig_decision] = counts.get(orig_decision, 0) - 1
+                        counts[effective] = counts.get(effective, 0) + 1
+
         singletons = 0
         if _table_exists(session, "customer_scalars") and _table_exists(session, "candidate_pairs"):
             row = session.con.execute("""
@@ -192,8 +250,7 @@ def _sync_get_populations(run_id: Optional[str]):
         n_with_global_ref = cur.fetchone()[0]
         cur.execute("SELECT COUNT(*) FROM entities WHERE global_ref_state = 'CONFLICT'")
         n_conflicts = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM resolution_overrides WHERE revoked_at IS NULL")
-        n_overrides = cur.fetchone()[0]
+        n_overrides = len(active_overrides)
     finally:
         pg_conn.close()
 
@@ -246,16 +303,59 @@ def _sync_list_pairs(
         raise HTTPException(status_code=400, detail=f"record_type must be one of {sorted(_VALID_RECORD_TYPES)}")
 
     rid = _resolve_run_id(run_id)
+    active_overrides = _fetch_active_overrides() if decision else []
+
     session = open_run_readonly(rid)
     try:
         if not _table_exists(session, "pair_decisions"):
             raise HTTPException(status_code=409, detail=f"Run {rid} has no persisted pair_decisions")
 
+        # A pair's tier-tab membership must track its EFFECTIVE decision
+        # (override wins), not the pipeline's own immutable
+        # pair_decisions.decision -- otherwise _sync_get_populations' count
+        # says a pair moved into e.g. Strong Match but it's nowhere to be
+        # found there when an officer actually looks. moved_out/moved_in
+        # are bounded by the officer-override table's size (small in
+        # practice), computed once per request via the same OR-chain
+        # workaround this file already uses elsewhere for Doris's missing
+        # tuple IN(...) support.
+        moved_out: List[tuple] = []
+        moved_in: List[tuple] = []
+        if decision and active_overrides:
+            req = decision.upper()
+            where_ov = " OR ".join(["(a_key = ? AND b_key = ?)"] * len(active_overrides))
+            params_ov = [v for a, b, _ in active_overrides for v in (a, b)]
+            orig_rows = session.con.execute(
+                f"SELECT a_key, b_key, decision FROM pair_decisions WHERE {where_ov}", params_ov,
+            ).fetchall()
+            verdict_by_pair = {(a, b): v for a, b, v in active_overrides}
+            for a_key, b_key, orig_decision in orig_rows:
+                verdict = verdict_by_pair.get((a_key, b_key))
+                if not verdict:
+                    continue
+                effective = _effective_decision(verdict)
+                if effective == orig_decision:
+                    continue
+                if orig_decision == req:
+                    moved_out.append((a_key, b_key))
+                elif effective == req:
+                    moved_in.append((a_key, b_key))
+
         where = []
         params: list = []
         if decision:
-            where.append("p.decision = ?")
-            params.append(decision.upper())
+            clause = "p.decision = ?"
+            cparams = [decision.upper()]
+            if moved_out:
+                excl = " OR ".join(["(p.a_key = ? AND p.b_key = ?)"] * len(moved_out))
+                clause = f"({clause} AND NOT ({excl}))"
+                cparams += [v for pair in moved_out for v in pair]
+            if moved_in:
+                incl = " OR ".join(["(p.a_key = ? AND p.b_key = ?)"] * len(moved_in))
+                clause = f"({clause} OR ({incl}))"
+                cparams += [v for pair in moved_in for v in pair]
+            where.append(clause)
+            params.extend(cparams)
         if min_conf is not None:
             where.append("p.confidence_pct >= ?")
             params.append(min_conf)
@@ -790,6 +890,13 @@ def _sync_entity_matches(entity_id: str, run_id: Optional[str]):
     finally:
         session.close()
 
+    # Without this, a pair overridden after the pipeline ran (e.g. an
+    # officer approved a pair the run itself REJECTed) still shows its
+    # stale pipeline decision here with no indication anything changed --
+    # the same "I approved it and nothing changed" gap _sync_list_pairs
+    # and _sync_get_populations both had to account for.
+    _attach_officer_decisions(items)
+
     possible_pairs = len(codes) * (len(codes) - 1) // 2
     return {
         "run_id": rid, "engine": engine, "entity_id": entity_id, "member_count": len(codes),
@@ -813,7 +920,6 @@ class PairActionRequest(BaseModel):
     b_code: str
     reason_code: str
     reason: str
-    actor: str
 
 
 class MergeRequest(BaseModel):
@@ -822,7 +928,6 @@ class MergeRequest(BaseModel):
     entity_id_b: str
     reason_code: str
     reason: str
-    actor: str
 
 
 class SplitRequest(BaseModel):
@@ -831,19 +936,16 @@ class SplitRequest(BaseModel):
     customer_code: str
     reason_code: str
     reason: str
-    actor: str
 
 
 class GlobalRefRequest(BaseModel):
     global_ref: str
     state: str = "CONFIRMED"
     reason: str
-    actor: str
 
 
 class RetireGlobalRefRequest(BaseModel):
     reason: str
-    actor: str
 
 
 class RecordGlobalRefRequest(BaseModel):
@@ -851,7 +953,17 @@ class RecordGlobalRefRequest(BaseModel):
     global_ref: str
     state: str = "CONFIRMED"
     reason: str
-    actor: str
+
+
+def _actor_of(current_user: CurrentUser) -> str:
+    """
+    The audit-trail identity for every Workbench write action --
+    server-derived from the verified session, NEVER a client-supplied
+    string. Previously every action trusted a free-text "your name" the
+    officer typed into a dialog (see the now-removed ReasonDialog.tsx
+    actor input) with zero verification; anyone could type any name.
+    """
+    return current_user.display_name or current_user.email
 
 
 def _handle_workbench_error(fn, *args):
@@ -861,107 +973,107 @@ def _handle_workbench_error(fn, *args):
         raise HTTPException(status_code=409, detail=str(e))
 
 
-def _sync_action_approve(request: PairActionRequest):
+def _sync_action_approve(request: PairActionRequest, actor: str):
     pg_conn = _pg()
     try:
         return _handle_workbench_error(
-            wb.approve_pair, pg_conn, request.run_id, request.a_code, request.b_code, request.reason_code, request.reason, request.actor,
+            wb.approve_pair, pg_conn, request.run_id, request.a_code, request.b_code, request.reason_code, request.reason, actor,
         )
     finally:
         pg_conn.close()
 
 
 @router.post("/actions/approve")
-async def action_approve(request: PairActionRequest):
-    return await run_in_threadpool(_sync_action_approve, request)
+async def action_approve(request: PairActionRequest, current_user: CurrentUser = Depends(get_current_user)):
+    return await run_in_threadpool(_sync_action_approve, request, _actor_of(current_user))
 
 
-def _sync_action_reject(request: PairActionRequest):
+def _sync_action_reject(request: PairActionRequest, actor: str):
     pg_conn = _pg()
     try:
         return _handle_workbench_error(
-            wb.reject_pair, pg_conn, request.run_id, request.a_code, request.b_code, request.reason_code, request.reason, request.actor,
+            wb.reject_pair, pg_conn, request.run_id, request.a_code, request.b_code, request.reason_code, request.reason, actor,
         )
     finally:
         pg_conn.close()
 
 
 @router.post("/actions/reject")
-async def action_reject(request: PairActionRequest):
-    return await run_in_threadpool(_sync_action_reject, request)
+async def action_reject(request: PairActionRequest, current_user: CurrentUser = Depends(get_current_user)):
+    return await run_in_threadpool(_sync_action_reject, request, _actor_of(current_user))
 
 
-def _sync_action_merge(request: MergeRequest):
+def _sync_action_merge(request: MergeRequest, actor: str):
     pg_conn = _pg()
     try:
         return _handle_workbench_error(
-            wb.merge_entities, pg_conn, request.run_id, request.entity_id_a, request.entity_id_b, request.reason_code, request.reason, request.actor,
+            wb.merge_entities, pg_conn, request.run_id, request.entity_id_a, request.entity_id_b, request.reason_code, request.reason, actor,
         )
     finally:
         pg_conn.close()
 
 
 @router.post("/actions/merge")
-async def action_merge(request: MergeRequest):
-    return await run_in_threadpool(_sync_action_merge, request)
+async def action_merge(request: MergeRequest, current_user: CurrentUser = Depends(get_current_user)):
+    return await run_in_threadpool(_sync_action_merge, request, _actor_of(current_user))
 
 
-def _sync_action_split(request: SplitRequest):
+def _sync_action_split(request: SplitRequest, actor: str):
     pg_conn = _pg()
     try:
         return _handle_workbench_error(
-            wb.split_record, pg_conn, request.run_id, request.entity_id, request.customer_code, request.reason_code, request.reason, request.actor,
+            wb.split_record, pg_conn, request.run_id, request.entity_id, request.customer_code, request.reason_code, request.reason, actor,
         )
     finally:
         pg_conn.close()
 
 
 @router.post("/actions/split")
-async def action_split(request: SplitRequest):
-    return await run_in_threadpool(_sync_action_split, request)
+async def action_split(request: SplitRequest, current_user: CurrentUser = Depends(get_current_user)):
+    return await run_in_threadpool(_sync_action_split, request, _actor_of(current_user))
 
 
-def _sync_action_assign_global_ref(entity_id: str, request: GlobalRefRequest):
+def _sync_action_assign_global_ref(entity_id: str, request: GlobalRefRequest, actor: str):
     pg_conn = _pg()
     try:
         return _handle_workbench_error(
-            wb.assign_global_ref, pg_conn, entity_id, request.global_ref, request.state, request.reason, request.actor,
+            wb.assign_global_ref, pg_conn, entity_id, request.global_ref, request.state, request.reason, actor,
         )
     finally:
         pg_conn.close()
 
 
 @router.post("/entities/{entity_id}/global-ref")
-async def action_assign_global_ref(entity_id: str, request: GlobalRefRequest):
-    return await run_in_threadpool(_sync_action_assign_global_ref, entity_id, request)
+async def action_assign_global_ref(entity_id: str, request: GlobalRefRequest, current_user: CurrentUser = Depends(get_current_user)):
+    return await run_in_threadpool(_sync_action_assign_global_ref, entity_id, request, _actor_of(current_user))
 
 
-def _sync_action_retire_global_ref(entity_id: str, request: RetireGlobalRefRequest):
+def _sync_action_retire_global_ref(entity_id: str, request: RetireGlobalRefRequest, actor: str):
     pg_conn = _pg()
     try:
-        return _handle_workbench_error(wb.retire_global_ref, pg_conn, entity_id, request.reason, request.actor)
+        return _handle_workbench_error(wb.retire_global_ref, pg_conn, entity_id, request.reason, actor)
     finally:
         pg_conn.close()
 
 
 @router.delete("/entities/{entity_id}/global-ref")
-async def action_retire_global_ref(entity_id: str, request: RetireGlobalRefRequest):
-    return await run_in_threadpool(_sync_action_retire_global_ref, entity_id, request)
+async def action_retire_global_ref(entity_id: str, request: RetireGlobalRefRequest, current_user: CurrentUser = Depends(get_current_user)):
+    return await run_in_threadpool(_sync_action_retire_global_ref, entity_id, request, _actor_of(current_user))
 
 
-def _sync_action_assign_global_ref_to_record(customer_code: str, request: RecordGlobalRefRequest):
+def _sync_action_assign_global_ref_to_record(customer_code: str, request: RecordGlobalRefRequest, actor: str):
     pg_conn = _pg()
     try:
         return _handle_workbench_error(
             wb.assign_global_ref_to_record, pg_conn, request.run_id, customer_code,
-            request.global_ref, request.state, request.reason, request.actor,
+            request.global_ref, request.state, request.reason, actor,
         )
     finally:
         pg_conn.close()
 
 
 @router.post("/records/{customer_code}/global-ref")
-async def action_assign_global_ref_to_record(customer_code: str, request: RecordGlobalRefRequest):
+async def action_assign_global_ref_to_record(customer_code: str, request: RecordGlobalRefRequest, current_user: CurrentUser = Depends(get_current_user)):
     """
     Same as POST /entities/{entity_id}/global-ref, but keyed by
     customer_code instead of an existing entity_id -- the path a
@@ -969,7 +1081,7 @@ async def action_assign_global_ref_to_record(customer_code: str, request: Record
     Global ID assigned at all. Mints a one-member entity on demand; see
     services.workbench_service.assign_global_ref_to_record.
     """
-    return await run_in_threadpool(_sync_action_assign_global_ref_to_record, customer_code, request)
+    return await run_in_threadpool(_sync_action_assign_global_ref_to_record, customer_code, request, _actor_of(current_user))
 
 
 # ----------------------------------------------------------------------
@@ -981,46 +1093,45 @@ async def action_assign_global_ref_to_record(customer_code: str, request: Record
 
 class ReasonActorRequest(BaseModel):
     reason: str
-    actor: str
 
 
-def _sync_action_undo_merge(entity_id: str, request: ReasonActorRequest):
+def _sync_action_undo_merge(entity_id: str, request: ReasonActorRequest, actor: str):
     pg_conn = _pg()
     try:
-        return _handle_workbench_error(wb.undo_merge, pg_conn, entity_id, request.reason, request.actor)
+        return _handle_workbench_error(wb.undo_merge, pg_conn, entity_id, request.reason, actor)
     finally:
         pg_conn.close()
 
 
 @router.post("/entities/{entity_id}/undo-merge")
-async def action_undo_merge(entity_id: str, request: ReasonActorRequest):
-    return await run_in_threadpool(_sync_action_undo_merge, entity_id, request)
+async def action_undo_merge(entity_id: str, request: ReasonActorRequest, current_user: CurrentUser = Depends(get_current_user)):
+    return await run_in_threadpool(_sync_action_undo_merge, entity_id, request, _actor_of(current_user))
 
 
-def _sync_action_revert_global_ref(entity_id: str, request: ReasonActorRequest):
+def _sync_action_revert_global_ref(entity_id: str, request: ReasonActorRequest, actor: str):
     pg_conn = _pg()
     try:
-        return _handle_workbench_error(wb.revert_global_ref, pg_conn, entity_id, request.reason, request.actor)
+        return _handle_workbench_error(wb.revert_global_ref, pg_conn, entity_id, request.reason, actor)
     finally:
         pg_conn.close()
 
 
 @router.post("/entities/{entity_id}/revert-global-ref")
-async def action_revert_global_ref(entity_id: str, request: ReasonActorRequest):
-    return await run_in_threadpool(_sync_action_revert_global_ref, entity_id, request)
+async def action_revert_global_ref(entity_id: str, request: ReasonActorRequest, current_user: CurrentUser = Depends(get_current_user)):
+    return await run_in_threadpool(_sync_action_revert_global_ref, entity_id, request, _actor_of(current_user))
 
 
-def _sync_action_revoke_override(override_id: str, request: ReasonActorRequest):
+def _sync_action_revoke_override(override_id: str, request: ReasonActorRequest, actor: str):
     pg_conn = _pg()
     try:
-        return _handle_workbench_error(wb.revoke_override, pg_conn, override_id, request.reason, request.actor)
+        return _handle_workbench_error(wb.revoke_override, pg_conn, override_id, request.reason, actor)
     finally:
         pg_conn.close()
 
 
 @router.post("/overrides/{override_id}/revoke")
-async def action_revoke_override(override_id: str, request: ReasonActorRequest):
-    return await run_in_threadpool(_sync_action_revoke_override, override_id, request)
+async def action_revoke_override(override_id: str, request: ReasonActorRequest, current_user: CurrentUser = Depends(get_current_user)):
+    return await run_in_threadpool(_sync_action_revoke_override, override_id, request, _actor_of(current_user))
 
 
 # ----------------------------------------------------------------------

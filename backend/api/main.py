@@ -10,18 +10,21 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from api import db_init
 from api.config import settings
+from api.deps_auth import get_current_user, require_menu, require_superuser
 from api.routes_admin import router as admin_router
+from api.routes_auth import router as auth_router
 from api.routes_candidates import router as candidates_router
 from api.routes_graph import router as graph_router
 from api.routes_matches import router as matches_router
 from api.routes_metrics import router as metrics_router
 from api.routes_review import router as review_router
+from api.routes_roles import router as roles_router
 from api.routes_runs import router as runs_router
 
 # Import the module-level singleton, not the class -- api/routes_datasource.py
@@ -207,52 +210,72 @@ async def liveness_check() -> dict:
 # Include Routers
 # ============================================
 
-app.include_router(runs_router, prefix="/runs", tags=["Runs"])
-app.include_router(candidates_router, prefix="/candidates", tags=["Candidates"])
-app.include_router(matches_router, prefix="/matches", tags=["Matches"])
-app.include_router(review_router, prefix="/review", tags=["Review"])
-app.include_router(metrics_router, prefix="/metrics", tags=["Metrics"])
-app.include_router(graph_router, prefix="/graph", tags=["Graph"])
+# Login -- no auth dependency on this one (it's how you GET a session).
+# Bare /login, /me (no /auth prefix) -- see api/routes_auth.py.
+app.include_router(auth_router, tags=["Auth"])
+
+# Role Management -- superuser-only regardless of any menu grant, see
+# api/routes_roles.py's module docstring. Independent of the
+# role_management menu_key check, which only gates the frontend page.
+app.include_router(roles_router, prefix="/roles", tags=["Role Management"], dependencies=[Depends(require_superuser)])
+
+# Every router below requires a valid session (Depends(get_current_user)
+# as the baseline), applied here at the mounting call site rather than
+# inside each route file -- keeps every existing router's own code
+# untouched. Routers that map 1:1 to a single Sidebar menu additionally
+# require that menu's grant via require_menu(...). Routers shared by
+# more than one page (Runs/Candidates/Matches/Review/Metrics/Search)
+# get only the baseline authenticated-gate and no menu restriction --
+# deliberate: this data is Dashboard-adjacent/supporting and reasonable
+# for any logged-in user to reach, not a single page's private surface.
+app.include_router(runs_router, prefix="/runs", tags=["Runs"], dependencies=[Depends(get_current_user)])
+app.include_router(candidates_router, prefix="/candidates", tags=["Candidates"], dependencies=[Depends(get_current_user)])
+app.include_router(matches_router, prefix="/matches", tags=["Matches"], dependencies=[Depends(get_current_user)])
+app.include_router(review_router, prefix="/review", tags=["Review"], dependencies=[Depends(get_current_user)])
+app.include_router(metrics_router, prefix="/metrics", tags=["Metrics"], dependencies=[Depends(get_current_user)])
+app.include_router(graph_router, prefix="/graph", tags=["Graph"], dependencies=[Depends(require_menu("graph"))])
 
 from api.routes_admin import router as admin_router
-app.include_router(admin_router, prefix="/admin", tags=["Admin"])
+app.include_router(admin_router, prefix="/admin", tags=["Admin"], dependencies=[Depends(require_superuser)])
 
 from api.routes_datasource import router as datasource_router
-app.include_router(datasource_router, prefix="/datasource", tags=["Ingestion Pipeline"])
+app.include_router(datasource_router, prefix="/datasource", tags=["Ingestion Pipeline"], dependencies=[Depends(require_menu("ingestion_pipeline"))])
 
 from api.routes_rules import router as rules_router
-app.include_router(rules_router, prefix="/rules", tags=["Rules"])
+app.include_router(rules_router, prefix="/rules", tags=["Rules"], dependencies=[Depends(require_menu("settings"))])
 
 from api.routes_search import router as search_router
-app.include_router(search_router, prefix="/search", tags=["Search"])
+app.include_router(search_router, prefix="/search", tags=["Search"], dependencies=[Depends(get_current_user)])
 
 from api.routes_schema import router as schema_router
-app.include_router(schema_router, prefix="/datasource/schema", tags=["Schema"])
+app.include_router(schema_router, prefix="/datasource/schema", tags=["Schema"], dependencies=[Depends(require_menu("settings"))])
 
 # Raw source data viewer -- lets a bank officer browse the raw,
 # un-normalized source Parquet file directly, before running any
 # pipeline. See engine/ports/doris_raw_preview.py's module docstring.
 from api.routes_data_viewer import router as data_viewer_router
-app.include_router(data_viewer_router, prefix="/data-viewer", tags=["Source Data"])
+app.include_router(data_viewer_router, prefix="/data-viewer", tags=["Source Data"], dependencies=[Depends(require_menu("source_data"))])
 
 # Entity resolution workbench (Stage 4 of the plan) -- purely additive,
 # does not touch/redirect any /graph, /explorer, /matches, or legacy
 # /review endpoint. See api/routes_workbench.py's module docstring.
 from api.routes_workbench import router as workbench_router
-app.include_router(workbench_router, prefix="/workbench", tags=["Workbench"])
+app.include_router(workbench_router, prefix="/workbench", tags=["Workbench"], dependencies=[Depends(require_menu("workbench"))])
 
 # Identity Graph 360 v2 -- purely additive, mounted at /graph/v2 (never
 # collides with the legacy /graph/* router below it, which stays
 # untouched for /explorer, /pipeline, and /runs/[id]). See
 # api/routes_graph_v2.py's module docstring.
 from api.routes_graph_v2 import router as graph_v2_router
-app.include_router(graph_v2_router, prefix="/graph/v2", tags=["Graph V2"])
+app.include_router(graph_v2_router, prefix="/graph/v2", tags=["Graph V2"], dependencies=[Depends(require_menu("graph"))])
 
 # Public, bank-facing Identity Recognition API -- a SEPARATE
 # sub-application (own Swagger UI at /api/v1/docs, own OpenAPI schema),
 # not another include_router() on this app. A bank integration partner
 # should only ever see this one contract, never the ~20 internal
-# admin/workbench routers above. See api/public_api.py.
+# admin/workbench routers above. Its own single-shared-bearer-token
+# auth is completely separate from and untouched by the login/RBAC
+# system above. See api/public_api.py.
 from api.public_api import create_public_api
 app.mount("/api/v1", create_public_api())
 
