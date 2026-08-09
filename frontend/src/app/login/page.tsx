@@ -34,9 +34,7 @@ export default function LoginPage() {
         <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950 px-4">
             <div className="w-full max-w-sm">
                 <div className="flex flex-col items-center mb-8">
-                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center shadow-lg shadow-blue-500/20 mb-3">
-                        <span className="text-2xl font-bold text-white">C</span>
-                    </div>
+                    <img src="/logo/era_logo.png" alt="Era Infotech" className="h-14 w-auto object-contain mb-3" />
                     <span className="text-xl font-semibold bg-gradient-to-r from-blue-600 to-cyan-600 dark:from-blue-400 dark:to-cyan-400 bg-clip-text text-transparent">
                         CIF
                     </span>
